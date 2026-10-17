@@ -31,6 +31,22 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\drivers\ata.c -o src\kernel\drivers\ata.o
 if %errorlevel% neq 0 exit /b %errorlevel%
 
+:: net shit
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\drivers\net.c -o src\kernel\drivers\net.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\ipv4.c -o src\kernel\net\ipv4.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\etherframe.c -o src\kernel\net\etherframe.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\arp.c -o src\kernel\net\arp.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+:: end net shit
+
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\fs.c -o src\kernel\fs.o
 if %errorlevel% neq 0 exit /b %errorlevel%
 
@@ -71,7 +87,7 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 
 objcopy -O binary src\apps\files\files.tmp files.bin
 if %errorlevel% neq 0 exit /b %errorlevel%
-::del src\apps\files\files.tmp
+del src\apps\files\files.tmp
 del src\apps\files\main.o
 del src\apps\files\entry.o
 
@@ -118,10 +134,12 @@ del src\boot.bin
 del src\boot_stage2.bin
 del src\kernel\*.o
 del src\kernel\drivers\*.o
+del src\kernel\net\*.o
 del src\apps\notepad\*.o
 del src\apps\viewer\*.o
 del src\kernel\kernel.bin
 del files.bin
+del mines.bin
 
 
 qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk
