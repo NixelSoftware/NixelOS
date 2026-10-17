@@ -98,7 +98,7 @@ static void terminal_ifconfig(void) {
     uint64_t mac = net_get_mac_address();
     const dhcp_lease_t* lease = dhcp_get_lease();
     uint32_t mask = lease->leased ? lease->subnet_mask : 0xFFFFFF00;
-    uint32_t gateway = lease->leased ? lease->gateway : 0x0A000202;
+    uint32_t gateway = lease->leased ? lease->gateway : 0x0A000001;
     term_print("eth0\n  Link: ");
     term_print(net_is_ready() ? "up\n" : "down\n");
     term_print("  MAC: ");
@@ -991,7 +991,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     {
         dhcp_lease_t lease;
         if (!dhcp_request(&lease, 100000)) {
-            ipv4_set_configuration(0x0A00020F, 0x0A000202, 0xFFFFFF00);
+            ipv4_set_configuration(0x0A0000E3, 0x0A000001, 0xFFFFFF00);
         }
     }
     fs_init();

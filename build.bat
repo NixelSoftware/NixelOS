@@ -68,7 +68,7 @@ del /q src\apps\notepad\*.o src\apps\viewer\*.o src\kernel\kernel.bin
 del /q files.bin mines.bin calc.bin hexview.bin
 
 qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
-    -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.15 ^
+    -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 ^
     -device pcnet,netdev=net0
 exit /b 0
 
