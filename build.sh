@@ -12,6 +12,10 @@ gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/main.
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/idt.c -o src/kernel/idt.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/drivers/display.c -o src/kernel/drivers/display.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/drivers/ata.c -o src/kernel/drivers/ata.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/drivers/net.c -o src/kernel/drivers/net.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/ipv4.c -o src/kernel/net/ipv4.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/etherframe.c -o src/kernel/net/etherframe.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/arp.c -o src/kernel/net/arp.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/fs.c -o src/kernel/fs.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/cursor.c -o src/kernel/cursor.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/font.c -o src/kernel/font.o
@@ -46,6 +50,10 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/task.o \
     src/kernel/drivers/display.o \
     src/kernel/drivers/ata.o \
+    src/kernel/drivers/net.o \
+    src/kernel/net/ipv4.o \
+    src/kernel/net/etherframe.o \
+    src/kernel/net/arp.o \
     src/kernel/fs.o \
     src/kernel/cursor.o \
     src/kernel/font.o \
@@ -109,6 +117,7 @@ rm -f src/boot.bin
 rm -f src/boot_stage2.bin
 rm -f src/kernel/*.o
 rm -f src/kernel/drivers/*.o
+rm -f src/kernel/net/*.o
 rm -f src/apps/notepad/*.o
 rm -f src/apps/viewer/*.o
 rm -f src/kernel/kernel.bin
