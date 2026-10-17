@@ -116,6 +116,44 @@ static void terminal_ifconfig(void) {
     term_print(lease->leased ? "leased\n" : "not available\n");
 }
 
+static void terminal_netdiag(void) {
+    net_diagnostics_t diagnostics;
+    net_poll();
+    net_get_diagnostics(&diagnostics);
+
+    term_print("Network driver diagnostics\n");
+    term_print("  IO base: 0x");
+    print_hex_byte((uint8_t)(diagnostics.io_base >> 8));
+    print_hex_byte((uint8_t)diagnostics.io_base);
+    term_print("\n  State: ");
+    term_print(diagnostics.initialized ? "initialized\n" : "not initialized\n");
+    term_print("  CSR0: 0x");
+    print_hex_byte((uint8_t)(diagnostics.csr0 >> 8));
+    print_hex_byte((uint8_t)diagnostics.csr0);
+    term_print("\n  TX attempts/submitted/busy: ");
+    print_u32(diagnostics.tx_attempts);
+    term_print("/");
+    print_u32(diagnostics.tx_submitted);
+    term_print("/");
+    print_u32(diagnostics.tx_busy);
+    term_print("\n  RX frames/errors/invalid: ");
+    print_u32(diagnostics.rx_frames);
+    term_print("/");
+    print_u32(diagnostics.rx_errors);
+    term_print("/");
+    print_u32(diagnostics.rx_invalid);
+    term_print("\n  Last RX length: ");
+    print_u32(diagnostics.last_rx_length);
+    term_print("\n  Last error CSR0: 0x");
+    print_hex_byte((uint8_t)(diagnostics.last_error_status >> 8));
+    print_hex_byte((uint8_t)diagnostics.last_error_status);
+    term_print("\n  Ring indexes TX/RX: ");
+    print_u32(diagnostics.tx_index);
+    term_print("/");
+    print_u32(diagnostics.rx_index);
+    term_print("\n");
+}
+
 static int parse_ipv4(const char* text, uint32_t* address) {
     uint32_t result = 0;
     int parts = 0;
@@ -530,6 +568,7 @@ static void terminal_execute_command(const char* cmd) {
         term_print(" view <file>     Open in Viewer\n");
         term_print(" ping <IPv4>     Ping four times\n");
         term_print(" ifconfig        Show network configuration\n");
+        term_print(" netdiag         Inspect network driver state\n");
         term_print(" clear           Clear screen\n");
     }
     else if (str_prefix(cmd, "clear")) {
@@ -597,6 +636,9 @@ static void terminal_execute_command(const char* cmd) {
     }
     else if (str_prefix(cmd, "ifconfig")) {
         terminal_ifconfig();
+    }
+    else if (str_prefix(cmd, "netdiag")) {
+        terminal_netdiag();
     }
     else if (str_prefix(cmd, "echo ")) {
         const char* p = cmd + 5;
@@ -932,7 +974,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     display_init(lfb_address, bpp, pitch);
     idt_init();
     pit_init(100);
-    net_init(0xC100);
+    net_init(0);
     {
         uint64_t mac_value = net_get_mac_address();
         uint8_t mac[6];

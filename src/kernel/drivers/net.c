@@ -22,6 +22,10 @@
 
 #define RING_COUNT 8
 #define BUFFER_SIZE 1536
+#define PCI_CONFIG_ADDRESS 0xCF8
+#define PCI_CONFIG_DATA 0xCFC
+#define PCNET_VENDOR_ID 0x1022
+#define PCNET_DEVICE_ID 0x2000
 
 typedef struct {
     uint16_t mode;
@@ -48,6 +52,7 @@ static uint8_t net_rx_index;
 static uint64_t net_mac;
 static uint32_t net_ip;
 static net_receive_handler_t net_handler;
+static net_diagnostics_t diagnostics;
 
 static pcnet_init_block_t init_block __attribute__((aligned(16)));
 static pcnet_descriptor_t receive_ring[RING_COUNT] __attribute__((aligned(16)));
@@ -69,6 +74,55 @@ static void pcnet_write(uint16_t register_number, uint16_t value) {
     outw(net_io_base + PCNET_RDP, value);
 }
 
+static uint32_t pci_read32(uint8_t bus, uint8_t slot, uint8_t function,
+                           uint8_t offset) {
+    uint32_t address = 0x80000000U
+                     | ((uint32_t)bus << 16)
+                     | ((uint32_t)slot << 11)
+                     | ((uint32_t)function << 8)
+                     | (offset & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, address);
+    return inl(PCI_CONFIG_DATA);
+}
+
+static void pci_write16(uint8_t bus, uint8_t slot, uint8_t function,
+                        uint8_t offset, uint16_t value) {
+    uint32_t address = 0x80000000U
+                     | ((uint32_t)bus << 16)
+                     | ((uint32_t)slot << 11)
+                     | ((uint32_t)function << 8)
+                     | (offset & 0xFC);
+    uint32_t current;
+    outl(PCI_CONFIG_ADDRESS, address);
+    current = inl(PCI_CONFIG_DATA);
+    if (offset & 2) current = (current & 0x0000FFFFU) | ((uint32_t)value << 16);
+    else current = (current & 0xFFFF0000U) | value;
+    outl(PCI_CONFIG_ADDRESS, address);
+    outl(PCI_CONFIG_DATA, current);
+}
+
+static uint16_t find_pcnet_io_base(void) {
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t slot = 0; slot < 32; slot++) {
+            for (uint8_t function = 0; function < 8; function++) {
+                uint32_t identity = pci_read32((uint8_t)bus, slot, function, 0);
+                uint16_t vendor = (uint16_t)identity;
+                uint16_t device = (uint16_t)(identity >> 16);
+                uint32_t bar;
+
+                if (vendor != PCNET_VENDOR_ID || device != PCNET_DEVICE_ID)
+                    continue;
+                bar = pci_read32((uint8_t)bus, slot, function, 0x10);
+                if (!(bar & 1) || (bar & 0xFFFFFFFCU) == 0)
+                    return 0;
+                pci_write16((uint8_t)bus, slot, function, 4, 0x0005);
+                return (uint16_t)(bar & 0xFFFC);
+            }
+        }
+    }
+    return 0;
+}
+
 static uint32_t aligned_address(const void* address) {
     return ((uint32_t)address + 15U) & ~15U;
 }
@@ -87,6 +141,7 @@ static uint64_t read_mac(void) {
 }
 
 uint8_t net_init(uint16_t io_base) {
+    if (io_base == 0) io_base = find_pcnet_io_base();
     if (io_base == 0) return 0;
 
     net_io_base = io_base;
@@ -94,6 +149,10 @@ uint8_t net_init(uint16_t io_base) {
     net_tx_index = 0;
     net_rx_index = 0;
     net_mac = read_mac();
+    net_reset_diagnostics();
+    diagnostics.io_base = io_base;
+
+    if (pcnet_read(0) == 0xFFFF) return 0;
 
     pcnet_write(20, BCR20_SSTYLE_32);
     pcnet_write(0, CSR0_STOP);
@@ -132,9 +191,11 @@ uint8_t net_init(uint16_t io_base) {
     pcnet_write(0, CSR0_INIT);
 
     for (volatile uint32_t timeout = 0; timeout < 1000000; timeout++) {
-        if (pcnet_read(0) & CSR0_IDON) {
+        uint16_t status = pcnet_read(0);
+        if (status != 0xFFFF && (status & CSR0_IDON)) {
             pcnet_write(0, CSR0_IDON | CSR0_STRT | CSR0_RINT | CSR0_TINT);
             net_ready = 1;
+            diagnostics.initialized = 1;
             return 1;
         }
     }
@@ -158,12 +219,16 @@ uint8_t net_send(const uint8_t* data, uint32_t length) {
     pcnet_descriptor_t* descriptor;
     uint8_t* destination;
 
+    diagnostics.tx_attempts++;
     if (!net_ready || !data || length == 0 || length > NET_MAX_FRAME_SIZE) {
         return 0;
     }
 
     descriptor = &transmit_ring[net_tx_index];
-    if (descriptor->flags & DESCRIPTOR_OWN) return 0;
+    if (descriptor->flags & DESCRIPTOR_OWN) {
+        diagnostics.tx_busy++;
+        return 0;
+    }
 
     destination = (uint8_t*)descriptor->address;
     for (uint32_t i = 0; i < length; i++) destination[i] = data[i];
@@ -172,6 +237,7 @@ uint8_t net_send(const uint8_t* data, uint32_t length) {
     descriptor->flags = DESCRIPTOR_OWN | DESCRIPTOR_STP | DESCRIPTOR_ENP
                       | (uint32_t)(-(int32_t)length & 0xFFF);
     net_tx_index = (uint8_t)((net_tx_index + 1) % RING_COUNT);
+    diagnostics.tx_submitted++;
     pcnet_write(0, CSR0_TINT);
     return 1;
 }
@@ -183,9 +249,11 @@ void net_poll(void) {
     if (!net_ready) return;
 
     status = pcnet_read(0);
+    diagnostics.csr0 = status;
     if (status & CSR0_ERR) {
+        diagnostics.last_error_status = status;
+        diagnostics.rx_errors++;
         pcnet_write(0, status);
-        return;
     }
 
     while (!(receive_ring[net_rx_index].flags & DESCRIPTOR_OWN)
@@ -193,14 +261,18 @@ void net_poll(void) {
         pcnet_descriptor_t* descriptor = &receive_ring[net_rx_index];
         uint32_t length = descriptor->flags2 & 0x0FFF;
 
+        diagnostics.last_rx_length = length;
         if (!(descriptor->flags & DESCRIPTOR_ERR)
             && (descriptor->flags & (DESCRIPTOR_STP | DESCRIPTOR_ENP))
                 == (DESCRIPTOR_STP | DESCRIPTOR_ENP)
             && length >= 4 && length <= BUFFER_SIZE) {
             length -= 4;
+            diagnostics.rx_frames++;
             if (net_handler) {
                 net_handler((const uint8_t*)descriptor->address, length);
             }
+        } else {
+            diagnostics.rx_invalid++;
         }
 
         descriptor->flags2 = 0;
@@ -231,4 +303,29 @@ void net_set_ip_address(uint32_t address) {
 
 uint32_t net_get_ip_address(void) {
     return net_ip;
+}
+
+void net_get_diagnostics(net_diagnostics_t* output) {
+    if (!output) return;
+    *output = diagnostics;
+    output->initialized = net_ready;
+    output->tx_index = net_tx_index;
+    output->rx_index = net_rx_index;
+    output->csr0 = net_io_base ? pcnet_read(0) : 0;
+}
+
+void net_reset_diagnostics(void) {
+    diagnostics.initialized = 0;
+    diagnostics.io_base = net_io_base;
+    diagnostics.csr0 = 0;
+    diagnostics.tx_index = 0;
+    diagnostics.rx_index = 0;
+    diagnostics.tx_attempts = 0;
+    diagnostics.tx_submitted = 0;
+    diagnostics.tx_busy = 0;
+    diagnostics.rx_frames = 0;
+    diagnostics.rx_errors = 0;
+    diagnostics.rx_invalid = 0;
+    diagnostics.last_rx_length = 0;
+    diagnostics.last_error_status = 0;
 }
