@@ -43,6 +43,15 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\arp.c -o src\kernel\net\arp.o
 if %errorlevel% neq 0 exit /b %errorlevel%
 
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\tcp.c -o src\kernel\net\tcp.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\udp.c -o src\kernel\net\udp.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\icmp.c -o src\kernel\net\icmp.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\fs.c -o src\kernel\fs.o
 if %errorlevel% neq 0 exit /b %errorlevel%
 
@@ -102,7 +111,7 @@ del src\apps\mines\main.o
 del src\apps\mines\entry.o
 
 
-ld -mi386pe -Ttext 0x10000 src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o src\kernel\main.o src\kernel\idt.o src\kernel\task.o src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o src\kernel\desktop.o src\apps\notepad\notepad.o src\apps\viewer\viewer.o -o src\kernel\kernel.tmp
+ld -mi386pe -Ttext 0x10000 src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o src\kernel\main.o src\kernel\idt.o src\kernel\task.o src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o src\kernel\desktop.o src\apps\notepad\notepad.o src\apps\viewer\viewer.o -o src\kernel\kernel.tmp
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 
