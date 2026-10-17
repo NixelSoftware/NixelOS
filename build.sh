@@ -25,6 +25,7 @@ gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/font.
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/keyboard.c -o src/kernel/keyboard.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/desktop.c -o src/kernel/desktop.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/task.c -o src/kernel/task.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/dialog.c -o src/kernel/dialog.o
 
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/notepad/notepad.c -o src/apps/notepad/notepad.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/viewer/viewer.c -o src/apps/viewer/viewer.o
@@ -51,6 +52,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/main.o \
     src/kernel/idt.o \
     src/kernel/task.o \
+    src/kernel/dialog.o \
     src/kernel/drivers/display.o \
     src/kernel/drivers/ata.o \
     src/kernel/drivers/net.o \
@@ -124,6 +126,7 @@ rm -f src/boot_stage2.bin
 rm -f src/kernel/*.o
 rm -f src/kernel/drivers/*.o
 rm -f src/kernel/net/*.o
+rm -f src/kernel/dialog.o
 rm -f src/apps/notepad/*.o
 rm -f src/apps/viewer/*.o
 rm -f src/kernel/kernel.bin
