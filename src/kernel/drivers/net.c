@@ -150,6 +150,10 @@ void net_shutdown(void) {
     net_ready = 0;
 }
 
+uint8_t net_is_ready(void) {
+    return net_ready;
+}
+
 uint8_t net_send(const uint8_t* data, uint32_t length) {
     pcnet_descriptor_t* descriptor;
     uint8_t* destination;
@@ -174,6 +178,7 @@ uint8_t net_send(const uint8_t* data, uint32_t length) {
 
 void net_poll(void) {
     uint16_t status;
+    uint8_t processed = 0;
 
     if (!net_ready) return;
 
@@ -183,9 +188,10 @@ void net_poll(void) {
         return;
     }
 
-    while (!(receive_ring[net_rx_index].flags & DESCRIPTOR_OWN)) {
+    while (!(receive_ring[net_rx_index].flags & DESCRIPTOR_OWN)
+           && processed < RING_COUNT) {
         pcnet_descriptor_t* descriptor = &receive_ring[net_rx_index];
-        uint32_t length = descriptor->flags & 0x0FFF;
+        uint32_t length = descriptor->flags2 & 0x0FFF;
 
         if (!(descriptor->flags & DESCRIPTOR_ERR)
             && (descriptor->flags & (DESCRIPTOR_STP | DESCRIPTOR_ENP))
@@ -201,6 +207,7 @@ void net_poll(void) {
         descriptor->flags = DESCRIPTOR_OWN
                           | (uint32_t)(-(int32_t)BUFFER_SIZE & 0xFFF);
         net_rx_index = (uint8_t)((net_rx_index + 1) % RING_COUNT);
+        processed++;
     }
 
     pcnet_write(0, (uint16_t)(status & (CSR0_RINT | CSR0_TINT)));

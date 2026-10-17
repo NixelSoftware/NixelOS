@@ -13,6 +13,8 @@
 #include "net/arp.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
+#include "net/dhcp.h"
+#include "net/udp.h"
 #include "dialog.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
@@ -67,14 +69,51 @@ static void print_u32(uint32_t value) {
         term_print("0");
         return;
     }
+
     while (value != 0) {
         digits[count++] = (char)('0' + (value % 10));
         value /= 10;
     }
+
     while (count > 0) {
         char digit[2] = { digits[--count], '\0' };
         term_print(digit);
     }
+}
+
+static void print_ip(uint32_t address) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        print_u32((address >> shift) & 0xFF);
+        if (shift != 0) term_print(".");
+    }
+}
+
+static void print_hex_byte(uint8_t value) {
+    const char* digits = "0123456789ABCDEF";
+    char text[3] = { digits[value >> 4], digits[value & 0x0F], '\0' };
+    term_print(text);
+}
+
+static void terminal_ifconfig(void) {
+    uint64_t mac = net_get_mac_address();
+    const dhcp_lease_t* lease = dhcp_get_lease();
+    uint32_t mask = lease->leased ? lease->subnet_mask : 0xFFFFFF00;
+    uint32_t gateway = lease->leased ? lease->gateway : 0x0A000202;
+    term_print("eth0\n  Link: ");
+    term_print(net_is_ready() ? "up\n" : "down\n");
+    term_print("  MAC: ");
+    for (int i = 5; i >= 0; i--) {
+        print_hex_byte((uint8_t)(mac >> (i * 8)));
+        if (i != 0) term_print(":");
+    }
+    term_print("\n  IP: ");
+    print_ip(net_get_ip_address());
+    term_print("\n  Netmask: ");
+    print_ip(mask);
+    term_print("\n  Gateway: ");
+    print_ip(gateway);
+    term_print("\n  DHCP: ");
+    term_print(lease->leased ? "leased\n" : "not available\n");
 }
 
 static int parse_ipv4(const char* text, uint32_t* address) {
@@ -156,18 +195,20 @@ static void terminal_ping(const char* argument) {
 
         sent = icmp_request_echo(address, 0x4F53, ping_sequence,
                                  payload, sizeof(payload) - 1);
-        while (!sent && frame_timer < deadline && wait_ticks++ < 200) {
+        while (!sent && frame_timer < deadline && wait_ticks++ < 32) {
             net_poll();
             sent = icmp_request_echo(address, 0x4F53, ping_sequence,
                                      payload, sizeof(payload) - 1);
-            if (!sent) __asm__ volatile ("pause");
+            for (volatile uint32_t delay = 0; !sent && delay < 2000; delay++)
+                __asm__ volatile ("pause");
         }
 
         wait_ticks = 0;
         while (sent && !ping_reply_received && frame_timer < deadline
-               && wait_ticks++ < 200) {
+               && wait_ticks++ < 128) {
             net_poll();
-            __asm__ volatile ("pause");
+            for (volatile uint32_t delay = 0; delay < 2000; delay++)
+                __asm__ volatile ("pause");
         }
 
         if (ping_reply_received) {
@@ -488,6 +529,7 @@ static void terminal_execute_command(const char* cmd) {
         term_print(" echo <t>><file> Write file\n");
         term_print(" view <file>     Open in Viewer\n");
         term_print(" ping <IPv4>     Ping four times\n");
+        term_print(" ifconfig        Show network configuration\n");
         term_print(" clear           Clear screen\n");
     }
     else if (str_prefix(cmd, "clear")) {
@@ -552,6 +594,9 @@ static void terminal_execute_command(const char* cmd) {
         const char* target = cmd + 5;
         while (*target == ' ') target++;
         terminal_ping(target);
+    }
+    else if (str_prefix(cmd, "ifconfig")) {
+        terminal_ifconfig();
     }
     else if (str_prefix(cmd, "echo ")) {
         const char* p = cmd + 5;
@@ -895,11 +940,18 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
             mac[i] = (uint8_t)mac_value;
             mac_value >>= 8;
         }
-        ipv4_init(0x0A00020F, mac, 0x0A000202, 0xFFFFFF00);
-        arp_init(0x0A00020F, mac);
+        ipv4_init(0, mac, 0, 0);
+        arp_init(0, mac);
     }
     icmp_init();
     icmp_set_echo_reply_handler(ping_reply);
+    udp_init();
+    {
+        dhcp_lease_t lease;
+        if (!dhcp_request(&lease, 100000)) {
+            ipv4_set_configuration(0x0A00020F, 0x0A000202, 0xFFFFFF00);
+        }
+    }
     fs_init();
     tasking_init();
 

@@ -66,6 +66,10 @@ void arp_clear_cache(void) {
     for (uint32_t i = 0; i < ARP_CACHE_SIZE; i++) cache[i].valid = 0;
 }
 
+void arp_set_local_ip(uint32_t address) {
+    local_ip = address;
+}
+
 uint8_t arp_receive(const uint8_t source_mac[6],
                     const uint8_t destination_mac[6],
                     const uint8_t* payload, uint32_t length) {
@@ -130,6 +134,10 @@ void arp_request(uint32_t ip_address) {
 }
 
 uint8_t arp_resolve(uint32_t ip_address, uint8_t mac[6]) {
+    if (ip_address == ETHERFRAME_BROADCAST_MAC) {
+        for (uint8_t i = 0; i < 6; i++) mac[i] = 0xFF;
+        return 1;
+    }
     for (uint32_t i = 0; i < ARP_CACHE_SIZE; i++) {
         if (cache[i].valid && cache[i].ip == ip_address) {
             for (uint8_t j = 0; j < 6; j++) mac[j] = cache[i].mac[j];

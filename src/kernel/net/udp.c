@@ -52,12 +52,13 @@ static udp_socket_t* find_socket(uint32_t source_ip, uint16_t source_port,
     for (uint32_t i = 0; i < UDP_MAX_SOCKETS; i++) {
         udp_socket_t* socket = &sockets[i];
         if (!socket->in_use || socket->local_port != destination_port
-            || socket->local_ip != destination_ip) {
+            || (socket->local_ip != 0 && socket->local_ip != destination_ip)) {
             continue;
         }
 
         if (!socket->listening
-            && socket->remote_ip == source_ip
+            && (socket->remote_ip == source_ip
+                || socket->remote_ip == 0xFFFFFFFF)
             && socket->remote_port == source_port) {
             return socket;
         }

@@ -1,5 +1,6 @@
 #include "ipv4.h"
 #include "etherframe.h"
+#include "arp.h"
 
 #define IPV4_ETHERNET_HEADER_SIZE 14
 #define IPV4_MAX_FRAME_SIZE (IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + IPV4_MAX_PAYLOAD)
@@ -79,6 +80,15 @@ void ipv4_set_mac_resolver(ipv4_mac_resolver_t resolver) {
     mac_resolver = resolver;
 }
 
+void ipv4_set_configuration(uint32_t address, uint32_t gateway,
+                            uint32_t mask) {
+    local_ip = address;
+    gateway_ip = gateway;
+    subnet_mask = mask;
+    net_set_ip_address(address);
+    arp_set_local_ip(address);
+}
+
 void ipv4_set_protocol_handler(uint8_t protocol,
                                ipv4_protocol_handler_t handler) {
     protocol_handlers[protocol] = handler;
@@ -120,7 +130,11 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
     }
 
     if (ipv4_checksum(header, header_length) != 0) return 0;
-    if (read_be32((const uint8_t*)&header->destination_ip) != local_ip) return 0;
+    {
+        uint32_t destination_ip =
+            read_be32((const uint8_t*)&header->destination_ip);
+        if (destination_ip != local_ip && destination_ip != 0xFFFFFFFF) return 0;
+    }
 
     if (swap16(header->flags_and_fragment_offset) & 0x1FFF) {
         return 0;
@@ -147,7 +161,9 @@ uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,
 
     if (!payload || length > IPV4_MAX_PAYLOAD) return 0;
 
-    route = (destination_ip & subnet_mask) == (local_ip & subnet_mask)
+    route = destination_ip == 0xFFFFFFFF
+          ? destination_ip
+          : (destination_ip & subnet_mask) == (local_ip & subnet_mask)
           ? destination_ip : gateway_ip;
     if (!mac_resolver || !mac_resolver(route, destination_mac)) return 0;
 

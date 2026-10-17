@@ -9,6 +9,7 @@ typedef uint8_t (*net_receive_handler_t)(const uint8_t* data, uint32_t length);
 
 
 uint8_t net_init(uint16_t io_base);
+uint8_t net_is_ready(void);
 void net_shutdown(void);
 void net_poll(void);
 

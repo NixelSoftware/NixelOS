@@ -19,6 +19,7 @@ gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/a
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/tcp.c -o src/kernel/net/tcp.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/udp.c -o src/kernel/net/udp.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/icmp.c -o src/kernel/net/icmp.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/dhcp.c -o src/kernel/net/dhcp.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/fs.c -o src/kernel/fs.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/cursor.c -o src/kernel/cursor.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/font.c -o src/kernel/font.o
@@ -76,6 +77,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/net/tcp.o \
     src/kernel/net/udp.o \
     src/kernel/net/icmp.o \
+    src/kernel/net/dhcp.o \
     src/kernel/fs.o \
     src/kernel/cursor.o \
     src/kernel/font.o \
@@ -120,5 +122,7 @@ rm -f src/kernel/kernel.bin
 rm -f files.bin
 rm -f mines.bin
 
-qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk \
-    -netdev user,id=net0 -device pcnet,netdev=net0
+qemu-system-i386 -m 32M \
+    -drive file=os.img,format=raw,index=0,media=disk \
+    -netdev bridge,id=net0,br=br0 \
+    -device pcnet,netdev=net0
