@@ -316,6 +316,8 @@ static int str_prefix(const char* str, const char* prefix) {
     return 1;
 }
 
+typedef int (*app_entry_fn)(os_api_t* api);
+
 static void terminal_execute_command(const char* cmd) {
     if (cmd[0] == '>' && cmd[1] == ' ') cmd += 2;
     while (*cmd == ' ') cmd++;
@@ -447,19 +449,15 @@ static void terminal_execute_command(const char* cmd) {
         }
 
         if (bytes > 0) {
-            term_print("Launching background task...\n");
+            term_print("Running ");
+            term_print(prog_name);
+            term_print("...\n");
 
-            int tid = task_create((void (*)(void*))0x00200000, &kernel_api, prog_name);
-            if (tid < 0) {
-                term_print("Failed: No free task slots!\n");
-            } else {
-                term_print("Started with Task ID: ");
-                char id_str[4];
-                id_str[0] = '0' + tid;
-                id_str[1] = '\n';
-                id_str[2] = '\0';
-                term_print(id_str);
-            }
+            // Direct call to app entry point linked at 0x00200000
+            app_entry_fn entry = (app_entry_fn)0x00200000;
+            entry(&kernel_api);
+
+            needs_redraw = 1;
         } else {
             term_print("Unknown cmd. Type 'help'\n");
         }
@@ -734,7 +732,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     viewer_init();
 
     // fuckass line was breaking shit
-    // outb(0x21, inb(0x21) & ~0x01);
+    //outb(0x21, inb(0x21) & ~0x01);
 
     windows[0] = &notepad_window;
     windows[1] = &viewer_window;
