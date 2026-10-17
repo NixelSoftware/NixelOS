@@ -62,24 +62,34 @@ ISR_NOERRCODE i
 isr_common_stub:
     pusha
 
+    xor eax, eax
     mov ax, ds
     push eax
+    mov ax, es
+    push eax
+    mov ax, fs
+    push eax
+    mov ax, gs
+    push eax
 
-    mov ax, 0x10        
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    push esp            
+    push esp
     call isr_handler
     add esp, 4
 
     pop eax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
     mov gs, ax
+    pop eax
+    mov fs, ax
+    pop eax
+    mov es, ax
+    pop eax
+    mov ds, ax
 
     popa
     add esp, 8

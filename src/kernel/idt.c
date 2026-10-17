@@ -82,6 +82,10 @@ static void kernel_panic(registers_t* regs) {
 
     char hex[16];
 
+    u32_to_hex(regs->int_no, hex);
+    draw_string(100, 160, "Interrupt number:", COLOR_WHITE);
+    draw_string(260, 160, hex, COLOR_WHITE);
+
     draw_string(100, 180, "CPU Register Context:", COLOR_WHITE);
 
     u32_to_hex(regs->eax, hex);

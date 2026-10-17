@@ -733,8 +733,8 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     notepad_init();
     viewer_init();
 
-    
-    outb(0x21, inb(0x21) & ~0x01);
+    // fuckass line was breaking shit
+    // outb(0x21, inb(0x21) & ~0x01);
 
     windows[0] = &notepad_window;
     windows[1] = &viewer_window;
