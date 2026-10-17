@@ -54,7 +54,8 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\icmp.c -o src\kernel\net\icmp.o
 if %errorlevel% neq 0 exit /b %errorlevel%
 
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\net\dhcp.c -o src\kernel\net\dhcp.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\kernel\drivers\net_pcnet32.c -o src\kernel\drivers\net_pcnet32.o -c src\kernel\net\dhcp.c -o src\kernel\net\dhcp.o
+
 if %errorlevel% neq 0 exit /b %errorlevel%
 :: end net shit
 
@@ -118,8 +119,40 @@ del src\apps\mines\mines.tmp
 del src\apps\mines\main.o
 del src\apps\mines\entry.o
 
+:: calculator
+nasm -f elf32 src\apps\calc\entry.asm -o src\apps\calc\entry.o
+if %errorlevel% neq 0 exit /b %errorlevel%
 
-ld -mi386pe -Ttext 0x10000 src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o src\kernel\main.o src\kernel\idt.o src\kernel\task.o src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\net\dhcp.o src\kernel\fs.o src\kernel\cursor.o src\kernel\dialog.o src\kernel\font.o src\kernel\keyboard.o src\kernel\desktop.o src\apps\notepad\notepad.o src\apps\viewer\viewer.o -o src\kernel\kernel.tmp
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\apps\calc\main.c -o src\apps\calc\main.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+ld -mi386pe -Ttext 0x200000 -e _start src\apps\calc\entry.o src\apps\calc\main.o -o src\apps\calc\calc.tmp
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+objcopy -O binary src\apps\calc\calc.tmp calc.bin
+if %errorlevel% neq 0 exit /b %errorlevel%
+del src\apps\calc\calc.tmp
+del src\apps\calc\main.o
+del src\apps\calc\entry.o
+
+:: hexview
+nasm -f elf32 src\apps\hexview\entry.asm -o src\apps\hexview\entry.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\apps\hexview\main.c -o src\apps\hexview\main.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+ld -mi386pe -Ttext 0x200000 -e _start src\apps\hexview\entry.o src\apps\hexview\main.o -o src\apps\hexview\hexview.tmp
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+objcopy -O binary src\apps\hexview\hexview.tmp hexview.bin
+if %errorlevel% neq 0 exit /b %errorlevel%
+del src\apps\hexview\hexview.tmp
+del src\apps\hexview\main.o
+del src\apps\hexview\entry.o
+
+
+ld -mi386pe -Ttext 0x10000 src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o src\kernel\main.o src\kernel\idt.o src\kernel\task.o src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\drivers\net_pcnet32.o src\kernel\net\dhcp.o src\kernel\fs.o src\kernel\cursor.o src\kernel\dialog.o src\kernel\font.o src\kernel\keyboard.o src\kernel\desktop.o src\apps\notepad\notepad.o src\apps\viewer\viewer.o -o src\kernel\kernel.tmp
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 
@@ -151,6 +184,8 @@ del src\apps\viewer\*.o
 del src\kernel\kernel.bin
 del files.bin
 del mines.bin
+del calc.bin
+del hexview.bin
 
 
 qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.15 -device pcnet,netdev=net0
