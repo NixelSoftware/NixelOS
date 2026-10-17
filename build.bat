@@ -56,7 +56,7 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\apps\viewer\viewer.c -o src\apps\viewer\viewer.o
 if %errorlevel% neq 0 exit /b %errorlevel%
 
-
+:: files app
 if not exist src\apps\files mkdir src\apps\files
 nasm -f elf32 src\apps\files\entry.asm -o src\apps\files\entry.o
 if %errorlevel% neq 0 exit /b %errorlevel%
@@ -69,9 +69,25 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 
 objcopy -O binary src\apps\files\files.tmp files.bin
 if %errorlevel% neq 0 exit /b %errorlevel%
-del src\apps\files\files.tmp
+::del src\apps\files\files.tmp
 del src\apps\files\main.o
 del src\apps\files\entry.o
+
+:: minesweeper
+nasm -f elf32 src\apps\mines\entry.asm -o src\apps\mines\entry.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src\apps\mines\main.c -o src\apps\mines\main.o
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+ld -mi386pe -Ttext 0x200000 -e _start src\apps\mines\entry.o src\apps\mines\main.o -o src\apps\mines\mines.tmp
+if %errorlevel% neq 0 exit /b %errorlevel%
+
+objcopy -O binary src\apps\mines\mines.tmp mines.bin
+if %errorlevel% neq 0 exit /b %errorlevel%
+del src\apps\mines\mines.tmp
+del src\apps\mines\main.o
+del src\apps\mines\entry.o
 
 
 ld -mi386pe -Ttext 0x10000 src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o src\kernel\main.o src\kernel\idt.o src\kernel\task.o src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o src\kernel\desktop.o src\apps\notepad\notepad.o src\apps\viewer\viewer.o -o src\kernel\kernel.tmp
@@ -90,8 +106,8 @@ copy /b src\boot.bin+src\boot_stage2.bin+src\kernel\kernel.bin ..\hdd.img > nul
 powershell -Command "$target = '..\hdd.img'; $fs = [System.IO.File]::Open($target, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite); $fs.SetLength(33554432); $fs.Close()"
 
 
-powershell -ExecutionPolicy Bypass -Command "$bytes = [System.IO.File]::ReadAllBytes('files.bin'); $fs = [System.IO.File]::Open('..\hdd.img', [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite); $fs.Seek(200 * 512, [System.IO.SeekOrigin]::Begin); $w = New-Object System.IO.BinaryWriter($fs); $w.Write([uint32]0x53465331); $w.Write([uint32]1); $nameBytes = [System.Text.Encoding]::ASCII.GetBytes('files.bin'); $pad = New-Object byte[](16 - $nameBytes.Length); $w.Write($nameBytes); $w.Write($pad); $w.Write([uint32]$bytes.Length); $w.Write([uint32]208); $w.Write([byte]1); $fs.Seek(208 * 512, [System.IO.SeekOrigin]::Begin); $w.Write($bytes); $w.Close(); $fs.Close()"
-
+powershell -ExecutionPolicy Bypass -File inject_sfs.ps1
+if %errorlevel% neq 0 exit /b %errorlevel%
 
 copy /y ..\hdd.img os.img > nul
 
