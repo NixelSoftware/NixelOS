@@ -902,6 +902,9 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                             bring_to_front(w);
                                             handled = 1;
                                             needs_redraw = 1;
+                                            if (w->handle_mouse) {
+                                                w->handle_mouse(w, mouse_x - w->x, mouse_y - w->y, left_click);
+                                            }
                                             break;
                                         }
                                     }
