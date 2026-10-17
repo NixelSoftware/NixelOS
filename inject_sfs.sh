@@ -15,6 +15,8 @@ image_path = Path(sys.argv[1])
 files = [
     (Path("files.bin"), 208),
     (Path("mines.bin"), 240),
+    (Path("calc.bin"), 272),
+    (Path("hexview.bin"), 304),
 ]
 
 def write_entry(stream, name, size, lba):
@@ -39,5 +41,5 @@ with image_path.open("r+b") as image:
         image.seek(lba * 512)
         image.write(path.read_bytes())
 
-print("SFS injection complete: files.bin and mines.bin written successfully.")
+print("SFS injection complete: files.bin, mines.bin, calc.bin, and hexview.bin written successfully.")
 PY

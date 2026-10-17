@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
+
+cc="gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie"
 
 nasm -f bin src/boot.asm -o src/boot.bin
 nasm -f bin src/boot_stage2.asm -o src/boot_stage2.bin
@@ -8,31 +10,22 @@ nasm -f elf32 src/kernel/kernel_entry.asm -o src/kernel/kernel_entry.o
 nasm -f elf32 src/kernel/idt_asm.asm -o src/kernel/idt_asm.o
 nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
 
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/main.c -o src/kernel/main.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/idt.c -o src/kernel/idt.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/drivers/display.c -o src/kernel/drivers/display.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/drivers/ata.c -o src/kernel/drivers/ata.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/drivers/net.c -o src/kernel/drivers/net.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/ipv4.c -o src/kernel/net/ipv4.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/etherframe.c -o src/kernel/net/etherframe.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/arp.c -o src/kernel/net/arp.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/tcp.c -o src/kernel/net/tcp.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/udp.c -o src/kernel/net/udp.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/icmp.c -o src/kernel/net/icmp.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/net/dhcp.c -o src/kernel/net/dhcp.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/fs.c -o src/kernel/fs.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/cursor.c -o src/kernel/cursor.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/font.c -o src/kernel/font.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/keyboard.c -o src/kernel/keyboard.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/desktop.c -o src/kernel/desktop.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/task.c -o src/kernel/task.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/kernel/dialog.c -o src/kernel/dialog.o
+${cc} -c src/kernel/main.c -o src/kernel/main.o
+${cc} -c src/kernel/idt.c -o src/kernel/idt.o
+${cc} -c src/kernel/drivers/display.c -o src/kernel/drivers/display.o
+${cc} -c src/kernel/drivers/ata.c -o src/kernel/drivers/ata.o
+for source in src/kernel/drivers/net.c src/kernel/net/ipv4.c src/kernel/net/etherframe.c \
+              src/kernel/net/arp.c src/kernel/net/tcp.c src/kernel/net/udp.c \
+              src/kernel/net/icmp.c src/kernel/net/dhcp.c src/kernel/fs.c \
+              src/kernel/cursor.c src/kernel/font.c src/kernel/keyboard.c \
+              src/kernel/desktop.c src/kernel/task.c src/kernel/dialog.c; do
+    ${cc} -c "$source" -o "${source%.c}.o"
+done
 
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/notepad/notepad.c -o src/apps/notepad/notepad.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/viewer/viewer.c -o src/apps/viewer/viewer.o
+${cc} -c src/apps/notepad/notepad.c -o src/apps/notepad/notepad.o
+${cc} -c src/apps/viewer/viewer.c -o src/apps/viewer/viewer.o
 
-mkdir -p src/apps/files
-mkdir -p src/apps/mines
+mkdir -p src/apps/files src/apps/mines src/apps/calc src/apps/hexview
 
 nasm -f elf32 src/apps/files/entry.asm -o src/apps/files/entry.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/files/main.c -o src/apps/files/main.o
@@ -47,18 +40,15 @@ objcopy -O binary src/apps/files/files.tmp files.bin
 rm -f src/apps/files/files.tmp
 rm -f src/apps/files/main.o src/apps/files/entry.o
 
-nasm -f elf32 src/apps/mines/entry.asm -o src/apps/mines/entry.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/mines/main.c -o src/apps/mines/main.o
-
-ld -m elf_i386 -Ttext 0x200000 -e _start \
-    src/apps/mines/entry.o \
-    src/apps/mines/main.o \
-    -o src/apps/mines/mines.tmp
-
-objcopy -O binary src/apps/mines/mines.tmp mines.bin
-
-rm -f src/apps/mines/mines.tmp
-rm -f src/apps/mines/main.o src/apps/mines/entry.o
+for app in mines calc hexview; do
+    nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
+    ${cc} -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
+    ld -m elf_i386 -Ttext 0x200000 -e _start \
+        "src/apps/$app/entry.o" "src/apps/$app/main.o" \
+        -o "src/apps/$app/$app.tmp"
+    objcopy -O binary "src/apps/$app/$app.tmp" "$app.bin"
+    rm -f "src/apps/$app/$app.tmp" "src/apps/$app/main.o" "src/apps/$app/entry.o"
+done
 
 ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/kernel_entry.o \
@@ -121,8 +111,10 @@ rm -f src/apps/viewer/*.o
 rm -f src/kernel/kernel.bin
 rm -f files.bin
 rm -f mines.bin
+rm -f calc.bin
+rm -f hexview.bin
 
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
-    -netdev bridge,id=net0,br=br0 \
+    -netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.15 \
     -device pcnet,netdev=net0
