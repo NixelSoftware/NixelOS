@@ -224,6 +224,7 @@ void mines_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
                         if (grid[r][c].has_mine) grid[r][c].revealed = 1;
                     }
                 }
+                os->show_info_dialog("Uh-Oh!", "You lost! :(");
             } else {
                 reveal_empty_cells(row, col);
                 check_win();
