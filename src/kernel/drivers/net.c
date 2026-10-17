@@ -21,7 +21,7 @@
 #define CSR0_IDON 0x0100
 #define CSR0_ERR  0x8000
 
-#define BCR20_SSTYLE_32 0x0002
+#define BCR20_SSTYLE_32 0x0102
 
 #define DESCRIPTOR_OWN 0x8000
 #define DESCRIPTOR_ERR 0x4000
@@ -37,10 +37,11 @@
 
 typedef struct {
     uint16_t mode;
-    uint16_t ring_lengths;
-    uint8_t physical_address[6];
+    uint8_t receive_ring_length;
+    uint8_t transmit_ring_length;
+    uint16_t physical_address[3];
     uint16_t reserved;
-    uint32_t logical_address_filter[2];
+    uint16_t logical_address_filter[4];
     uint32_t receive_ring;
     uint32_t transmit_ring;
 } __attribute__((packed, aligned(16))) pcnet_init_block_t;
@@ -77,28 +78,32 @@ static pcnet_tx_descriptor_t transmit_ring[RING_COUNT] __attribute__((aligned(16
 static uint8_t receive_buffers[RING_COUNT][BUFFER_SIZE] __attribute__((aligned(16)));
 static uint8_t transmit_buffers[RING_COUNT][BUFFER_SIZE] __attribute__((aligned(16)));
 
-static void pcnet_select(uint32_t register_number) {
-    outw(net_io_base + PCNET_SW_RAP, (uint16_t)register_number);
-}
-
-static uint32_t pcnet_read(uint32_t register_number) {
-    pcnet_select(register_number);
-    return inw(net_io_base + PCNET_SW_RDP);
-}
-
 static uint16_t pcnet_sw_read(uint16_t register_number) {
     outw(net_io_base + PCNET_SW_RAP, register_number);
     return inw(net_io_base + PCNET_SW_RDP);
 }
 
-static void pcnet_write(uint32_t register_number, uint32_t value) {
-    pcnet_select(register_number);
-    outw(net_io_base + PCNET_SW_RDP, (uint16_t)value);
+static uint32_t pcnet_read(uint32_t register_number) {
+    outl(net_io_base + PCNET_DW_RAP, register_number);
+    return inl(net_io_base + PCNET_DW_RDP);
 }
 
-static void pcnet_dw_bcr_write(uint32_t register_number, uint32_t value) {
-    outw(net_io_base + PCNET_SW_RAP, (uint16_t)register_number);
-    outw(net_io_base + PCNET_SW_BDP, (uint16_t)value);
+static void pcnet_write(uint32_t register_number, uint32_t value) {
+    outl(net_io_base + PCNET_DW_RAP, register_number);
+    outl(net_io_base + PCNET_DW_RDP, value);
+}
+
+static void pcnet_start(void) {
+    pcnet_write(0, CSR0_STRT | CSR0_IENA);
+}
+
+static void pcnet_sw_bcr_write(uint16_t register_number, uint16_t value) {
+    outw(net_io_base + PCNET_SW_RAP, register_number);
+    outw(net_io_base + PCNET_SW_BDP, value);
+}
+
+static void pcnet_enable_dwio(void) {
+    outl(net_io_base + PCNET_DW_RDP, 0);
 }
 
 static uint32_t pci_read32(uint8_t bus, uint8_t slot, uint8_t function,
@@ -184,8 +189,9 @@ uint8_t net_init(uint16_t io_base) {
     diagnostics.io_base = io_base;
 
     inw(net_io_base + PCNET_SW_RESET);
-    pcnet_dw_bcr_write(20, BCR20_SSTYLE_32);
     diagnostics.sw_csr0 = pcnet_sw_read(0);
+    pcnet_sw_bcr_write(20, BCR20_SSTYLE_32);
+    pcnet_enable_dwio();
     diagnostics.dw_csr0 = pcnet_read(0);
     if (pcnet_read(0) == 0xFFFFU) {
         diagnostics.init_failure = 2;
@@ -196,14 +202,14 @@ uint8_t net_init(uint16_t io_base) {
     pcnet_write(0, CSR0_STOP);
 
     init_block.mode = 0;
-    init_block.ring_lengths = (uint16_t)((3U << 4) | (3U << 12));
+    init_block.receive_ring_length = 0x30;
+    init_block.transmit_ring_length = 0x30;
     init_block.reserved = 0;
-    init_block.logical_address_filter[0] = 0;
-    init_block.logical_address_filter[1] = 0;
+    for (uint8_t i = 0; i < 4; i++) init_block.logical_address_filter[i] = 0;
 
     for (uint8_t i = 0; i < 6; i++) {
-        init_block.physical_address[i] =
-            (uint8_t)((net_mac >> (i * 8)) & 0xFF);
+        ((uint8_t*)init_block.physical_address)[i] =
+            (uint8_t)(net_mac >> (i * 8));
     }
 
     init_block.receive_ring = aligned_address(receive_ring);
@@ -232,7 +238,8 @@ uint8_t net_init(uint16_t io_base) {
     for (volatile uint32_t timeout = 0; timeout < 1000000; timeout++) {
         uint32_t status = pcnet_read(0);
         if (status != 0xFFFFU && (status & CSR0_IDON)) {
-            pcnet_write(0, CSR0_IDON | CSR0_STRT | CSR0_IENA);
+            pcnet_write(0, CSR0_IDON);
+            pcnet_start();
             net_ready = 1;
             diagnostics.initialized = 1;
             return 1;
@@ -298,6 +305,11 @@ void net_poll(void) {
         diagnostics.last_error_status = status;
         diagnostics.rx_errors++;
         return;
+    }
+    if (status & CSR0_STOP) {
+        pcnet_start();
+        status = pcnet_read(0);
+        diagnostics.csr0 = status;
     }
     if (status & CSR0_ERR) {
         diagnostics.last_error_status = status;
