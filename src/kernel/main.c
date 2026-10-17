@@ -9,6 +9,7 @@
 #include "fs.h" 
 #include "os_api.h"
 #include "task.h"
+#include "dialog.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
 
@@ -264,7 +265,8 @@ static os_api_t kernel_api = {
     .fs_write           = fs_write_file,
     .term_print         = term_print,
     .register_window    = api_register_window,
-    .unregister_window  = api_unregister_window
+    .unregister_window  = api_unregister_window,
+    .show_info_dialog = show_info_dialog
 };
 
 static void term_scroll(void) {
@@ -730,6 +732,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     terminal_init();
     notepad_init();
     viewer_init();
+    dialog_init(&kernel_api);
 
     // fuckass line was breaking shit
     //outb(0x21, inb(0x21) & ~0x01);
