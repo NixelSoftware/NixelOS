@@ -16,11 +16,23 @@ typedef struct {
     uint32_t tx_attempts;
     uint32_t tx_submitted;
     uint32_t tx_busy;
+    uint32_t tx_completed;
+    uint32_t tx_errors;
     uint32_t rx_frames;
     uint32_t rx_errors;
     uint32_t rx_invalid;
     uint32_t last_rx_length;
     uint16_t last_error_status;
+    uint16_t last_tx_status;
+    uint32_t last_tx_misc;
+    uint32_t tx_descriptor_address;
+    int16_t tx_descriptor_length;
+    uint16_t tx_descriptor_status;
+    uint8_t init_failure;
+    uint16_t sw_csr0;
+    uint32_t dw_csr0;
+    uint16_t rx_descriptor_status;
+    uint32_t rx_message_length;
 } net_diagnostics_t;
 
 uint8_t net_init(uint16_t io_base);
