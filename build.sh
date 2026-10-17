@@ -31,6 +31,7 @@ gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/notepad
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/viewer/viewer.c -o src/apps/viewer/viewer.o
 
 mkdir -p src/apps/files
+mkdir -p src/apps/mines
 
 nasm -f elf32 src/apps/files/entry.asm -o src/apps/files/entry.o
 gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/files/main.c -o src/apps/files/main.o
@@ -44,6 +45,19 @@ objcopy -O binary src/apps/files/files.tmp files.bin
 
 rm -f src/apps/files/files.tmp
 rm -f src/apps/files/main.o src/apps/files/entry.o
+
+nasm -f elf32 src/apps/mines/entry.asm -o src/apps/mines/entry.o
+gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/mines/main.c -o src/apps/mines/main.o
+
+ld -m elf_i386 -Ttext 0x200000 -e _start \
+    src/apps/mines/entry.o \
+    src/apps/mines/main.o \
+    -o src/apps/mines/mines.tmp
+
+objcopy -O binary src/apps/mines/mines.tmp mines.bin
+
+rm -f src/apps/mines/mines.tmp
+rm -f src/apps/mines/main.o src/apps/mines/entry.o
 
 ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/kernel_entry.o \
@@ -90,34 +104,7 @@ cat src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin > ../hdd.img
 
 truncate -s 33554432 ../hdd.img
 
-python3 - <<'PY'
-from pathlib import Path
-import struct
-
-source = Path("files.bin").read_bytes()
-image_path = Path("../hdd.img")
-
-with image_path.open("r+b") as f:
-    # Filesystem header at sector 200 (offset 102400).
-    f.seek(200 * 512)
-
-    name = b"files.bin"
-    name = name.ljust(16, b"\0")
-
-    f.write(struct.pack(
-        "<II16sIIB",
-        0x53465331,
-        1,
-        name,
-        len(source),
-        208,
-        1
-    ))
-
-    # File contents at sector 208 (offset 106496).
-    f.seek(208 * 512)
-    f.write(source)
-PY
+./inject_sfs.sh
 
 cp -f ../hdd.img os.img
 
@@ -131,5 +118,7 @@ rm -f src/apps/notepad/*.o
 rm -f src/apps/viewer/*.o
 rm -f src/kernel/kernel.bin
 rm -f files.bin
+rm -f mines.bin
 
-qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk
+qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk \
+    -netdev user,id=net0 -device pcnet,netdev=net0

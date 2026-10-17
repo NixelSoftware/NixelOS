@@ -9,6 +9,10 @@
 #include "fs.h" 
 #include "os_api.h"
 #include "task.h"
+#include "drivers/net.h"
+#include "net/arp.h"
+#include "net/icmp.h"
+#include "net/ipv4.h"
 #include "dialog.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
@@ -25,11 +29,12 @@
 #define NUM_WINDOWS 6
 
 static void term_print(const char* text);
+static int str_prefix(const char* str, const char* prefix);
 static void update_cursor_fast(int32_t new_x, int32_t new_y);
 static void cursor_save(int32_t x, int32_t y);
 extern void irq0_timer_handler(void);
 
-uint32_t frame_timer = 0;
+volatile uint32_t frame_timer = 0;
 static int32_t mouse_x = 400;
 static int32_t mouse_y = 300;
 static int32_t old_mouse_x = 400;
@@ -48,6 +53,156 @@ static int term_cursor_col = 0;
 static int term_cursor_row = 0;
 
 static Window* windows[NUM_WINDOWS] = {0};
+
+static volatile uint8_t ping_reply_received;
+static volatile uint32_t ping_reply_time;
+static uint32_t ping_target_ip;
+static uint32_t ping_start_time;
+static uint16_t ping_sequence;
+
+static void print_u32(uint32_t value) {
+    char digits[11];
+    int count = 0;
+    if (value == 0) {
+        term_print("0");
+        return;
+    }
+    while (value != 0) {
+        digits[count++] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    while (count > 0) {
+        char digit[2] = { digits[--count], '\0' };
+        term_print(digit);
+    }
+}
+
+static int parse_ipv4(const char* text, uint32_t* address) {
+    uint32_t result = 0;
+    int parts = 0;
+
+    while (*text != '\0' && parts < 4) {
+        uint32_t value = 0;
+        int digits = 0;
+        while (*text >= '0' && *text <= '9') {
+            value = value * 10 + (uint32_t)(*text - '0');
+            if (value > 255) return 0;
+            text++;
+            digits++;
+        }
+        if (digits == 0) return 0;
+        result = (result << 8) | value;
+        parts++;
+        if (parts < 4) {
+            if (*text != '.') return 0;
+            text++;
+        }
+    }
+    if (parts != 4 || *text != '\0') return 0;
+    *address = result;
+    return 1;
+}
+
+static void ping_reply(uint32_t source_ip, uint16_t identifier,
+                       uint16_t sequence, const uint8_t* payload,
+                       uint16_t length) {
+    (void)identifier;
+    (void)payload;
+    if (source_ip == ping_target_ip && sequence == ping_sequence) {
+        ping_reply_time = frame_timer - ping_start_time;
+        ping_reply_received = 1;
+        (void)length;
+    }
+}
+
+static void terminal_ping(const char* argument) {
+    uint32_t address;
+    uint32_t received = 0;
+    uint32_t total = 0;
+    uint32_t minimum = 0xFFFFFFFF;
+    uint32_t maximum = 0;
+    char host[32];
+    int host_length = 0;
+    const uint8_t payload[] = "operating-system";
+
+    if (str_prefix(argument, "http://")) argument += 7;
+    else if (str_prefix(argument, "https://")) argument += 8;
+    while (argument[host_length] != '\0'
+           && argument[host_length] != '/'
+           && argument[host_length] != ' '
+           && host_length < (int)sizeof(host) - 1) {
+        host[host_length] = argument[host_length];
+        host_length++;
+    }
+    host[host_length] = '\0';
+
+    if (!parse_ipv4(host, &address)) {
+        term_print("Usage: ping <IPv4 address>\n");
+        term_print("URL paths are accepted for IPv4 URLs; DNS is not supported.\n");
+        return;
+    }
+
+    term_print("PING ");
+    term_print(host);
+    term_print(" (4 packets)\n");
+
+    ping_target_ip = address;
+    for (ping_sequence = 1; ping_sequence <= 4; ping_sequence++) {
+        uint32_t deadline = frame_timer + 200;
+        uint32_t wait_ticks = 0;
+        uint8_t sent;
+        ping_reply_received = 0;
+        ping_start_time = frame_timer;
+
+        sent = icmp_request_echo(address, 0x4F53, ping_sequence,
+                                 payload, sizeof(payload) - 1);
+        while (!sent && frame_timer < deadline && wait_ticks++ < 200) {
+            net_poll();
+            sent = icmp_request_echo(address, 0x4F53, ping_sequence,
+                                     payload, sizeof(payload) - 1);
+            if (!sent) __asm__ volatile ("pause");
+        }
+
+        wait_ticks = 0;
+        while (sent && !ping_reply_received && frame_timer < deadline
+               && wait_ticks++ < 200) {
+            net_poll();
+            __asm__ volatile ("pause");
+        }
+
+        if (ping_reply_received) {
+            uint32_t milliseconds = ping_reply_time * 10;
+            term_print("reply ");
+            print_u32(ping_sequence);
+            term_print(": ");
+            print_u32(milliseconds);
+            term_print(" ms\n");
+            received++;
+            total += milliseconds;
+            if (milliseconds < minimum) minimum = milliseconds;
+            if (milliseconds > maximum) maximum = milliseconds;
+        } else {
+            term_print("timeout ");
+            print_u32(ping_sequence);
+            term_print("\n");
+        }
+    }
+
+    term_print("--- ping statistics ---\n");
+    print_u32(4 - received);
+    term_print(" packets lost (");
+    print_u32((4 - received) * 25);
+    term_print("%)\n");
+    if (received != 0) {
+        term_print("min/avg/max = ");
+        print_u32(minimum);
+        term_print("/");
+        print_u32(total / received);
+        term_print("/");
+        print_u32(maximum);
+        term_print(" ms\n");
+    }
+}
 
 
 static uint8_t mouse_cycle = 0;
@@ -332,6 +487,7 @@ static void terminal_execute_command(const char* cmd) {
         term_print(" cat <file>      Read file\n");
         term_print(" echo <t>><file> Write file\n");
         term_print(" view <file>     Open in Viewer\n");
+        term_print(" ping <IPv4>     Ping four times\n");
         term_print(" clear           Clear screen\n");
     }
     else if (str_prefix(cmd, "clear")) {
@@ -391,6 +547,11 @@ static void terminal_execute_command(const char* cmd) {
                 term_print("Failed to load BMP!\n");
             }
         }
+    }
+    else if (str_prefix(cmd, "ping ")) {
+        const char* target = cmd + 5;
+        while (*target == ' ') target++;
+        terminal_ping(target);
     }
     else if (str_prefix(cmd, "echo ")) {
         const char* p = cmd + 5;
@@ -726,6 +887,19 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     display_init(lfb_address, bpp, pitch);
     idt_init();
     pit_init(100);
+    net_init(0xC100);
+    {
+        uint64_t mac_value = net_get_mac_address();
+        uint8_t mac[6];
+        for (int i = 5; i >= 0; i--) {
+            mac[i] = (uint8_t)mac_value;
+            mac_value >>= 8;
+        }
+        ipv4_init(0x0A00020F, mac, 0x0A000202, 0xFFFFFF00);
+        arp_init(0x0A00020F, mac);
+    }
+    icmp_init();
+    icmp_set_echo_reply_handler(ping_reply);
     fs_init();
     tasking_init();
 
@@ -751,6 +925,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     while (1) {
         frame_timer++;
+        net_poll();
 
         if ((frame_timer & 0x3F) == 0 && terminal_window.visible && terminal_window.focused) {
             needs_redraw = 1;
