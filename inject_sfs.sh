@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 hdd_path="../hdd.img"
 if [ ! -f "$hdd_path" ]; then
@@ -8,38 +8,77 @@ fi
 
 python3 - "$hdd_path" <<'PY'
 from pathlib import Path
+import math
 import struct
 import sys
 
-image_path = Path(sys.argv[1])
-files = [
-    (Path("files.bin"), 208),
-    (Path("mines.bin"), 240),
-    (Path("calc.bin"), 272),
-    (Path("hexview.bin"), 304),
-]
+SECTOR_SIZE = 512
+SUPER_LBA = 200
+BITMAP_LBA = 201
+INODES_LBA = 202
+INODE_SECTORS = 16
+DATA_LBA = INODES_LBA + INODE_SECTORS
+TOTAL_SECTORS = 4096
+MAX_INODES = 128
+INODE_SIZE = 64
+MAGIC = 0x53465332
 
-def write_entry(stream, name, size, lba):
-    encoded_name = name.encode("ascii")
-    if len(encoded_name) > 16:
-        raise ValueError(f"filesystem name is too long: {name}")
-    stream.write(encoded_name.ljust(16, b"\0"))
-    stream.write(struct.pack("<IIB", size, lba, 1))
-    stream.write(b"\0" * 3)
+image_path = Path(sys.argv[1])
+files = [Path(name) for name in ("calc.bin", "files.bin", "hexview.bin", "mines.bin")]
+
+def write_inode(stream, path, data, start_lba, sector_count):
+    encoded_name = path.name.encode("ascii")
+    if len(encoded_name) >= 32:
+        raise ValueError(f"filesystem name is too long: {path.name}")
+    inode = bytearray(INODE_SIZE)
+    inode[:len(encoded_name)] = encoded_name
+    struct.pack_into("<I", inode, 32, len(data))
+    inode[36] = 1
+    inode[37] = 4
+    struct.pack_into("<H", inode, 38, 1)
+    struct.pack_into("<II", inode, 40, start_lba, sector_count)
+    stream.write(inode)
 
 with image_path.open("r+b") as image:
-    image.seek(200 * 512)
-    image.write(struct.pack("<II", 0x53465331, 2))
+    data = [(path, path.read_bytes()) for path in files]
+    current_lba = DATA_LBA
+    bitmap = bytearray(SECTOR_SIZE)
 
-    for path, lba in files:
-        data = path.read_bytes()
-        write_entry(image, path.name, len(data), lba)
+    for path, contents in data:
+        sector_count = max(1, math.ceil(len(contents) / SECTOR_SIZE))
+        start_bit = current_lba - DATA_LBA
+        for bit in range(start_bit, start_bit + sector_count):
+            bitmap[bit // 8] |= 1 << (bit % 8)
+        current_lba += sector_count
 
-    image.write(b"\0" * (30 * 28))
+    image.seek(SUPER_LBA * SECTOR_SIZE)
+    image.write(struct.pack(
+        "<IIII",
+        MAGIC,
+        TOTAL_SECTORS,
+        MAX_INODES,
+        TOTAL_SECTORS - (current_lba - DATA_LBA),
+    ))
+    image.write(bytes(SECTOR_SIZE - 16))
 
-    for path, lba in files:
-        image.seek(lba * 512)
-        image.write(path.read_bytes())
+    image.seek(BITMAP_LBA * SECTOR_SIZE)
+    image.write(bitmap)
+
+    image.seek(INODES_LBA * SECTOR_SIZE)
+    current_lba = DATA_LBA
+    for path, contents in data:
+        sector_count = max(1, math.ceil(len(contents) / SECTOR_SIZE))
+        write_inode(image, path, contents, current_lba, sector_count)
+        current_lba += sector_count
+    image.write(bytes((MAX_INODES - len(data)) * INODE_SIZE))
+
+    current_lba = DATA_LBA
+    for _, contents in data:
+        image.seek(current_lba * SECTOR_SIZE)
+        image.write(contents)
+        padding = (-len(contents)) % SECTOR_SIZE
+        image.write(bytes(padding))
+        current_lba += max(1, math.ceil(len(contents) / SECTOR_SIZE))
 
 print("SFS injection complete: files.bin, mines.bin, calc.bin, and hexview.bin written successfully.")
 PY

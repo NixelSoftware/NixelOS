@@ -4,13 +4,6 @@ if (-not (Test-Path $hddPath)) { $hddPath = "hdd.img" }
 $fs = [System.IO.File]::Open($hddPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
 $w  = New-Object System.IO.BinaryWriter($fs)
 
-$fs.Seek(200 * 512, [System.IO.SeekOrigin]::Begin)
-$w.Write([uint32]0x53465332)
-$w.Write([uint32]4096)
-$w.Write([uint32]128)
-$w.Write([uint32]4000)
-$w.Write((New-Object byte[](512 - 16)))
-
 $bitmap = New-Object byte[](512)
 
 $files = @(
@@ -19,6 +12,18 @@ $files = @(
     @{ Name = "hexview.bin"; Data = [System.IO.File]::ReadAllBytes('hexview.bin') },
     @{ Name = "mines.bin";   Data = [System.IO.File]::ReadAllBytes('mines.bin') }
 )
+
+$usedSectors = 0
+foreach ($f in $files) {
+    $usedSectors += [math]::Max(1, [math]::Ceiling($f.Data.Length / 512))
+}
+
+$fs.Seek(200 * 512, [System.IO.SeekOrigin]::Begin)
+$w.Write([uint32]0x53465332)
+$w.Write([uint32]4096)
+$w.Write([uint32]128)
+$w.Write([uint32](4096 - $usedSectors))
+$w.Write((New-Object byte[](512 - 16)))
 
 $currentLba = 218
 
@@ -42,7 +47,6 @@ foreach ($f in $files) {
     $w.Write([uint32]$sectors)
 
     $w.Write((New-Object byte[](16)))
-    $w.Write((New-Object byte[](6)))
 
     $startBit = $currentLba - 218
     for ($b = 0; $b -lt $sectors; $b++) {
