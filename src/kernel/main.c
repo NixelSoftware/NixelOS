@@ -20,12 +20,10 @@
 #include "dialog.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
+#include "../apps/terminal/terminal.h"
 
 #define TASKBAR_Y       568
 #define TASKBAR_HEIGHT  32
-
-#define TERM_MAX_LINES 16
-#define TERM_MAX_COLS  44
 
 #define MOUSE_CURSOR_W 12
 #define MOUSE_CURSOR_H 19
@@ -33,6 +31,10 @@
 #define NUM_WINDOWS 6
 
 static void term_print(const char* text);
+static void shell_execute_command(const char* cmd, shell_output_fn output,
+                                  shell_clear_fn clear);
+static const char* api_command_args(void);
+static uint32_t api_get_ticks(void);
 static int str_prefix(const char* str, const char* prefix);
 static void update_cursor_fast(int32_t new_x, int32_t new_y);
 static void cursor_save(int32_t x, int32_t y);
@@ -51,11 +53,6 @@ static uint8_t prev_left_click = 0;
 static uint8_t start_menu_open = 0;
 static uint8_t needs_redraw = 1;
 
-static Window terminal_window;
-static char term_lines[TERM_MAX_LINES][TERM_MAX_COLS + 1];
-static int term_cursor_col = 0;
-static int term_cursor_row = 0;
-
 static Window* windows[NUM_WINDOWS] = {0};
 
 static volatile uint8_t ping_reply_received;
@@ -63,6 +60,9 @@ static volatile uint32_t ping_reply_time;
 static uint32_t ping_target_ip;
 static uint32_t ping_start_time;
 static uint16_t ping_sequence;
+static shell_output_fn shell_output;
+static shell_clear_fn shell_clear;
+static char shell_command_args[FS_MAX_FILENAME];
 
 static void print_u32(uint32_t value) {
     char digits[11];
@@ -542,49 +542,29 @@ static os_api_t kernel_api = {
     .unregister_window  = api_unregister_window,
     .show_info_dialog = show_info_dialog,
     .fs_delete = fs_delete_file,
+    .shell_execute     = shell_execute_command,
+    .command_args      = api_command_args,
+    .net_poll          = net_poll,
+    .get_ticks         = api_get_ticks,
+    .icmp_request_echo = icmp_request_echo,
+    .icmp_set_echo_reply_handler = icmp_set_echo_reply_handler,
+    .net_is_ready      = net_is_ready,
+    .net_get_diagnostics = net_get_diagnostics,
     .floppy_init  = floppy_init,
     .floppy_read  = floppy_read_sectors,
     .floppy_write = floppy_write_sectors
 };
 
-static void term_scroll(void) {
-    for (int r = 0; r < TERM_MAX_LINES - 1; r++) {
-        for (int col = 0; col <= TERM_MAX_COLS; col++) {
-            term_lines[r][col] = term_lines[r + 1][col];
-        }
-    }
-    for (int col = 0; col <= TERM_MAX_COLS; col++) {
-        term_lines[TERM_MAX_LINES - 1][col] = 0;
-    }
+static void term_print(const char* text) {
+    if (shell_output) shell_output(text);
 }
 
-static void term_print(const char* text) {
-    while (*text) {
-        if (*text == '\n') {
-            if (term_cursor_row < TERM_MAX_LINES - 1) {
-                term_cursor_row++;
-            } else {
-                term_scroll();
-            }
-            term_cursor_col = 0;
-            term_lines[term_cursor_row][0] = '\0';
-        } else {
-            if (term_cursor_col < TERM_MAX_COLS) {
-                term_lines[term_cursor_row][term_cursor_col++] = *text;
-                term_lines[term_cursor_row][term_cursor_col] = '\0';
-            } else {
-                if (term_cursor_row < TERM_MAX_LINES - 1) {
-                    term_cursor_row++;
-                } else {
-                    term_scroll();
-                }
-                term_cursor_col = 0;
-                term_lines[term_cursor_row][term_cursor_col++] = *text;
-                term_lines[term_cursor_row][term_cursor_col] = '\0';
-            }
-        }
-        text++;
-    }
+static const char* api_command_args(void) {
+    return shell_command_args;
+}
+
+static uint32_t api_get_ticks(void) {
+    return frame_timer;
 }
 
 static int str_prefix(const char* str, const char* prefix) {
@@ -598,9 +578,15 @@ static int str_prefix(const char* str, const char* prefix) {
 
 typedef int (*app_entry_fn)(os_api_t* api);
 
-static void terminal_execute_command(const char* cmd) {
+static void shell_execute_command(const char* cmd, shell_output_fn output,
+                                  shell_clear_fn clear) {
+    shell_output = output;
+    shell_clear = clear;
+
     if (cmd[0] == '>' && cmd[1] == ' ') cmd += 2;
     while (*cmd == ' ') cmd++;
+
+    shell_command_args[0] = '\0';
 
     if (*cmd == '\0') return;
 
@@ -617,13 +603,7 @@ static void terminal_execute_command(const char* cmd) {
         term_print(" clear           Clear screen\n");
     }
     else if (str_prefix(cmd, "clear")) {
-        for (int r = 0; r < TERM_MAX_LINES; r++) {
-            for (int c = 0; c <= TERM_MAX_COLS; c++) {
-                term_lines[r][c] = 0;
-            }
-        }
-        term_cursor_row = 0;
-        term_cursor_col = 0;
+        if (shell_clear) shell_clear();
     }
     else if (str_prefix(cmd, "rm ")) {
         const char* fname = cmd + 3;
@@ -683,16 +663,8 @@ static void terminal_execute_command(const char* cmd) {
             }
         }
     }
-    else if (str_prefix(cmd, "ping ")) {
-        const char* target = cmd + 5;
-        while (*target == ' ') target++;
-        terminal_ping(target);
-    }
     else if (str_prefix(cmd, "ifconfig")) {
         terminal_ifconfig();
-    }
-    else if (str_prefix(cmd, "netdiag")) {
-        terminal_netdiag();
     }
     else if (str_prefix(cmd, "echo ")) {
         const char* p = cmd + 5;
@@ -752,110 +724,36 @@ static void terminal_execute_command(const char* cmd) {
             bytes = fs_read_file(prog_name, app_target_mem, 16384);
         }
 
-        if (bytes > 0) {
-            term_print("Running ");
-            term_print(prog_name);
-            term_print("...\n");
+        if (bytes > (int)sizeof(app_header_t)) {
+            app_header_t* header = (app_header_t*)app_target_mem;
+            if (header->magic != APP_HEADER_MAGIC ||
+                (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE)) {
+                term_print("Invalid executable format.\n");
+                return;
+            }
 
-            // Direct call to app entry point linked at 0x00200000
-            app_entry_fn entry = (app_entry_fn)0x00200000;
+            int arg_index = 0;
+            while (cmd[arg_index] && cmd[arg_index] != ' ') arg_index++;
+            while (cmd[arg_index] == ' ') arg_index++;
+            int arg_out = 0;
+            while (cmd[arg_index] && arg_out < FS_MAX_FILENAME - 1) {
+                shell_command_args[arg_out++] = cmd[arg_index++];
+            }
+            shell_command_args[arg_out] = '\0';
+
+            app_entry_fn entry = (app_entry_fn)(app_target_mem + sizeof(app_header_t));
+            shell_output_fn app_output = shell_output;
+            if (header->type == APP_TYPE_GUI) {
+                shell_output = 0;
+            }
             entry(&kernel_api);
+            shell_output = app_output;
 
             needs_redraw = 1;
         } else {
             term_print("Unknown cmd. Type 'help'\n");
         }
     }
-}
-
-void terminal_draw(Window* win) {
-    int32_t term_box_x = win->x + 6;
-    int32_t term_box_y = win->y + 20;
-    int32_t term_box_w = win->w - 12;
-    int32_t term_box_h = win->h - 26;
-
-    fill_rect(term_box_x, term_box_y, term_box_w, term_box_h, COLOR_BLACK);
-
-    fill_rect(term_box_x - 1, term_box_y - 1, term_box_w + 2, 1, COLOR_DARK_GRAY);
-    fill_rect(term_box_x - 1, term_box_y - 1, 1, term_box_h + 2, COLOR_DARK_GRAY);
-    fill_rect(term_box_x - 1, term_box_y + term_box_h, term_box_w + 2, 1, COLOR_WHITE);
-    fill_rect(term_box_x + term_box_w, term_box_y - 1, 1, term_box_h + 2, COLOR_WHITE);
-
-    for (int r = 0; r < TERM_MAX_LINES; r++) {
-        if (term_lines[r][0] != 0) {
-            draw_string(term_box_x + 6, term_box_y + 6 + (r * 12), term_lines[r], COLOR_WHITE);
-        }
-    }
-
-    if (win->focused && (frame_timer & 0x10)) {
-        int caret_x = term_box_x + 6 + (term_cursor_col * 8);
-        int caret_y = term_box_y + 6 + (term_cursor_row * 12);
-        draw_char(caret_x, caret_y, '_', COLOR_WHITE, 1, 0);
-    }
-}
-
-void terminal_handle_key(Window* win, char c) {
-    (void)win;
-    if (c == '\b') {
-        if (term_cursor_col > 2) {
-            term_cursor_col--;
-            term_lines[term_cursor_row][term_cursor_col] = 0;
-        }
-    } else if (c == '\n') {
-        char current_line[TERM_MAX_COLS + 1];
-        for (int i = 0; i <= TERM_MAX_COLS; i++) {
-            current_line[i] = term_lines[term_cursor_row][i];
-        }
-
-        if (term_cursor_row < TERM_MAX_LINES - 1) {
-            term_cursor_row++;
-        } else {
-            term_scroll();
-        }
-        term_cursor_col = 0;
-        term_lines[term_cursor_row][0] = '\0';
-
-        terminal_execute_command(current_line);
-
-        if (term_cursor_col > 0) {
-            if (term_cursor_row < TERM_MAX_LINES - 1) {
-                term_cursor_row++;
-            } else {
-                term_scroll();
-            }
-        }
-        term_lines[term_cursor_row][0] = '>';
-        term_lines[term_cursor_row][1] = ' ';
-        term_lines[term_cursor_row][2] = '\0';
-        term_cursor_col = 2;
-    } else if (c >= ' ') {
-        if (term_cursor_col < TERM_MAX_COLS) {
-            term_lines[term_cursor_row][term_cursor_col++] = c;
-            term_lines[term_cursor_row][term_cursor_col] = '\0';
-        }
-    }
-}
-
-void terminal_init(void) {
-    terminal_window.x = 100;
-    terminal_window.y = 50;
-    terminal_window.w = 380;
-    terminal_window.h = 240;
-    terminal_window.title = "Terminal";
-    terminal_window.visible = 1;
-    terminal_window.focused = 1;
-    terminal_window.draw_content = terminal_draw;
-    terminal_window.handle_key = terminal_handle_key;
-
-    for (int r = 0; r < TERM_MAX_LINES; r++) {
-        for (int c = 0; c <= TERM_MAX_COLS; c++) {
-            term_lines[r][c] = 0;
-        }
-    }
-    term_lines[0][0] = '>';
-    term_lines[0][1] = ' ';
-    term_cursor_row = 0;
-    term_cursor_col = 2;
 }
 
 void draw_taskbar(void) {
@@ -1070,7 +968,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     tasking_init();
 
     debug_print("[INIT] Windows+Apps init...\n");
-    terminal_init();
+    terminal_init(&kernel_api);
     notepad_init();
     viewer_init();
     dialog_init(&kernel_api);

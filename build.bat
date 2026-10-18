@@ -33,11 +33,14 @@ for %%S in (
     src\kernel\dialog.c
     src\apps\notepad\notepad.c
     src\apps\viewer\viewer.c
+    src\apps\terminal\terminal.c
+    src\apps\ping\main.c
+    src\apps\netdiag\main.c
 ) do (
     call :run %CC% -c %%S -o %%~dpnS.o
 )
 
-for %%A in (files mines calc hexview floppy_debug) do (
+for %%A in (files mines calc hexview floppy_debug ping netdiag) do (
     if not exist src\apps\%%A mkdir src\apps\%%A
     call :run nasm -f elf32 src\apps\%%A\entry.asm -o src\apps\%%A\entry.o
     call :run %CC% -c src\apps\%%A\main.c -o src\apps\%%A\main.o
@@ -55,6 +58,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o ^
     src\kernel\desktop.o src\kernel\dialog.o ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
+    src\apps\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
@@ -73,8 +77,8 @@ call :run python inject_sfs.py ..\hdd.img
 copy /y ..\hdd.img os.img >nul
 
 del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o
-del /q src\apps\notepad\*.o src\apps\viewer\*.o src\kernel\kernel.bin
-del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin
+del /q src\apps\notepad\*.o src\apps\viewer\*.o src\apps\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
+del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin
 
 qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
     -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 ^

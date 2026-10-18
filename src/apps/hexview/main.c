@@ -193,5 +193,6 @@ int main_app(os_api_t* api) {
     hex_window.handle_mouse = hex_handle_mouse;
 
     os->register_window(&hex_window);
+    os->show_info_dialog("Hex Viewer", "Hex Viewer is running.");
     return 0;
 }

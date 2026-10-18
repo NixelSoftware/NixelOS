@@ -15,7 +15,10 @@ INODE_SIZE = 64
 MAGIC = 0x53465332
 
 image_path = Path(sys.argv[1])
-files = [Path(name) for name in ("calc.bin", "files.bin", "hexview.bin", "mines.bin", "floppy_debug.bin")]
+files = [Path(name) for name in (
+    "calc.bin", "files.bin", "hexview.bin", "mines.bin", "floppy_debug.bin",
+    "ping.bin", "netdiag.bin"
+)]
 
 def write_inode(stream, path, data, start_lba, sector_count):
     encoded_name = path.name.encode("ascii")
@@ -71,4 +74,4 @@ with image_path.open("r+b") as image:
         image.write(bytes(padding))
         current_lba += max(1, math.ceil(len(contents) / SECTOR_SIZE))
 
-print("SFS injection complete: files.bin, mines.bin, calc.bin, hexview.bin, and floppy_debug.bin written successfully.")
+print("SFS injection complete: application binaries written successfully.")

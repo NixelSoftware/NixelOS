@@ -3,6 +3,9 @@
 global _start
 extern main_app
 
+dd 0x31505041
+db 1, 0, 0, 0
+
 _start:
     mov eax, [esp + 4]
     push eax

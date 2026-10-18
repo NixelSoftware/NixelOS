@@ -220,5 +220,6 @@ int main_app(os_api_t* api) {
     calc_window.handle_mouse = calc_handle_mouse;
 
     os->register_window(&calc_window);
+    os->show_info_dialog("Calculator", "Calculator is running.");
     return 0;
 }

@@ -120,6 +120,7 @@ int main_app(os_api_t* api) {
 
     
     os->register_window(&files_window);
+    os->show_info_dialog("File Explorer", "File Explorer is running.");
 
     return 0;
 }

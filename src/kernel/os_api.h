@@ -4,6 +4,23 @@
 #include "types.h"
 #include "fs.h"
 #include "window.h"
+#include "drivers/net.h"
+#include "net/icmp.h"
+
+typedef enum {
+    APP_TYPE_GUI = 1,
+    APP_TYPE_CONSOLE = 2
+} app_type_t;
+
+typedef struct {
+    uint32_t magic;
+    uint8_t type;
+    uint8_t reserved[3];
+} app_header_t;
+
+#define APP_HEADER_MAGIC 0x31505041
+typedef void (*shell_output_fn)(const char* text);
+typedef void (*shell_clear_fn)(void);
 
 typedef struct {
     // screen draw functions
@@ -19,6 +36,17 @@ typedef struct {
     int (*fs_delete)(const char* filename);
     // some terminal shit
     void (*term_print)(const char* text);
+    void (*shell_execute)(const char* command, shell_output_fn output,
+                          shell_clear_fn clear);
+    const char* (*command_args)(void);
+    void (*net_poll)(void);
+    uint32_t (*get_ticks)(void);
+    uint8_t (*icmp_request_echo)(uint32_t destination_ip, uint16_t identifier,
+                                 uint16_t sequence, const uint8_t* payload,
+                                 uint16_t length);
+    void (*icmp_set_echo_reply_handler)(icmp_echo_reply_handler_t handler);
+    uint8_t (*net_is_ready)(void);
+    void (*net_get_diagnostics)(net_diagnostics_t* diagnostics);
     // window manager functions
     int  (*register_window)(Window* win);
     void (*unregister_window)(Window* win);
