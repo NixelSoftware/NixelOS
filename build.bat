@@ -67,7 +67,8 @@ powershell -NoProfile -Command "$p='src\kernel\kernel.bin';$b=[IO.File]::ReadAll
 ::copy /b src\boot.bin+src\boot_stage2.bin+src\kernel\kernel.bin ..\hdd.img >nul
 copy /b "src\boot.bin" + "src\boot_stage2.bin" + "src\kernel\kernel.bin" "..\hdd.img" 1>nul
 powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','ReadWrite');$f.SetLength(33554432);$f.Close()"
-call :run powershell -NoProfile -ExecutionPolicy Bypass -File inject_sfs.ps1
+::call :run powershell -NoProfile -ExecutionPolicy Bypass -File inject_sfs.ps1
+call :run python inject_sfs.py
 copy /y ..\hdd.img os.img >nul
 
 del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o
