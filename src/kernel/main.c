@@ -5,6 +5,7 @@
 #include "window.h"
 #include "desktop.h"
 #include "drivers/display.h"
+#include "drivers/serial.h"
 #include "idt.h"
 #include "fs.h" 
 #include "os_api.h"
@@ -1009,9 +1010,23 @@ void init_mouse(void) {
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     __asm__ volatile ("cli");
     
+    serial_init();
+    debug_print("\n=== SYSTEM BOOTING ===\n");
+    debug_print("[VBE] LFB Address: "); debug_hex(lfb_address); debug_print("\n");
+    debug_print("[VBE] BPP: ");         debug_hex(bpp);         debug_print("\n");
+    debug_print("[VBE] Pitch: ");       debug_hex(pitch);       debug_print("\n");
+
+    debug_print("[INIT] Display init...\n");
+
     display_init(lfb_address, bpp, pitch);
+    debug_print("[INIT] IDT init...\n");
+
     idt_init();
+    debug_print("[INIT] PIT init...\n");
+
     pit_init(100);
+
+    debug_print("[INIT] Net init...\n");
     net_init(0);
     {
         uint64_t mac_value = net_get_mac_address();
@@ -1032,9 +1047,14 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
             ipv4_set_configuration(0x0A0000E3, 0x0a000002, 0xFFFFFF00);
         }
     }
+
+    debug_print("[INIT] FS init...\n");
     fs_init();
+
+    debug_print("[INIT] Tasking init...\n");
     tasking_init();
 
+    debug_print("[INIT] Windows+Apps init...\n");
     terminal_init();
     notepad_init();
     viewer_init();
@@ -1048,13 +1068,18 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     windows[2] = &terminal_window;
 
     desktop_init(&terminal_window, &notepad_window);
+
+    debug_print("[INIT] PS/2 Mouse init...\n");
     init_mouse();
 
+    debug_print("[INIT] Drawing to display...\n");
     render_screen();
     needs_redraw = 0;
 
+    debug_print("[INIT] Enable interrupt...\n");
     __asm__ volatile ("sti");
 
+    debug_print("[INIT] Exec Main Loop.\n");
     while (1) {
         frame_timer++;
         net_poll();
