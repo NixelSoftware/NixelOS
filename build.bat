@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 
-set "CC=gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie"
+set "CC=gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe"
 
 call :run nasm -f bin src\boot.asm -o src\boot.bin
 call :run nasm -f bin src\boot_stage2.asm -o src\boot_stage2.bin
@@ -59,8 +59,13 @@ call :run ld -mi386pe -Ttext 0x10000 ^
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
 
+if not exist "src\boot.bin" ( echo [ERROR] Missing src\boot.bin & exit /b 1 )
+if not exist "src\boot_stage2.bin" ( echo [ERROR] Missing src\boot_stage2.bin & exit /b 1 )
+if not exist "src\kernel\kernel.bin" ( echo [ERROR] Missing src\kernel\kernel.bin & exit /b 1 )
+
 powershell -NoProfile -Command "$p='src\kernel\kernel.bin';$b=[IO.File]::ReadAllBytes($p);if($b.Length -lt 65536){[IO.File]::WriteAllBytes($p,$b+(New-Object byte[](65536-$b.Length)))}"
-copy /b src\boot.bin+src\boot_stage2.bin+src\kernel\kernel.bin ..\hdd.img >nul
+::copy /b src\boot.bin+src\boot_stage2.bin+src\kernel\kernel.bin ..\hdd.img >nul
+copy /b "src\boot.bin" + "src\boot_stage2.bin" + "src\kernel\kernel.bin" "..\hdd.img" 1>nul
 powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','ReadWrite');$f.SetLength(33554432);$f.Close()"
 call :run powershell -NoProfile -ExecutionPolicy Bypass -File inject_sfs.ps1
 copy /y ..\hdd.img os.img >nul

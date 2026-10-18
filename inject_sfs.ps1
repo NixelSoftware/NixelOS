@@ -4,54 +4,71 @@ if (-not (Test-Path $hddPath)) { $hddPath = "hdd.img" }
 $fs = [System.IO.File]::Open($hddPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
 $w  = New-Object System.IO.BinaryWriter($fs)
 
-# Seek to LBA 200 (Superblock)
 $fs.Seek(200 * 512, [System.IO.SeekOrigin]::Begin)
+$w.Write([uint32]0x53465332)
+$w.Write([uint32]4096)
+$w.Write([uint32]128)
+$w.Write([uint32]4000)
+$w.Write((New-Object byte[](512 - 16)))
 
-# Superblock: Magic ('SFS1') + File Count (4)
-$w.Write([uint32]0x53465331)
-$w.Write([uint32]4)
+$bitmap = New-Object byte[](512)
 
-function Write-FS-Entry($name, $size, $lba) {
-    $nameBytes = [System.Text.Encoding]::ASCII.GetBytes($name)
+$files = @(
+    @{ Name = "calc.bin";    Data = [System.IO.File]::ReadAllBytes('calc.bin') },
+    @{ Name = "files.bin";   Data = [System.IO.File]::ReadAllBytes('files.bin') },
+    @{ Name = "hexview.bin"; Data = [System.IO.File]::ReadAllBytes('hexview.bin') },
+    @{ Name = "mines.bin";   Data = [System.IO.File]::ReadAllBytes('mines.bin') }
+)
+
+$currentLba = 218
+
+$fs.Seek(202 * 512, [System.IO.SeekOrigin]::Begin)
+
+foreach ($f in $files) {
+    $sectors = [math]::Ceiling($f.Data.Length / 512)
+    if ($sectors -eq 0) { $sectors = 1 }
+
+    $nameBytes = [System.Text.Encoding]::ASCII.GetBytes($f.Name)
     $w.Write($nameBytes)
-    $pad = 16 - $nameBytes.Length
-    if ($pad -gt 0) {
-        $w.Write((New-Object byte[]($pad)))
-    }
-    $w.Write([uint32]$size)
-    $w.Write([uint32]$lba)
+    $pad = 32 - $nameBytes.Length
+    if ($pad -gt 0) { $w.Write((New-Object byte[]($pad))) }
+
+    $w.Write([uint32]$f.Data.Length)
     $w.Write([byte]1)
-    $w.Write((New-Object byte[](3)))
+    $w.Write([byte]4)
+    $w.Write([uint16]1)
+
+    $w.Write([uint32]$currentLba)
+    $w.Write([uint32]$sectors)
+
+    $w.Write((New-Object byte[](16)))
+    $w.Write((New-Object byte[](6)))
+
+    $startBit = $currentLba - 218
+    for ($b = 0; $b -lt $sectors; $b++) {
+        $bit = $startBit + $b
+        $byteIdx = [math]::Floor($bit / 8)
+        $bitmap[$byteIdx] = $bitmap[$byteIdx] -bor (1 -shl ($bit % 8))
+    }
+
+    $currentLba += $sectors
 }
 
-$filesData   = [System.IO.File]::ReadAllBytes('files.bin')
-$minesData   = [System.IO.File]::ReadAllBytes('mines.bin')
-$calcData    = [System.IO.File]::ReadAllBytes('calc.bin')
-$hexviewData = [System.IO.File]::ReadAllBytes('hexview.bin')
+$remainingInodes = 128 - $files.Count
+$w.Write((New-Object byte[]($remainingInodes * 64)))
 
-# Write Directory Entries (28 bytes each)
-Write-FS-Entry "files.bin"   $filesData.Length   208
-Write-FS-Entry "mines.bin"   $minesData.Length   240
-Write-FS-Entry "calc.bin"    $calcData.Length    272
-Write-FS-Entry "hexview.bin" $hexviewData.Length 304
+$fs.Seek(201 * 512, [System.IO.SeekOrigin]::Begin)
+$w.Write($bitmap)
 
-$remainingEntries = 32 - 4
-$w.Write((New-Object byte[]($remainingEntries * 28)))
+$fs.Seek(218 * 512, [System.IO.SeekOrigin]::Begin)
+foreach ($f in $files) {
+    $w.Write($f.Data)
+    $sectorPadding = (512 - ($f.Data.Length % 512)) % 512
+    if ($sectorPadding -gt 0) {
+        $w.Write((New-Object byte[]($sectorPadding)))
+    }
+}
 
-# Write binary payloads
-$fs.Seek(208 * 512, [System.IO.SeekOrigin]::Begin)
-$w.Write($filesData)
-
-$fs.Seek(240 * 512, [System.IO.SeekOrigin]::Begin)
-$w.Write($minesData)
-
-$fs.Seek(272 * 512, [System.IO.SeekOrigin]::Begin)
-$w.Write($calcData)
-
-$fs.Seek(304 * 512, [System.IO.SeekOrigin]::Begin)
-$w.Write($hexviewData)
-
+$w.Flush()
 $w.Close()
 $fs.Close()
-
-Write-Host "SFS injection complete: files.bin, mines.bin, calc.bin, hexview.bin written."

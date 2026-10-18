@@ -15,6 +15,7 @@ typedef struct {
     int  (*fs_list)(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]);
     int  (*fs_read)(const char* filename, uint8_t* dest, uint32_t max_bytes);
     int  (*fs_write)(const char* filename, const uint8_t* src, uint32_t size_bytes);
+    int (*fs_delete)(const char* filename);
     void (*term_print)(const char* text);
     int  (*register_window)(Window* win);
     void (*unregister_window)(Window* win);

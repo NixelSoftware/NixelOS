@@ -539,7 +539,8 @@ static os_api_t kernel_api = {
     .term_print         = term_print,
     .register_window    = api_register_window,
     .unregister_window  = api_unregister_window,
-    .show_info_dialog = show_info_dialog
+    .show_info_dialog = show_info_dialog,
+    .fs_delete = fs_delete_file,
 };
 
 static void term_scroll(void) {
@@ -602,6 +603,7 @@ static void terminal_execute_command(const char* cmd) {
     if (str_prefix(cmd, "help")) {
         term_print("Commands:\n");
         term_print(" ls              List files\n");
+        term_print(" rm              Remove files\n");
         term_print(" cat <file>      Read file\n");
         term_print(" echo <t>><file> Write file\n");
         term_print(" view <file>     Open in Viewer\n");
@@ -618,6 +620,15 @@ static void terminal_execute_command(const char* cmd) {
         }
         term_cursor_row = 0;
         term_cursor_col = 0;
+    }
+    else if (str_prefix(cmd, "rm ")) {
+        const char* fname = cmd + 3;
+        while (*fname == ' ') fname++;
+        if (fs_delete_file(fname)) {
+            term_print("File deleted.\n");
+        } else {
+            term_print("Failed to delete file.\n");
+        }
     }
     else if (str_prefix(cmd, "ls") || str_prefix(cmd, "dir")) {
         char file_list[FS_MAX_FILES][FS_MAX_FILENAME];
