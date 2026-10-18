@@ -1,6 +1,7 @@
 #include "ipv4.h"
 #include "etherframe.h"
 #include "arp.h"
+#include "../kernel_net.h"
 
 #define IPV4_ETHERNET_HEADER_SIZE 14
 #define IPV4_MAX_FRAME_SIZE (IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + IPV4_MAX_PAYLOAD)

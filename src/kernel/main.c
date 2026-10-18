@@ -11,6 +11,7 @@
 #include "fs.h" 
 #include "os_api.h"
 #include "task.h"
+#include "kernel_net.h"
 #include "drivers/net.h"
 #include "net/arp.h"
 #include "net/icmp.h"
@@ -136,7 +137,8 @@ static void terminal_ifconfig(void) {
 
 static void terminal_netdiag(void) {
     net_diagnostics_t diagnostics;
-    net_poll();
+    //net_poll();
+    sys_net_poll();
     net_get_diagnostics(&diagnostics);
 
     term_print("Network driver diagnostics\n");
@@ -293,7 +295,8 @@ static void terminal_ping(const char* argument) {
         ping_start_time = start;
 
         while (!sent && tick_before(frame_timer, deadline)) {
-            net_poll();
+            //net_poll();
+            sys_net_poll();
             if (!tick_before(frame_timer, next_attempt)) {
                 sent = icmp_request_echo(address, 0x4F53, ping_sequence,
                                          payload, sizeof(payload) - 1);
@@ -307,7 +310,8 @@ static void terminal_ping(const char* argument) {
 
         while (sent && !ping_reply_received
                && tick_before(frame_timer, deadline)) {
-            net_poll();
+            //net_poll();
+            sys_net_poll();
             for (volatile uint32_t delay = 0; delay < 2000; delay++)
                 __asm__ volatile ("pause");
         }
@@ -567,12 +571,12 @@ static os_api_t kernel_api = {
     .fs_delete = fs_delete_file,
     .shell_execute     = shell_execute_command,
     .command_args      = api_command_args,
-    .net_poll          = net_poll,
+    .net_poll          = sys_net_poll,
     .get_ticks         = api_get_ticks,
     .icmp_request_echo = icmp_request_echo,
     .icmp_set_echo_reply_handler = icmp_set_echo_reply_handler,
-    .net_is_ready      = net_is_ready,
-    .net_get_diagnostics = net_get_diagnostics,
+    .net_is_ready      = sys_net_is_ready,
+    .net_get_diagnostics = sys_net_get_diagnostics,
     .floppy_init  = floppy_init,
     .floppy_read  = floppy_read_sectors,
     .floppy_write = floppy_write_sectors,
@@ -961,7 +965,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     pit_init(100);
 
     debug_print("[INIT] Net init...\n");
-    net_init(0);
+    sys_net_init(0);
     {
         uint64_t mac_value = net_get_mac_address();
         uint8_t mac[6];
@@ -1016,7 +1020,8 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     debug_print("[INIT] Exec Main Loop.\n");
     while (1) {
         //draw_heartbeat_indicator();
-        net_poll();
+        //net_poll();
+        sys_net_poll();
 
         if ((frame_timer & 0x3F) == 0 && terminal_window.visible && terminal_window.focused) {
             //needs_redraw = 1;

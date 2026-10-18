@@ -15,8 +15,10 @@ for %%S in (
     src\kernel\drivers\display.c
     src\kernel\drivers\ata.c
     src\kernel\drivers\net.c
+    src\kernel\drivers\net_e1000.c
     src\kernel\drivers\serial.c
     src\kernel\drivers\floppy.c
+    src\kernel\kernel_net.c
     src\kernel\net\ipv4.c
     src\kernel\net\etherframe.c
     src\kernel\net\arp.c
@@ -59,7 +61,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\desktop.o src\kernel\dialog.o ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
     src\apps\terminal\terminal.o ^
-    src\kernel\drivers\serial.o src\kernel\drivers\floppy.o ^
+    src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
@@ -80,9 +82,9 @@ del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o sr
 del /q src\apps\notepad\*.o src\apps\viewer\*.o src\apps\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin
 
-qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
+start qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
     -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 ^
-    -device pcnet,netdev=net0 -serial stdio
+    -device e1000,netdev=net0 -serial stdio
 exit /b 0
 
 :run

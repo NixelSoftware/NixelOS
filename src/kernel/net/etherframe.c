@@ -1,5 +1,6 @@
 #include "etherframe.h"
 #include "../drivers/net.h"
+#include "../kernel_net.h"
 
 static uint8_t local_mac[6];
 static etherframe_handler_t handlers[65536];
@@ -30,7 +31,7 @@ void etherframe_mac_to_bytes(uint64_t mac, uint8_t output[6]) {
 void etherframe_init(const uint8_t address[6]) {
     for (uint32_t i = 0; i < 65536; i++) handlers[i] = 0;
     for (uint8_t i = 0; i < 6; i++) local_mac[i] = address[i];
-    net_set_receive_handler(etherframe_receive);
+    sys_net_set_receive_handler(etherframe_receive);
 }
 
 void etherframe_set_handler(uint16_t ether_type,
@@ -70,7 +71,7 @@ uint8_t etherframe_send(uint64_t destination_mac, uint16_t ether_type,
         transmit_frame[ETHERFRAME_HEADER_SIZE + i] = payload[i];
     }
 
-    return net_send(transmit_frame, ETHERFRAME_HEADER_SIZE + length);
+    return sys_net_send(transmit_frame, ETHERFRAME_HEADER_SIZE + length);
 }
 
 uint64_t etherframe_get_mac_address(void) {
