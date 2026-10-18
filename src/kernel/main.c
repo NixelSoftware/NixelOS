@@ -6,6 +6,7 @@
 #include "desktop.h"
 #include "drivers/display.h"
 #include "drivers/serial.h"
+#include "drivers/floppy.h"
 #include "idt.h"
 #include "fs.h" 
 #include "os_api.h"
@@ -541,6 +542,9 @@ static os_api_t kernel_api = {
     .unregister_window  = api_unregister_window,
     .show_info_dialog = show_info_dialog,
     .fs_delete = fs_delete_file,
+    .floppy_init  = floppy_init,
+    .floppy_read  = floppy_read_sectors,
+    .floppy_write = floppy_write_sectors
 };
 
 static void term_scroll(void) {

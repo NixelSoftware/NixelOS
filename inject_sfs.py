@@ -1,60 +1,75 @@
+from pathlib import Path
 import math
-import os
 import struct
+import sys
+import os
 
-hdd_path = os.path.join("..", "hdd.img")
-if not os.path.exists(hdd_path):
-    hdd_path = "hdd.img"
+SECTOR_SIZE = 512
+SUPER_LBA = 200
+BITMAP_LBA = 201
+INODES_LBA = 202
+INODE_SECTORS = 16
+DATA_LBA = INODES_LBA + INODE_SECTORS
+TOTAL_SECTORS = 4096
+MAX_INODES = 128
+INODE_SIZE = 64
+MAGIC = 0x53465332
 
-filenames = ["calc.bin", "files.bin", "hexview.bin", "mines.bin"]
-files = []
-for name in filenames:
-    with open(name, "rb") as f:
-        files.append({"Name": name, "Data": f.read()})
+image_path = Path(sys.argv[1])
+files = [Path(name) for name in ("calc.bin", "files.bin", "hexview.bin", "mines.bin", "floppy_debug.bin")]
 
-with open(hdd_path, "r+b") as fs:
-    fs.seek(200 * 512)
-    fs.write(struct.pack("<4I", 0x53465332, 4096, 128, 4000))
-    fs.write(b"\x00" * (512 - 16))
+def write_inode(stream, path, data, start_lba, sector_count):
+    encoded_name = path.name.encode("ascii")
+    if len(encoded_name) >= 32:
+        raise ValueError(f"filesystem name is too long: {path.name}")
+    inode = bytearray(INODE_SIZE)
+    inode[:len(encoded_name)] = encoded_name
+    struct.pack_into("<I", inode, 32, len(data))
+    inode[36] = 1
+    inode[37] = 4
+    struct.pack_into("<H", inode, 38, 1)
+    struct.pack_into("<II", inode, 40, start_lba, sector_count)
+    stream.write(inode)
 
-    bitmap = bytearray(512)
-    current_lba = 218
+with image_path.open("r+b") as image:
+    data = [(path, path.read_bytes()) for path in files]
+    current_lba = DATA_LBA
+    bitmap = bytearray(SECTOR_SIZE)
 
-    fs.seek(202 * 512)
+    for path, contents in data:
+        sector_count = max(1, math.ceil(len(contents) / SECTOR_SIZE))
+        start_bit = current_lba - DATA_LBA
+        for bit in range(start_bit, start_bit + sector_count):
+            bitmap[bit // 8] |= 1 << (bit % 8)
+        current_lba += sector_count
 
-    for f in files:
-        data_len = len(f["Data"])
-        sectors = math.ceil(data_len / 512) if data_len > 0 else 1
+    image.seek(SUPER_LBA * SECTOR_SIZE)
+    image.write(struct.pack(
+        "<IIII",
+        MAGIC,
+        TOTAL_SECTORS,
+        MAX_INODES,
+        TOTAL_SECTORS - (current_lba - DATA_LBA),
+    ))
+    image.write(bytes(SECTOR_SIZE - 16))
 
-        name_bytes = f["Name"].encode("ascii")
-        fs.write(name_bytes)
-        fs.write(b"\x00" * (32 - len(name_bytes)))
+    image.seek(BITMAP_LBA * SECTOR_SIZE)
+    image.write(bitmap)
 
-        fs.write(struct.pack("<IBBH", data_len, 1, 4, 1))
-        fs.write(struct.pack("<II", current_lba, sectors))
+    image.seek(INODES_LBA * SECTOR_SIZE)
+    current_lba = DATA_LBA
+    for path, contents in data:
+        sector_count = max(1, math.ceil(len(contents) / SECTOR_SIZE))
+        write_inode(image, path, contents, current_lba, sector_count)
+        current_lba += sector_count
+    image.write(bytes((MAX_INODES - len(data)) * INODE_SIZE))
 
-        fs.write(b"\x00" * 16)
-        fs.write(b"\x00" * 6)
+    current_lba = DATA_LBA
+    for _, contents in data:
+        image.seek(current_lba * SECTOR_SIZE)
+        image.write(contents)
+        padding = (-len(contents)) % SECTOR_SIZE
+        image.write(bytes(padding))
+        current_lba += max(1, math.ceil(len(contents) / SECTOR_SIZE))
 
-        start_bit = current_lba - 218
-        for b in range(sectors):
-            bit = start_bit + b
-            byte_idx = bit // 8
-            bitmap[byte_idx] |= 1 << (bit % 8)
-
-        current_lba += sectors
-
-    remaining_inodes = 128 - len(files)
-    fs.write(b"\x00" * (remaining_inodes * 64))
-
-    fs.seek(201 * 512)
-    fs.write(bitmap)
-
-    fs.seek(218 * 512)
-    for f in files:
-        fs.write(f["Data"])
-        sector_padding = (512 - (len(f["Data"]) % 512)) % 512
-        if sector_padding > 0:
-            fs.write(b"\x00" * sector_padding)
-
-    fs.flush()
+print("SFS injection complete: files.bin, mines.bin, calc.bin, and hexview.bin written successfully.")
