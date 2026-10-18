@@ -272,6 +272,6 @@ int main_app(os_api_t* api) {
     mines_window.handle_mouse = mines_handle_mouse;
 
     os->register_window(&mines_window);
-    os->show_info_dialog("Minesweeper", "Minesweeper is running.");
+    os->term_print("Minesweeper is running.\n");
     return 0;
 }

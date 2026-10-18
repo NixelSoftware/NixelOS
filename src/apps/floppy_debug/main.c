@@ -225,5 +225,5 @@ void main_app(os_api_t* api) {
     }
 
     os->register_window(&win);
-    os->show_info_dialog("Floppy Diagnostic", "Floppy Diagnostic is running.");
+    os->term_print("Floppy Diagnostic is running.\n");
 }

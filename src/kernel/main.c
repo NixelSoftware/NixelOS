@@ -742,12 +742,7 @@ static void shell_execute_command(const char* cmd, shell_output_fn output,
             shell_command_args[arg_out] = '\0';
 
             app_entry_fn entry = (app_entry_fn)(app_target_mem + sizeof(app_header_t));
-            shell_output_fn app_output = shell_output;
-            if (header->type == APP_TYPE_GUI) {
-                shell_output = 0;
-            }
             entry(&kernel_api);
-            shell_output = app_output;
 
             needs_redraw = 1;
         } else {
