@@ -134,7 +134,7 @@ void arp_request(uint32_t ip_address) {
 }
 
 uint8_t arp_resolve(uint32_t ip_address, uint8_t mac[6]) {
-    if (ip_address == ETHERFRAME_BROADCAST_MAC) {
+    if (ip_address == 0xFFFFFFFFU) {
         for (uint8_t i = 0; i < 6; i++) mac[i] = 0xFF;
         return 1;
     }

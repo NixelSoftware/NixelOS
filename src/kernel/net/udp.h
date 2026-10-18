@@ -20,6 +20,7 @@ void udp_init(void);
 udp_socket_t* udp_connect(uint32_t remote_ip, uint16_t remote_port);
 udp_socket_t* udp_listen(uint16_t local_port);
 void udp_bind(udp_socket_t* socket, udp_data_handler_t handler);
+void udp_set_local_port(udp_socket_t* socket, uint16_t port);
 uint8_t udp_send(udp_socket_t* socket, const uint8_t* data, uint16_t length);
 void udp_disconnect(udp_socket_t* socket);
 

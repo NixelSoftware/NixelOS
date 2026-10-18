@@ -152,6 +152,10 @@ void udp_bind(udp_socket_t* socket, udp_data_handler_t handler) {
     if (socket && socket->in_use) socket->handler = handler;
 }
 
+void udp_set_local_port(udp_socket_t* socket, uint16_t port) {
+    if (socket && socket->in_use && port != 0) socket->local_port = port;
+}
+
 uint8_t udp_send(udp_socket_t* socket, const uint8_t* data, uint16_t length) {
     uint16_t packet_length;
     uint16_t checksum;
