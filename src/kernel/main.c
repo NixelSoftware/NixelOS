@@ -64,6 +64,22 @@ static shell_output_fn shell_output;
 static shell_clear_fn shell_clear;
 static char shell_command_args[FS_MAX_FILENAME];
 
+
+static void draw_heartbeat_indicator(void) {
+    static const uint32_t colors[4] = {
+        0x0000FF00,
+        0x00FF0000,
+        0x000000FF,
+        0x00FFFF00
+    };
+
+    uint32_t color = colors[(frame_timer >> 2) & 3];
+    display_fill_rect(0, 0, 16, 16, color);
+    display_blit_rect(0, 0, 16, 16);
+}
+
+
+
 static void print_u32(uint32_t value) {
     char digits[11];
     int count = 0;
@@ -999,10 +1015,11 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     debug_print("[INIT] Exec Main Loop.\n");
     while (1) {
+        draw_heartbeat_indicator();
         net_poll();
 
         if ((frame_timer & 0x3F) == 0 && terminal_window.visible && terminal_window.focused) {
-            needs_redraw = 1;
+            //needs_redraw = 1;
         }
 
         uint8_t status = inb(0x64);
