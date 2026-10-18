@@ -39,6 +39,7 @@ typedef struct {
     void (*shell_execute)(const char* command, shell_output_fn output,
                           shell_clear_fn clear);
     const char* (*command_args)(void);
+    // net shit
     void (*net_poll)(void);
     uint32_t (*get_ticks)(void);
     uint8_t (*icmp_request_echo)(uint32_t destination_ip, uint16_t identifier,
@@ -47,6 +48,9 @@ typedef struct {
     void (*icmp_set_echo_reply_handler)(icmp_echo_reply_handler_t handler);
     uint8_t (*net_is_ready)(void);
     void (*net_get_diagnostics)(net_diagnostics_t* diagnostics);
+    uint8_t (*ipv4_send)(uint32_t dest_ip, uint8_t protocol, const uint8_t* payload, uint32_t length);
+    void    (*ipv4_set_handler)(uint8_t protocol, ipv4_protocol_handler_t handler);
+    uint32_t (*ipv4_get_local_ip)(void);
     // window manager functions
     int  (*register_window)(Window* win);
     void (*unregister_window)(Window* win);

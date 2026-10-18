@@ -559,7 +559,10 @@ static os_api_t kernel_api = {
     .net_get_diagnostics = net_get_diagnostics,
     .floppy_init  = floppy_init,
     .floppy_read  = floppy_read_sectors,
-    .floppy_write = floppy_write_sectors
+    .floppy_write = floppy_write_sectors,
+    .ipv4_send = ipv4_send,
+    .ipv4_set_handler = ipv4_set_protocol_handler,
+    .ipv4_get_local_ip = ipv4_get_local_ip
 };
 
 static void term_print(const char* text) {
