@@ -114,19 +114,19 @@ static void print_hex_byte(uint8_t value) {
 }
 
 static void terminal_ifconfig(void) {
-    uint64_t mac = net_get_mac_address();
+    uint64_t mac = sys_net_get_mac_address();
     const dhcp_lease_t* lease = dhcp_get_lease();
     uint32_t mask = lease->leased ? lease->subnet_mask : 0xFFFFFF00;
     uint32_t gateway = lease->leased ? lease->gateway : 0x0a000002;
     term_print("eth0\n  Link: ");
-    term_print(net_is_ready() ? "up\n" : "down\n");
+    term_print(sys_net_is_ready() ? "up\n" : "down\n");
     term_print("  MAC: ");
     for (int i = 5; i >= 0; i--) {
         print_hex_byte((uint8_t)(mac >> (i * 8)));
         if (i != 0) term_print(":");
     }
     term_print("\n  IP: ");
-    print_ip(net_get_ip_address());
+    print_ip(sys_net_get_ip_address());
     term_print("\n  Netmask: ");
     print_ip(mask);
     term_print("\n  Gateway: ");

@@ -83,7 +83,7 @@ del /q src\apps\notepad\*.o src\apps\viewer\*.o src\apps\terminal\*.o src\apps\p
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin
 
 start qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
-    -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 ^
+    -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 ^
     -device e1000,netdev=net0 -serial stdio
 exit /b 0
 

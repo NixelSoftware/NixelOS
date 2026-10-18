@@ -1,6 +1,7 @@
 #include "dhcp.h"
 #include "udp.h"
 #include "ipv4.h"
+#include "../kernel_net.h"
 #include "../drivers/net.h"
 
 #define DHCP_CLIENT_PORT 68
@@ -94,7 +95,7 @@ static uint8_t send_message(uint8_t message_type, uint32_t requested_ip) {
     write_be32(request_packet + 4, transaction_id);
     request_packet[10] = 0x80;
     {
-        uint64_t mac = net_get_mac_address();
+        uint64_t mac = sys_net_get_mac_address();
         for (uint8_t i = 0; i < 6; i++)
             request_packet[28 + i] = (uint8_t)(mac >> ((5 - i) * 8));
     }
@@ -123,18 +124,25 @@ uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t wait_iterations) {
     response_type = 0;
     server_identifier = 0;
     transaction_id++;
+
     if (!send_message(DHCP_DISCOVER, 0)) return 0;
+
+    // delay loop
     for (uint32_t i = 0; i < wait_iterations && !response_received; i++) {
-        net_poll();
-        __asm__ volatile ("pause");
+        sys_net_poll();
+        for (volatile int d = 0; d < 200; d++) __asm__ volatile ("pause");
     }
+
     if (!response_received || response_type != DHCP_OFFER) return 0;
     response_received = 0;
+
     if (!send_message(DHCP_REQUEST, current_lease.address)) return 0;
+
     for (uint32_t i = 0; i < wait_iterations && !response_received; i++) {
-        net_poll();
-        __asm__ volatile ("pause");
+        sys_net_poll();
+        for (volatile int d = 0; d < 200; d++) __asm__ volatile ("pause");
     }
+
     if (!response_received || response_type != DHCP_ACK) return 0;
     current_lease.server = server_identifier;
     current_lease.leased = 1;
