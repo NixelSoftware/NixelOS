@@ -40,7 +40,7 @@ ld -m elf_i386 -Ttext 0x200000 -e _start \
 objcopy -O binary src/apps/files/files.tmp files.bin
 rm -f src/apps/files/files.tmp src/apps/files/main.o src/apps/files/entry.o
 
-for app in mines calc hexview floppy_debug ping netdiag; do
+for app in mines calc hexview floppy_debug ping netdiag http_test; do
     mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
     ${cc} -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
@@ -123,6 +123,7 @@ rm -f hexview.bin
 rm -f floppy_debug.bin
 rm -f ping.bin
 rm -f netdiag.bin
+rm -f http_test.bin
 
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
