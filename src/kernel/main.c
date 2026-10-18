@@ -1015,7 +1015,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     debug_print("[INIT] Exec Main Loop.\n");
     while (1) {
-        draw_heartbeat_indicator();
+        //draw_heartbeat_indicator();
         net_poll();
 
         if ((frame_timer & 0x3F) == 0 && terminal_window.visible && terminal_window.focused) {
