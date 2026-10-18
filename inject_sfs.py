@@ -17,7 +17,7 @@ MAGIC = 0x53465332
 image_path = Path(sys.argv[1])
 files = [Path(name) for name in (
     "calc.bin", "files.bin", "hexview.bin", "mines.bin", "floppy_debug.bin",
-    "ping.bin", "netdiag.bin"
+    "ping.bin", "netdiag.bin", "image.bmp"
 )]
 
 def write_inode(stream, path, data, start_lba, sector_count):
