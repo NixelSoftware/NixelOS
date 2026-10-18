@@ -7,7 +7,8 @@ Window viewer_window;
 
 #define MAX_BMP_W 200
 #define MAX_BMP_H 150
-#define BMP_MAX_FILE_SIZE (16 * 1024) 
+//#define BMP_MAX_FILE_SIZE (16 * 1024) 
+#define BMP_MAX_FILE_SIZE 1024000
 
 static uint32_t image_pixels[MAX_BMP_W * MAX_BMP_H];
 static int32_t  image_w = 0;
