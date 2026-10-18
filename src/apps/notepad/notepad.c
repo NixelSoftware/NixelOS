@@ -25,8 +25,19 @@ void notepad_draw(Window* win) {
     draw_string(box_x + 6, box_y + 6, notepad_buffer, COLOR_BLACK);
 
     if (win->focused) {
-        int caret_x = box_x + 6 + (notepad_cursor * 8);
-        int caret_y = box_y + 6;
+        int cursor_column = 0;
+        int cursor_row = 0;
+        for (int i = 0; i < notepad_cursor; i++) {
+            if (notepad_buffer[i] == '\n') {
+                cursor_column = 0;
+                cursor_row++;
+            } else {
+                cursor_column++;
+            }
+        }
+
+        int caret_x = box_x + 6 + (cursor_column * 8);
+        int caret_y = box_y + 6 + (cursor_row * 10);
         draw_char(caret_x, caret_y, '|', COLOR_BLACK, 1, 0);
     }
 }
@@ -53,6 +64,11 @@ void notepad_handle_key(Window* win, char c) {
     if (c == '\b') {
         if (notepad_cursor > 0) {
             notepad_cursor--;
+            notepad_buffer[notepad_cursor] = '\0';
+        }
+    } else if (c == '\n') {
+        if (notepad_cursor < NOTEPAD_MAX_CHARS - 1) {
+            notepad_buffer[notepad_cursor++] = c;
             notepad_buffer[notepad_cursor] = '\0';
         }
     } else if (c >= ' ' && c <= '~') {
