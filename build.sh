@@ -18,7 +18,8 @@ for source in src/kernel/drivers/net.c src/kernel/net/ipv4.c src/kernel/net/ethe
               src/kernel/net/arp.c src/kernel/net/tcp.c src/kernel/net/udp.c \
               src/kernel/net/icmp.c src/kernel/net/dhcp.c src/kernel/fs.c \
               src/kernel/cursor.c src/kernel/font.c src/kernel/keyboard.c \
-              src/kernel/desktop.c src/kernel/task.c src/kernel/dialog.c; do
+              src/kernel/desktop.c src/kernel/task.c src/kernel/dialog.c \
+              src/kernel/drivers/serial.o; do
     ${cc} -c "$source" -o "${source%.c}.o"
 done
 
@@ -75,6 +76,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/desktop.o \
     src/apps/notepad/notepad.o \
     src/apps/viewer/viewer.o \
+    src/kernel/drivers/serial.o \
     -o src/kernel/kernel.tmp
 
 objcopy -O binary src/kernel/kernel.tmp src/kernel/kernel.bin
