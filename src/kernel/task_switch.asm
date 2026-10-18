@@ -3,11 +3,14 @@
 
 extern current_task
 extern task_schedule_next
+extern frame_timer
 
 global irq0_timer_handler
 
 irq0_timer_handler:
     pushad
+
+    inc dword [frame_timer]
 
     xor eax, eax
     mov ax, ds

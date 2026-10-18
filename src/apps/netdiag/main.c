@@ -54,6 +54,16 @@ int main_app(os_api_t* os) {
     print_u32(os, d.rx_errors);
     os->term_print("/");
     print_u32(os, d.rx_invalid);
+    os->term_print("\n  CSR0: 0x");
+    print_hex(os, d.csr0, 2);
+    os->term_print("  RX descriptor status/length: 0x");
+    print_hex(os, d.rx_descriptor_status, 2);
+    os->term_print("/");
+    print_u32(os, d.rx_message_length);
+    os->term_print("\n  Last RX length/error CSR0: ");
+    print_u32(os, d.last_rx_length);
+    os->term_print("/0x");
+    print_hex(os, d.last_error_status, 2);
     os->term_print("\n");
     return 0;
 }

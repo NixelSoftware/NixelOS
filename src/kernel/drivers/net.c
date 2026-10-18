@@ -16,6 +16,7 @@
 #define CSR0_TXPOLL CSR0_TDMD
 #define CSR0_IENA 0x0040
 #define CSR4_APAD_XMT 0x0800
+#define MODE_PROM 0x8000
 #define CSR0_TINT 0x0200
 #define CSR0_RINT 0x0400
 #define CSR0_IDON 0x0100
@@ -37,11 +38,10 @@
 
 typedef struct {
     uint16_t mode;
-    uint8_t receive_ring_length;
-    uint8_t transmit_ring_length;
-    uint16_t physical_address[3];
+    uint16_t ring_lengths;
+    uint8_t physical_address[6];
     uint16_t reserved;
-    uint16_t logical_address_filter[4];
+    uint32_t logical_address_filter[2];
     uint32_t receive_ring;
     uint32_t transmit_ring;
 } __attribute__((packed, aligned(16))) pcnet_init_block_t;
@@ -201,15 +201,13 @@ uint8_t net_init(uint16_t io_base) {
 
     pcnet_write(0, CSR0_STOP);
 
-    init_block.mode = 0;
-    init_block.receive_ring_length = 0x30;
-    init_block.transmit_ring_length = 0x30;
+    init_block.mode = MODE_PROM;
+    init_block.ring_lengths = (uint16_t)((3U << 4) | (3U << 12));
     init_block.reserved = 0;
-    for (uint8_t i = 0; i < 4; i++) init_block.logical_address_filter[i] = 0;
+    for (uint8_t i = 0; i < 2; i++) init_block.logical_address_filter[i] = 0;
 
     for (uint8_t i = 0; i < 6; i++) {
-        ((uint8_t*)init_block.physical_address)[i] =
-            (uint8_t)(net_mac >> (i * 8));
+        init_block.physical_address[i] = (uint8_t)(net_mac >> (i * 8));
     }
 
     init_block.receive_ring = aligned_address(receive_ring);

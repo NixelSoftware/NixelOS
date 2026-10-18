@@ -194,6 +194,10 @@ static void terminal_netdiag(void) {
     term_print("\n");
 }
 
+static uint8_t tick_before(uint32_t value, uint32_t deadline) {
+    return (int32_t)(value - deadline) < 0;
+}
+
 static int parse_ipv4(const char* text, uint32_t* address) {
     uint32_t result = 0;
     int parts = 0;
@@ -265,25 +269,28 @@ static void terminal_ping(const char* argument) {
 
     ping_target_ip = address;
     for (ping_sequence = 1; ping_sequence <= 4; ping_sequence++) {
-        uint32_t deadline = frame_timer + 200;
-        uint32_t wait_ticks = 0;
-        uint8_t sent;
+        uint32_t start = frame_timer;
+        uint32_t deadline = start + 200;
+        uint32_t next_attempt = start;
+        uint8_t sent = 0;
         ping_reply_received = 0;
-        ping_start_time = frame_timer;
+        ping_start_time = start;
 
-        sent = icmp_request_echo(address, 0x4F53, ping_sequence,
-                                 payload, sizeof(payload) - 1);
-        while (!sent && frame_timer < deadline && wait_ticks++ < 32) {
+        while (!sent && tick_before(frame_timer, deadline)) {
             net_poll();
-            sent = icmp_request_echo(address, 0x4F53, ping_sequence,
-                                     payload, sizeof(payload) - 1);
-            for (volatile uint32_t delay = 0; !sent && delay < 2000; delay++)
-                __asm__ volatile ("pause");
+            if (!tick_before(frame_timer, next_attempt)) {
+                sent = icmp_request_echo(address, 0x4F53, ping_sequence,
+                                         payload, sizeof(payload) - 1);
+                next_attempt = frame_timer + 10;
+            }
+            if (!sent) {
+                for (volatile uint32_t delay = 0; delay < 2000; delay++)
+                    __asm__ volatile ("pause");
+            }
         }
 
-        wait_ticks = 0;
-        while (sent && !ping_reply_received && frame_timer < deadline
-               && wait_ticks++ < 128) {
+        while (sent && !ping_reply_received
+               && tick_before(frame_timer, deadline)) {
             net_poll();
             for (volatile uint32_t delay = 0; delay < 2000; delay++)
                 __asm__ volatile ("pause");
@@ -989,7 +996,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     debug_print("[INIT] Exec Main Loop.\n");
     while (1) {
-        frame_timer++;
         net_poll();
 
         if ((frame_timer & 0x3F) == 0 && terminal_window.visible && terminal_window.focused) {
