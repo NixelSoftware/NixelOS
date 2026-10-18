@@ -25,8 +25,8 @@ static uint32_t remote_seq = 0;
 static uint16_t client_port = 49152;
 static uint32_t server_ip = 0;
 
-static char http_resp[1024];
-static uint16_t http_resp_len = 0;
+static uint8_t download_buffer[65536]; 
+static uint32_t download_len = 0;
 static volatile uint8_t got_response = 0;
 
 static uint16_t calc_checksum(const void* data, uint32_t len) {
@@ -69,7 +69,7 @@ static uint8_t send_tcp_segment(uint8_t flags, const uint8_t* payload, uint16_t 
     packet[12] = 0x50; 
     packet[13] = flags;
 
-    packet[14] = 0x10; 
+    packet[14] = 0x20; 
     packet[15] = 0x00;
 
     packet[16] = 0;
@@ -114,6 +114,7 @@ static uint8_t send_tcp_segment(uint8_t flags, const uint8_t* payload, uint16_t 
 }
 
 static uint8_t app_tcp_incoming(uint32_t src_ip, uint32_t dst_ip, const uint8_t* payload, uint32_t len) {
+    (void)src_ip;
     (void)dst_ip;
     if (len < 20) return 0;
 
@@ -138,10 +139,9 @@ static uint8_t app_tcp_incoming(uint32_t src_ip, uint32_t dst_ip, const uint8_t*
     
     if (data_len > 0) {
         remote_seq = seq + data_len;
-        for (int i = 0; i < data_len && http_resp_len < sizeof(http_resp) - 1; i++) {
-            http_resp[http_resp_len++] = (char)payload[hlen + i];
+        for (uint16_t i = 0; i < data_len && download_len < sizeof(download_buffer); i++) {
+            download_buffer[download_len++] = payload[hlen + i];
         }
-        http_resp[http_resp_len] = '\0';
         got_response = 1;
         send_tcp_segment(TCP_ACK, 0, 0);
         return 1;
@@ -157,24 +157,14 @@ static uint8_t app_tcp_incoming(uint32_t src_ip, uint32_t dst_ip, const uint8_t*
     return 0;
 }
 
-int main_app(os_api_t* api) {
-    if (!api) return -1;
-    os = api;
-
-    
-    server_ip = (104U << 24) | (254U << 16) | (42U << 8) | 159U;
+static int perform_http_transaction(const char* host, const char* path, uint8_t* out_body, uint32_t* out_body_len) {
     client_port++;
     if (client_port < 40000) client_port = 49152;
 
-    os->term_print("Hooking TCP...\n");
-    os->ipv4_set_handler(TCP_PROTOCOL, app_tcp_incoming);
-
     tcp_state = APP_TCP_SYN_SENT;
-    local_seq = 0x54321;
-    http_resp_len = 0;
+    local_seq = 0x54321 + client_port;
+    download_len = 0;
     got_response = 0;
-
-    os->term_print("Sending SYN...\n");
 
     
     int connected = 0;
@@ -189,55 +179,115 @@ int main_app(os_api_t* api) {
             }
             for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
         }
-        if (!connected) os->term_print(".\n");
+        if (!connected) os->term_print(".");
     }
 
     if (!connected) {
-        os->term_print("Error: Handshake timed out.\n");
-        os->ipv4_set_handler(TCP_PROTOCOL, 0);
-        return -1;
+        os->term_print("\nError: Handshake failed.\n");
+        return 0;
     }
 
-    os->term_print("Connected! Sending HTTP GET...\n");
-    const char get_req[] =
-        "GET / HTTP/1.1\r\n"
-        "Host: connectiontest.menifeetech.pp.ua\r\n"
-        "User-Agent: VixelOS-Connection-Test\r\n"
-        "Connection: close\r\n\r\n";
+    
+    char req[256];
+    int p = 0;
+    const char* part1 = "GET ";
+    while (*part1) req[p++] = *part1++;
+    while (*path) req[p++] = *path++;
+    const char* part2 = " HTTP/1.1\r\nHost: ";
+    while (*part2) req[p++] = *part2++;
+    while (*host) req[p++] = *host++;
+    const char* part3 = "\r\nUser-Agent: VixelOS-Connection-Test\r\nConnection: close\r\n\r\n";
+    while (*part3) req[p++] = *part3++;
+    req[p] = '\0';
 
-    send_tcp_segment(TCP_PSH | TCP_ACK, (const uint8_t*)get_req, sizeof(get_req) - 1);
+    send_tcp_segment(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
 
     
-    for (uint32_t poll = 0; poll < 200000 && !got_response; poll++) {
+    for (uint32_t poll = 0; poll < 400000; poll++) {
         os->net_poll();
+        if (tcp_state == APP_TCP_CLOSED && got_response) {
+            break;
+        }
         for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
     }
 
-    os->term_print("\n=== HTTP RESULT ===\n");
-    if (http_resp_len == 0) {
-        os->term_print("No response received.\n");
-    } else {
-        if (http_resp[0] == 'H' && http_resp[1] == 'T') {
-            int p = 0;
-            while (http_resp[p] && http_resp[p] != ' ') p++;
-            if (http_resp[p] == ' ') p++;
-            os->term_print("Status: ");
-            char code[4] = { http_resp[p], http_resp[p+1], http_resp[p+2], '\0' };
-            os->term_print(code);
-            os->term_print("\n");
-        }
+    if (download_len == 0) {
+        return 0;
+    }
 
-        const char* body = 0;
-        for (int i = 0; i < http_resp_len - 3; i++) {
-            if (http_resp[i] == '\r' && http_resp[i+1] == '\n' &&
-                http_resp[i+2] == '\r' && http_resp[i+3] == '\n') {
-                body = &http_resp[i + 4];
-                break;
-            }
+    
+    uint32_t body_start = 0;
+    for (uint32_t i = 0; i < download_len - 3; i++) {
+        if (download_buffer[i] == '\r' && download_buffer[i+1] == '\n' &&
+            download_buffer[i+2] == '\r' && download_buffer[i+3] == '\n') {
+            body_start = i + 4;
+            break;
         }
-        os->term_print("Body:\n");
-        os->term_print(body ? body : http_resp);
-        os->term_print("\n");
+    }
+
+    if (body_start == 0) {
+        return 0;
+    }
+
+    *out_body_len = download_len - body_start;
+    for (uint32_t i = 0; i < *out_body_len; i++) {
+        out_body[i] = download_buffer[body_start + i];
+    }
+    return 1;
+}
+
+int main_app(os_api_t* api) {
+    if (!api) return -1;
+    os = api;
+
+    
+    server_ip = (104U << 24) | (254U << 16) | (42U << 8) | 159U;
+
+    os->term_print("Hooking TCP...\n");
+    os->ipv4_set_handler(TCP_PROTOCOL, app_tcp_incoming);
+
+    
+    os->term_print("1. Testing connection to connectiontest.menifeetech.pp.ua...\n");
+    static uint8_t body_buf[4096];
+    uint32_t body_len = 0;
+
+    if (perform_http_transaction("connectiontest.menifeetech.pp.ua", "/", body_buf, &body_len)) {
+        os->term_print("Connection Test OK!\nBody: ");
+        body_buf[body_len < 128 ? body_len : 127] = '\0';
+        os->term_print((const char*)body_buf);
+        os->term_print("\n\n");
+    } else {
+        os->term_print("Connection test failed.\n");
+    }
+
+    
+    os->term_print("2. Downloading NabilShuail95.bmp from descargar.menifeetech.pp.ua...\n");
+    static uint8_t bmp_dest[65536];
+    uint32_t bmp_len = 0;
+
+    if (perform_http_transaction("descargar.menifeetech.pp.ua", "/NabilShuail95.bmp", bmp_dest, &bmp_len)) {
+        os->term_print("Download complete (");
+        
+        
+        char digits[10];
+        int count = 0;
+        uint32_t tmp = bmp_len;
+        if (tmp == 0) digits[count++] = '0';
+        while (tmp > 0) { digits[count++] = (tmp % 10) + '0'; tmp /= 10; }
+        for (int i = count - 1; i >= 0; i--) {
+            char ch[2] = { digits[i], '\0' };
+            os->term_print(ch);
+        }
+        os->term_print(" bytes).\nSaving to SFS disk as NabilShuail95.bmp...\n");
+
+        int written = os->fs_write("NabilShuail95.bmp", bmp_dest, bmp_len);
+        if (written > 0) {
+            os->term_print("File saved successfully! Run 'view NabilShuail95.bmp' to display it.\n");
+        } else {
+            os->term_print("Error: Failed writing file to SFS disk.\n");
+        }
+    } else {
+        os->term_print("Error: Failed downloading NabilShuail95.bmp.\n");
     }
 
     os->ipv4_set_handler(TCP_PROTOCOL, 0);
