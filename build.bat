@@ -36,16 +36,23 @@ for %%S in (
     call :run %CC% -c %%S -o %%~dpnS.o
 )
 
-for %%A in (files mines calc hexview) do (
+for %%A in (mines calc hexview) do (
     if not exist src\apps\%%A mkdir src\apps\%%A
     call :run nasm -f elf32 src\apps\%%A\entry.asm -o src\apps\%%A\entry.o
     call :run %CC% -c src\apps\%%A\main.c -o src\apps\%%A\main.o
-    call :run ld -mi386pe -Ttext 0x200000 -e _start src\apps\%%A\entry.o src\apps\%%A\main.o -o src\apps\%%A\%%A.tmp
+    call :run ld -m elf_i386 -Ttext 0x200000 -e _start src\apps\%%A\entry.o src\apps\%%A\main.o -o src\apps\%%A\%%A.tmp
     call :run objcopy -O binary src\apps\%%A\%%A.tmp %%A.bin
     del /q src\apps\%%A\%%A.tmp src\apps\%%A\main.o src\apps\%%A\entry.o
 )
 
-call :run ld -mi386pe -Ttext 0x10000 ^
+if not exist src\apps\files mkdir src\apps\files
+call :run nasm -f elf32 src\apps\files\entry.asm -o src\apps\files\entry.o
+call :run %CC% -c src\apps\files\main.c -o src\apps\files\main.o
+call :run ld -m elf_i386 -Ttext 0x200000 -e _start src\apps\files\entry.o src\apps\files\main.o -o src\apps\files\files.tmp
+call :run objcopy -O binary src\apps\files\files.tmp files.bin
+del /q src\apps\files\files.tmp src\apps\files\main.o src\apps\files\entry.o
+
+call :run ld -m elf_i386 -Ttext 0x10000 ^
     src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o ^
     src\kernel\main.o src\kernel\idt.o src\kernel\task.o ^
     src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o ^
@@ -76,7 +83,7 @@ del /q files.bin mines.bin calc.bin hexview.bin
 
 qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
     -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 ^
-    -device pcnet,netdev=net0 -serial stdio
+    -device pcnet,netdev=net0
 exit /b 0
 
 :run
