@@ -19,7 +19,7 @@ for source in src/kernel/drivers/net.c src/kernel/net/ipv4.c src/kernel/net/ethe
               src/kernel/net/icmp.c src/kernel/net/dhcp.c src/kernel/fs.c \
               src/kernel/cursor.c src/kernel/font.c src/kernel/keyboard.c \
               src/kernel/desktop.c src/kernel/task.c src/kernel/dialog.c \
-              src/kernel/drivers/serial.c; do
+              src/kernel/drivers/serial.c src/kernel/drivers/floppy.c; do
     ${cc} -c "$source" -o "${source%.c}.o"
 done
 
@@ -37,7 +37,7 @@ ld -m elf_i386 -Ttext 0x200000 -e _start \
 objcopy -O binary src/apps/files/files.tmp files.bin
 rm -f src/apps/files/files.tmp src/apps/files/main.o src/apps/files/entry.o
 
-for app in mines calc hexview; do
+for app in mines calc hexview floppy_debug; do
     mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
     ${cc} -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
@@ -74,6 +74,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/apps/notepad/notepad.o \
     src/apps/viewer/viewer.o \
     src/kernel/drivers/serial.o \
+    src/kernel/drivers/floppy.o \
     -o src/kernel/kernel.tmp
 
 objcopy -O binary src/kernel/kernel.tmp src/kernel/kernel.bin
@@ -95,7 +96,7 @@ cat src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin > ../hdd.img
 
 truncate -s 33554432 ../hdd.img
 
-./inject_sfs.sh
+python3 inject_sfs.py ../hdd.img
 
 cp -f ../hdd.img os.img
 
@@ -112,6 +113,7 @@ rm -f files.bin
 rm -f mines.bin
 rm -f calc.bin
 rm -f hexview.bin
+rm -f floppy_debug.bin
 
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \

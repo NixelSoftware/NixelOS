@@ -2,7 +2,6 @@ from pathlib import Path
 import math
 import struct
 import sys
-import os
 
 SECTOR_SIZE = 512
 SUPER_LBA = 200
@@ -72,4 +71,4 @@ with image_path.open("r+b") as image:
         image.write(bytes(padding))
         current_lba += max(1, math.ceil(len(contents) / SECTOR_SIZE))
 
-print("SFS injection complete: files.bin, mines.bin, calc.bin, and hexview.bin written successfully.")
+print("SFS injection complete: files.bin, mines.bin, calc.bin, hexview.bin, and floppy_debug.bin written successfully.")
