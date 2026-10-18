@@ -19,29 +19,26 @@ for source in src/kernel/drivers/net.c src/kernel/net/ipv4.c src/kernel/net/ethe
               src/kernel/net/icmp.c src/kernel/net/dhcp.c src/kernel/fs.c \
               src/kernel/cursor.c src/kernel/font.c src/kernel/keyboard.c \
               src/kernel/desktop.c src/kernel/task.c src/kernel/dialog.c \
-              src/kernel/drivers/serial.o; do
+              src/kernel/drivers/serial.c; do
     ${cc} -c "$source" -o "${source%.c}.o"
 done
+
+mkdir -p src/apps/files
 
 ${cc} -c src/apps/notepad/notepad.c -o src/apps/notepad/notepad.o
 ${cc} -c src/apps/viewer/viewer.c -o src/apps/viewer/viewer.o
 
-mkdir -p src/apps/files src/apps/mines src/apps/calc src/apps/hexview
-
 nasm -f elf32 src/apps/files/entry.asm -o src/apps/files/entry.o
-gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -c src/apps/files/main.c -o src/apps/files/main.o
-
+${cc} -c src/apps/files/main.c -o src/apps/files/main.o
 ld -m elf_i386 -Ttext 0x200000 -e _start \
     src/apps/files/entry.o \
     src/apps/files/main.o \
     -o src/apps/files/files.tmp
-
 objcopy -O binary src/apps/files/files.tmp files.bin
-
-rm -f src/apps/files/files.tmp
-rm -f src/apps/files/main.o src/apps/files/entry.o
+rm -f src/apps/files/files.tmp src/apps/files/main.o src/apps/files/entry.o
 
 for app in mines calc hexview; do
+    mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
     ${cc} -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
     ld -m elf_i386 -Ttext 0x200000 -e _start \
@@ -119,4 +116,5 @@ rm -f hexview.bin
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
     -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 \
-    -device pcnet,netdev=net0
+    -device pcnet,netdev=net0 \
+    -serial stdio \
