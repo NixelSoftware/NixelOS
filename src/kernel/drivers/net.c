@@ -176,7 +176,7 @@ uint8_t net_init(uint16_t io_base) {
     if (io_base == 0) io_base = find_pcnet_io_base();
     if (io_base == 0) {
         net_reset_diagnostics();
-        diagnostics.init_failure = 1;
+        diagnostics.init_failure = NET_INIT_FAILURE_DISCOVERY;
         return 0;
     }
 
@@ -194,7 +194,7 @@ uint8_t net_init(uint16_t io_base) {
     pcnet_enable_dwio();
     diagnostics.dw_csr0 = pcnet_read(0);
     if (pcnet_read(0) == 0xFFFFU) {
-        diagnostics.init_failure = 2;
+        diagnostics.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
         diagnostics.last_error_status = 0xFFFF;
         return 0;
     }
@@ -245,7 +245,7 @@ uint8_t net_init(uint16_t io_base) {
     }
 
     pcnet_write(0, CSR0_STOP);
-    diagnostics.init_failure = 3;
+    diagnostics.init_failure = NET_INIT_FAILURE_TIMEOUT;
     diagnostics.last_error_status = (uint16_t)pcnet_read(0);
     return 0;
 }
