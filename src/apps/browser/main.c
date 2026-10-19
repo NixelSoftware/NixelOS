@@ -26,6 +26,9 @@
 #define MAX_PAGE_IMAGES   4
 #define MAX_PNG_SIZE      32768
 #define MAX_REDIRECTS     5
+#define MAX_LINKS         32
+#define MAX_CONTROLS      16
+#define CONTROL_VALUE_LEN 48
 
 typedef enum {
     TCP_ST_CLOSED,
@@ -41,6 +44,11 @@ typedef struct {
     uint8_t indent;
     int8_t  image_index; 
 } render_line_t;
+
+typedef struct { char url[MAX_URL_LEN]; int line, start, length; } link_t;
+typedef struct { char name[32], value[CONTROL_VALUE_LEN]; int line; uint8_t type, checked; } control_t;
+
+enum { CONTROL_TEXT, CONTROL_PASSWORD, CONTROL_CHECKBOX, CONTROL_RADIO, CONTROL_SUBMIT, CONTROL_BUTTON };
 
 static os_api_t* os = 0;
 static Window browser_win;
@@ -74,6 +82,43 @@ static int num_lines = 0;
 static uint8_t image_pool[MAX_PAGE_IMAGES][MAX_PNG_SIZE];
 static uint32_t image_sizes[MAX_PAGE_IMAGES];
 static int num_images = 0;
+static link_t links[MAX_LINKS];
+static int num_links = 0;
+static control_t controls[MAX_CONTROLS];
+static int num_controls = 0;
+static char form_action[MAX_URL_LEN];
+static uint8_t form_post = 0;
+static char active_href[MAX_URL_LEN];
+static int active_link_start = -1;
+static int active_control = -1;
+static int control_editing = 0;
+static uint8_t request_post = 0;
+static char request_body[512];
+static int request_body_len = 0;
+
+static int copy_string(char* dst, int max_len, const char* src);
+
+static int ascii_equal(char a, char b) {
+    if (a >= 'A' && a <= 'Z') a += 32;
+    if (b >= 'A' && b <= 'Z') b += 32;
+    return a == b;
+}
+
+static int read_attr(const char* tag, const char* end, const char* attr, char* out, int cap) {
+    const char* tag_end = tag; while (tag_end < end && *tag_end != '>') tag_end++;
+    int alen = 0; while (attr[alen]) alen++;
+    for (const char* q = tag; q + alen < tag_end; q++) {
+        int i = 0; while (i < alen && ascii_equal(q[i], attr[i])) i++;
+        if (i != alen || (q > tag && (q[-1] != ' ' && q[-1] != '\t' && q[-1] != '\n'))) continue;
+        const char* v = q + alen; while (v < tag_end && (*v == ' ' || *v == '\t')) v++;
+        if (v >= tag_end || *v++ != '=') continue;
+        while (v < tag_end && (*v == ' ' || *v == '\t')) v++;
+        char quote = 0; if (v < tag_end && (*v == '\"' || *v == '\'')) quote = *v++;
+        int n = 0; while (v < tag_end && n < cap - 1 && (quote ? *v != quote : *v != ' ' && *v != '>' && *v != '/')) out[n++] = *v++;
+        out[n] = 0; return 1;
+    }
+    out[0] = 0; return 0;
+}
 
 static void set_status(const char* msg) {
     for (int i = 0; i < (int)sizeof(status_text); i++) status_text[i] = '\0';
@@ -337,6 +382,8 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
     num_lines = 0;
     scroll_y = 0;
     num_images = 0;
+    num_links = 0; num_controls = 0; form_action[0] = 0; form_post = 0;
+    active_href[0] = 0; active_link_start = -1;
 
     if (!doc || len == 0) return;
 
@@ -408,7 +455,36 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
             }
 
             
-            if (str_has_tag_bounded(p, end, "h1")) {
+            if (str_has_tag_bounded(p, end, "form")) {
+                if (!is_close) {
+                    read_attr(p, end, "action", form_action, sizeof(form_action));
+                    char method[16]; read_attr(p, end, "method", method, sizeof(method));
+                    form_post = ascii_equal(method[0], 'p') && ascii_equal(method[1], 'o') && ascii_equal(method[2], 's') && ascii_equal(method[3], 't');
+                } else { form_action[0] = 0; form_post = 0; }
+            } else if (str_has_tag_bounded(p, end, "input") || str_has_tag_bounded(p, end, "button")) {
+                if (!is_close && num_controls < MAX_CONTROLS) {
+                    control_t* c = &controls[num_controls++];
+                    char type[20];
+                    c->line = num_lines; c->checked = 0; c->type = CONTROL_BUTTON;
+                    read_attr(p, end, "name", c->name, sizeof(c->name));
+                    read_attr(p, end, "value", c->value, sizeof(c->value));
+                    read_attr(p, end, "type", type, sizeof(type));
+                    if (str_has_tag_bounded(p, end, "button")) c->type = CONTROL_SUBMIT;
+                    else if (!type[0] || ascii_equal(type[0], 't')) c->type = CONTROL_TEXT;
+                    else if (ascii_equal(type[0], 'p')) c->type = CONTROL_PASSWORD;
+                    else if (ascii_equal(type[0], 'c')) c->type = CONTROL_CHECKBOX;
+                    else if (ascii_equal(type[0], 'r')) c->type = CONTROL_RADIO;
+                    else if (ascii_equal(type[0], 's')) c->type = CONTROL_SUBMIT;
+                    else if (ascii_equal(type[0], 'b')) c->type = CONTROL_BUTTON;
+                    char checked[8]; read_attr(p, end, "checked", checked, sizeof(checked));
+                    c->checked = checked[0] != 0;
+                    char* label = c->type == CONTROL_CHECKBOX ? "[ ]" : c->type == CONTROL_RADIO ? "( )" : c->type == CONTROL_SUBMIT ? "[Submit]" : c->type == CONTROL_BUTTON ? "[Button]" : "[________]";
+                    if (c->type == CONTROL_TEXT || c->type == CONTROL_PASSWORD) read_attr(p, end, "value", c->value, sizeof(c->value));
+                    if (line_len + 10 < LINE_MAX_CHARS) {
+                        int k = 0; while (label[k]) current_line[line_len++] = label[k++];
+                    } else { current_line[line_len] = 0; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
+                }
+            } else if (str_has_tag_bounded(p, end, "h1")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
                 cur_col = is_close ? COLOR_BLACK : COLOR_H1;
                 cur_bold = !is_close;
@@ -428,7 +504,14 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
             } else if (str_has_tag_bounded(p, end, "b") || str_has_tag_bounded(p, end, "strong")) {
                 cur_bold = !is_close;
             } else if (str_has_tag_bounded(p, end, "a")) {
-                cur_col = is_close ? COLOR_BLACK : COLOR_LINK;
+                if (is_close) {
+                    if (active_href[0] && active_link_start >= 0 && line_len > active_link_start && num_links < MAX_LINKS) {
+                        link_t* l = &links[num_links++]; copy_string(l->url, sizeof(l->url), active_href);
+                        l->line = num_lines; l->start = active_link_start; l->length = line_len - active_link_start;
+                    }
+                    active_href[0] = 0; active_link_start = -1; cur_col = COLOR_BLACK;
+                }
+                else { read_attr(p, end, "href", active_href, sizeof(active_href)); active_link_start = line_len; cur_col = COLOR_LINK; }
             } else if (str_has_tag_bounded(p, end, "li")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
                 if (!is_close) {
@@ -764,8 +847,16 @@ static int fetch_http_document(const char* host, const char* path) {
     while (*r2) req[p++] = *r2++;
     u = 0;
     while (host[u] && p < (int)sizeof(req) - 1) req[p++] = host[u++];
-    const char* r3 = "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, text/plain;q=0.9, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
+    const char* r3 = request_post ? "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, */*\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " : "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, text/plain;q=0.9, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
     while (*r3 && p < (int)sizeof(req) - 1) req[p++] = *r3++;
+    if (request_post) {
+        char digits[12]; int dn = 0, value = request_body_len;
+        do { digits[dn++] = (char)('0' + value % 10); value /= 10; } while (value && dn < 10);
+        while (dn && p < (int)sizeof(req) - 1) req[p++] = digits[--dn];
+        const char* tail = "\r\nConnection: close\r\n\r\n";
+        while (*tail && p < (int)sizeof(req) - 1) req[p++] = *tail++;
+        for (int i = 0; i < request_body_len && p < (int)sizeof(req) - 1; i++) req[p++] = request_body[i];
+    }
     req[p] = '\0';
 
     send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
@@ -803,6 +894,7 @@ static void browser_fetch(void) {
         os->blit_all();
 
         int status = fetch_http_document(host, path);
+        request_post = 0;
         if (status < 0) {
             set_status(status == -1 ? "DNS lookup failed" : "Connection failed");
             browser_draw(&browser_win);
@@ -862,6 +954,60 @@ static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t bt
         browser_fetch();
         return;
     }
+
+    int canvas_x = 10, canvas_y = 50, canvas_h = win->h - 20 - 56;
+    int row = (ly - canvas_y - 6) / 12 + scroll_y;
+    if (ly >= canvas_y && ly < canvas_y + canvas_h && row >= 0 && row < num_lines) {
+        for (int i = 0; i < num_links; i++) {
+            if (links[i].line != row) continue;
+            int col = (lx - 18) / 8;
+            if (col < links[i].start || col >= links[i].start + links[i].length) continue;
+            char host[128], path[MAX_URL_LEN], next[MAX_URL_LEN];
+            if (starts_with(links[i].url, "http://")) copy_string(url_input, sizeof(url_input), links[i].url);
+            else if (parse_url(url_input, host, sizeof(host), path, sizeof(path)) && resolve_redirect(links[i].url, host, path, next, sizeof(next))) copy_string(url_input, sizeof(url_input), next);
+            else continue;
+            url_cursor = 0; while (url_input[url_cursor]) url_cursor++;
+            browser_fetch(); return;
+        }
+        for (int i = 0; i < num_controls; i++) {
+            if (controls[i].line != row) continue;
+            active_control = i;
+            if (controls[i].type == CONTROL_CHECKBOX || controls[i].type == CONTROL_RADIO) {
+                controls[i].checked = controls[i].type == CONTROL_RADIO ? 1 : !controls[i].checked;
+                browser_draw(win); os->blit_all();
+            } else if (controls[i].type == CONTROL_SUBMIT) {
+                request_body_len = 0;
+                for (int j = 0; j < num_controls; j++) {
+                    control_t* f = &controls[j];
+                    if (!f->name[0] || f->type == CONTROL_BUTTON || f->type == CONTROL_SUBMIT || ((f->type == CONTROL_CHECKBOX || f->type == CONTROL_RADIO) && !f->checked)) continue;
+                    if (request_body_len) request_body[request_body_len++] = '&';
+                    for (int k = 0; f->name[k] && request_body_len < 480; k++) request_body[request_body_len++] = f->name[k] == ' ' ? '+' : f->name[k];
+                    if (request_body_len < 480) request_body[request_body_len++] = '=';
+                    for (int k = 0; f->value[k] && request_body_len < 510; k++) request_body[request_body_len++] = f->value[k] == ' ' ? '+' : f->value[k];
+                }
+                request_body[request_body_len] = 0; request_post = form_post;
+                char host[128], path[MAX_URL_LEN], target[MAX_URL_LEN];
+                if (form_action[0] && parse_url(url_input, host, sizeof(host), path, sizeof(path)) &&
+                    (starts_with(form_action, "http://") ? copy_string(target, sizeof(target), form_action) : resolve_redirect(form_action, host, path, target, sizeof(target)))) {
+                    copy_string(url_input, sizeof(url_input), target); url_cursor = 0; while (url_input[url_cursor]) url_cursor++;
+                }
+                if (!request_post && request_body_len && parse_url(url_input, host, sizeof(host), path, sizeof(path))) {
+                    int n = 0; while (path[n] && n < MAX_URL_LEN - 2) n++;
+                    path[n++] = '?';
+                    for (int j = 0; j < request_body_len && n < MAX_URL_LEN - 1; j++) path[n++] = request_body[j];
+                    path[n] = 0;
+                    int z = 0; const char* prefix = "http://"; while (*prefix && z < MAX_URL_LEN - 1) url_input[z++] = *prefix++;
+                    for (int j = 0; host[j] && z < MAX_URL_LEN - 1; j++) url_input[z++] = host[j];
+                    for (int j = 0; path[j] && z < MAX_URL_LEN - 1; j++) url_input[z++] = path[j];
+                    url_input[z] = 0; url_cursor = z;
+                }
+                browser_fetch();
+            } else if (controls[i].type == CONTROL_TEXT || controls[i].type == CONTROL_PASSWORD) {
+                control_editing = 1; set_status("Editing form field"); browser_draw(win); os->blit_all();
+            }
+            return;
+        }
+    }
 }
 
 static void browser_handle_key(Window* win, char c) {
@@ -912,8 +1058,16 @@ static void browser_handle_key(Window* win, char c) {
     }
 
     if (c == '\n' || c == '\r') {
-        browser_fetch();
+        if (control_editing && active_control >= 0) { control_editing = 0; set_status("Ready"); browser_draw(win); os->blit_all(); }
+        else browser_fetch();
         return;
+    }
+
+    if (control_editing && active_control >= 0) {
+        control_t* ctl = &controls[active_control]; int n = 0; while (ctl->value[n] && n < CONTROL_VALUE_LEN - 1) n++;
+        if (c == '\b') { if (n) ctl->value[n - 1] = 0; }
+        else if (c >= ' ' && c <= '~' && n < CONTROL_VALUE_LEN - 1) { ctl->value[n] = c; ctl->value[n + 1] = 0; }
+        browser_draw(win); os->blit_all(); return;
     }
 
     if (c == '\b') {
