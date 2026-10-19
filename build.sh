@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cc="gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie"
+cc=(gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe)
 
 nasm -f bin src/boot.asm -o src/boot.bin
 nasm -f bin src/boot_stage2.asm -o src/boot_stage2.bin
@@ -10,46 +10,65 @@ nasm -f elf32 src/kernel/kernel_entry.asm -o src/kernel/kernel_entry.o
 nasm -f elf32 src/kernel/idt_asm.asm -o src/kernel/idt_asm.o
 nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
 
-${cc} -c src/kernel/main.c -o src/kernel/main.o
-${cc} -c src/kernel/idt.c -o src/kernel/idt.o
-${cc} -c src/kernel/drivers/display.c -o src/kernel/drivers/display.o
-${cc} -c src/kernel/drivers/ata.c -o src/kernel/drivers/ata.o
-for source in src/kernel/drivers/net.c src/kernel/net/ipv4.c src/kernel/net/etherframe.c \
-              src/kernel/net/arp.c src/kernel/net/tcp.c src/kernel/net/udp.c \
-              src/kernel/net/icmp.c src/kernel/net/dhcp.c src/kernel/fs.c \
-              src/kernel/cursor.c src/kernel/font.c src/kernel/keyboard.c \
-              src/kernel/desktop.c src/kernel/task.c src/kernel/dialog.c \
-              src/kernel/drivers/serial.c src/kernel/drivers/floppy.c; do
-    ${cc} -c "$source" -o "${source%.c}.o"
+kernel_sources=(
+    src/kernel/main.c
+    src/kernel/idt.c
+    src/kernel/startscreen.c
+    src/kernel/screenshot.c
+    src/kernel/drivers/display.c
+    src/kernel/drivers/ata.c
+    src/kernel/drivers/net.c
+    src/kernel/drivers/net_e1000.c
+    src/kernel/drivers/serial.c
+    src/kernel/drivers/floppy.c
+    src/kernel/drivers/power.c
+    src/kernel/kernel_net.c
+    src/kernel/net/ipv4.c
+    src/kernel/net/etherframe.c
+    src/kernel/net/arp.c
+    src/kernel/net/tcp.c
+    src/kernel/net/udp.c
+    src/kernel/net/icmp.c
+    src/kernel/net/dhcp.c
+    src/kernel/fs.c
+    src/kernel/cursor.c
+    src/kernel/font.c
+    src/kernel/keyboard.c
+    src/kernel/desktop.c
+    src/kernel/task.c
+    src/kernel/dialog.c
+    src/apps/notepad/notepad.c
+    src/apps/viewer/viewer.c
+    src/apps/terminal/terminal.c
+    src/apps/ping/main.c
+    src/apps/netdiag/main.c
+)
+
+for source in "${kernel_sources[@]}"; do
+    "${cc[@]}" -c "$source" -o "${source%.c}.o"
 done
 
-mkdir -p src/apps/files
-
-${cc} -c src/apps/notepad/notepad.c -o src/apps/notepad/notepad.o
-${cc} -c src/apps/viewer/viewer.c -o src/apps/viewer/viewer.o
-${cc} -c src/apps/terminal/terminal.c -o src/apps/terminal/terminal.o
-${cc} -c src/apps/ping/main.c -o src/apps/ping/main.o
-${cc} -c src/apps/netdiag/main.c -o src/apps/netdiag/main.o
-
-nasm -f elf32 src/apps/files/entry.asm -o src/apps/files/entry.o
-${cc} -c src/apps/files/main.c -o src/apps/files/main.o
-ld -m elf_i386 -Ttext 0x200000 -e _start \
-    src/apps/files/entry.o \
-    src/apps/files/main.o \
-    -o src/apps/files/files.tmp
-objcopy -O binary src/apps/files/files.tmp files.bin
-rm -f src/apps/files/files.tmp src/apps/files/main.o src/apps/files/entry.o
-
-for app in mines calc hexview floppy_debug ping netdiag http_test; do
+for app in files mines calc hexview floppy_debug ping netdiag http_test crash_debug shutdown; do
     mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
-    ${cc} -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
+    "${cc[@]}" -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
     ld -m elf_i386 -Ttext 0x200000 -e _start \
         "src/apps/$app/entry.o" "src/apps/$app/main.o" \
         -o "src/apps/$app/$app.tmp"
     objcopy -O binary "src/apps/$app/$app.tmp" "$app.bin"
     rm -f "src/apps/$app/$app.tmp" "src/apps/$app/main.o" "src/apps/$app/entry.o"
 done
+
+mkdir -p src/apps/browser
+nasm -f elf32 src/apps/browser/entry.asm -o src/apps/browser/entry.o
+"${cc[@]}" -c src/apps/browser/main.c -o src/apps/browser/main.o
+"${cc[@]}" -c src/apps/browser/png.c -o src/apps/browser/png.o
+ld -m elf_i386 --omagic -Ttext 0x200000 -e _start \
+    src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o \
+    -o src/apps/browser/browser.tmp
+objcopy -O binary src/apps/browser/browser.tmp browser.bin
+rm -f src/apps/browser/browser.tmp src/apps/browser/main.o \
+    src/apps/browser/entry.o src/apps/browser/png.o
 
 ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/kernel_entry.o \
@@ -79,11 +98,20 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/apps/terminal/terminal.o \
     src/kernel/drivers/serial.o \
     src/kernel/drivers/floppy.o \
+    src/kernel/kernel_net.o \
+    src/kernel/drivers/net_e1000.o \
+    src/kernel/startscreen.o \
+    src/kernel/screenshot.o \
+    src/kernel/drivers/power.o \
     -o src/kernel/kernel.tmp
 
 objcopy -O binary src/kernel/kernel.tmp src/kernel/kernel.bin
 
 rm -f src/kernel/kernel.tmp
+
+[[ -f src/boot.bin ]]
+[[ -f src/boot_stage2.bin ]]
+[[ -f src/kernel/kernel.bin ]]
 
 python3 - <<'PY'
 from pathlib import Path
@@ -124,9 +152,12 @@ rm -f floppy_debug.bin
 rm -f ping.bin
 rm -f netdiag.bin
 rm -f http_test.bin
+rm -f browser.bin
+rm -f crash_debug.bin
+rm -f shutdown.bin
 
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
-    -netdev user,id=net0,net=10.0.0.0/24,dhcpstart=10.0.0.227 \
-    -device pcnet,netdev=net0 \
-    -serial stdio \
+    -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 \
+    -device e1000,netdev=net0 \
+    -serial stdio

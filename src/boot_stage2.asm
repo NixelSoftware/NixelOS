@@ -20,7 +20,7 @@ stage2_entry:
 .a20_ok:
     mov si, msg_a20
     call print_string
-    mov di, 4
+    mov di, 5
     mov dword [k_lba], 5
     mov word [k_seg], 0x1000
 

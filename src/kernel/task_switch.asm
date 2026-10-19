@@ -52,5 +52,4 @@ irq0_timer_handler:
     mov ds, ax
 
     popad
-
     iret
