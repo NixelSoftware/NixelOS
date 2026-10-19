@@ -81,7 +81,7 @@ static uint8_t send_tcp_segment(uint8_t flags, const uint8_t* payload, uint16_t 
         packet[20 + i] = payload[i];
     }
 
-    uint32_t local_ip = os->ipv4_get_local_ip();
+    uint32_t local_ip = os->network.ipv4_get_local_ip();
     pseudo[0] = (uint8_t)(local_ip >> 24);
     pseudo[1] = (uint8_t)(local_ip >> 16);
     pseudo[2] = (uint8_t)(local_ip >> 8);
@@ -105,7 +105,7 @@ static uint8_t send_tcp_segment(uint8_t flags, const uint8_t* payload, uint16_t 
     packet[16] = (uint8_t)(csum >> 8);
     packet[17] = (uint8_t)(csum & 0xFF);
 
-    uint8_t ok = os->ipv4_send(server_ip, TCP_PROTOCOL, packet, tcp_len);
+    uint8_t ok = os->network.ipv4_send(server_ip, TCP_PROTOCOL, packet, tcp_len);
     if (ok) {
         if (flags & (TCP_SYN | TCP_FIN)) local_seq++;
         else local_seq += payload_len;
@@ -172,18 +172,18 @@ static int perform_http_transaction(const char* host, const char* path, uint8_t*
         send_tcp_segment(TCP_SYN, 0, 0);
 
         for (uint32_t poll = 0; poll < 100000; poll++) {
-            os->net_poll();
+            os->network.net_poll();
             if (tcp_state == APP_TCP_ESTABLISHED) {
                 connected = 1;
                 break;
             }
             for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
         }
-        if (!connected) os->term_print(".");
+        if (!connected) os->shell.term_print(".");
     }
 
     if (!connected) {
-        os->term_print("\nError: Handshake failed.\n");
+        os->shell.term_print("\nError: Handshake failed.\n");
         return 0;
     }
 
@@ -204,7 +204,7 @@ static int perform_http_transaction(const char* host, const char* path, uint8_t*
 
     
     for (uint32_t poll = 0; poll < 400000; poll++) {
-        os->net_poll();
+        os->network.net_poll();
         if (tcp_state == APP_TCP_CLOSED && got_response) {
             break;
         }
@@ -243,30 +243,30 @@ int main_app(os_api_t* api) {
     
     server_ip = (104U << 24) | (254U << 16) | (42U << 8) | 159U;
 
-    os->term_print("Hooking TCP...\n");
-    os->ipv4_set_handler(TCP_PROTOCOL, app_tcp_incoming);
+    os->shell.term_print("Hooking TCP...\n");
+    os->network.ipv4_set_handler(TCP_PROTOCOL, app_tcp_incoming);
 
     
-    os->term_print("1. Testing connection to connectiontest.menifeetech.pp.ua...\n");
+    os->shell.term_print("1. Testing connection to connectiontest.menifeetech.pp.ua...\n");
     static uint8_t body_buf[4096];
     uint32_t body_len = 0;
 
     if (perform_http_transaction("connectiontest.menifeetech.pp.ua", "/", body_buf, &body_len)) {
-        os->term_print("Connection Test OK!\nBody: ");
+        os->shell.term_print("Connection Test OK!\nBody: ");
         body_buf[body_len < 128 ? body_len : 127] = '\0';
-        os->term_print((const char*)body_buf);
-        os->term_print("\n\n");
+        os->shell.term_print((const char*)body_buf);
+        os->shell.term_print("\n\n");
     } else {
-        os->term_print("Connection test failed.\n");
+        os->shell.term_print("Connection test failed.\n");
     }
 
     
-    os->term_print("2. Downloading NabilShuail95.bmp from descargar.menifeetech.pp.ua...\n");
+    os->shell.term_print("2. Downloading NabilShuail95.bmp from descargar.menifeetech.pp.ua...\n");
     static uint8_t bmp_dest[65536];
     uint32_t bmp_len = 0;
 
     if (perform_http_transaction("descargar.menifeetech.pp.ua", "/NabilShuail95.bmp", bmp_dest, &bmp_len)) {
-        os->term_print("Download complete (");
+        os->shell.term_print("Download complete (");
         
         
         char digits[10];
@@ -276,20 +276,20 @@ int main_app(os_api_t* api) {
         while (tmp > 0) { digits[count++] = (tmp % 10) + '0'; tmp /= 10; }
         for (int i = count - 1; i >= 0; i--) {
             char ch[2] = { digits[i], '\0' };
-            os->term_print(ch);
+            os->shell.term_print(ch);
         }
-        os->term_print(" bytes).\nSaving to SFS disk as NabilShuail95.bmp...\n");
+        os->shell.term_print(" bytes).\nSaving to SFS disk as NabilShuail95.bmp...\n");
 
-        int written = os->fs_write("NabilShuail95.bmp", bmp_dest, bmp_len);
+        int written = os->fs.write("NabilShuail95.bmp", bmp_dest, bmp_len);
         if (written > 0) {
-            os->term_print("File saved successfully! Run 'view NabilShuail95.bmp' to display it.\n");
+            os->shell.term_print("File saved successfully! Run 'view NabilShuail95.bmp' to display it.\n");
         } else {
-            os->term_print("Error: Failed writing file to SFS disk.\n");
+            os->shell.term_print("Error: Failed writing file to SFS disk.\n");
         }
     } else {
-        os->term_print("Error: Failed downloading NabilShuail95.bmp.\n");
+        os->shell.term_print("Error: Failed downloading NabilShuail95.bmp.\n");
     }
 
-    os->ipv4_set_handler(TCP_PROTOCOL, 0);
+    os->network.ipv4_set_handler(TCP_PROTOCOL, 0);
     return 0;
 }

@@ -136,11 +136,11 @@ static void handle_input(char key) {
 }
 
 static void draw_sunken_panel(int32_t x, int32_t y, int32_t w, int32_t h) {
-    os->fill_rect(x, y, w, h, COLOR_WHITE);
-    os->fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    os->fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    os->fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    os->fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, w, h, COLOR_WHITE);
+    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
+    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
 }
 
 void calc_draw_content(Window* win) {
@@ -152,14 +152,14 @@ void calc_draw_content(Window* win) {
 
     int text_x = disp_x + disp_w - 10 - (display_len * 8);
     if (text_x < disp_x + 6) text_x = disp_x + 6;
-    os->draw_string(text_x, disp_y + 6, display_buf, COLOR_BLACK);
+    os->graphics.draw_string(text_x, disp_y + 6, display_buf, COLOR_BLACK);
 
     int32_t grid_top_y = disp_y + disp_h + 10;
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             int32_t bx = disp_x + c * (BTN_W + BTN_GAP);
             int32_t by = grid_top_y + r * (BTN_H + BTN_GAP);
-            os->draw_button(bx, by, BTN_W, BTN_H, button_labels[r][c], 0);
+            os->graphics.draw_button(bx, by, BTN_W, BTN_H, button_labels[r][c], 0);
         }
     }
 }
@@ -177,7 +177,7 @@ void calc_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
             if (lx >= bx && lx < bx + BTN_W && ly >= by && ly < by + BTN_H) {
                 handle_input(button_labels[r][c][0]);
                 calc_draw_content(win);
-                os->blit_all();
+                os->graphics.blit_all();
                 return;
             }
         }
@@ -186,14 +186,14 @@ void calc_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
 
 void calc_handle_key(Window* win, char c) {
     if ((uint8_t)c == 0x01) {
-        os->unregister_window(win);
+        os->windows.unregister_window(win);
         return;
     }
 
     if ((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '*' || c == '/' || c == '=' || c == '\n' || c == 'c' || c == 'C') {
         handle_input(c);
         calc_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
     }
 }
 
@@ -219,7 +219,7 @@ int main_app(os_api_t* api) {
     calc_window.handle_key = calc_handle_key;
     calc_window.handle_mouse = calc_handle_mouse;
 
-    os->register_window(&calc_window);
-    os->term_print("Calculator is running.\n");
+    os->windows.register_window(&calc_window);
+    os->shell.term_print("Calculator is running.\n");
     return 0;
 }

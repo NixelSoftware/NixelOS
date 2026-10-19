@@ -12,8 +12,12 @@ call :run nasm -f elf32 src\kernel\task_switch.asm -o src\kernel\task_switch.o
 for %%S in (
     src\kernel\main.c
     src\system\shell\commands.c
+    src\system\shell\network_commands.c
     src\system\init\main.c
     src\system\graphics\wm\wm.c
+    src\system\graphics\session.c
+    src\system\services\input\input.c
+    src\system\loader\app_loader.c
     src\kernel\idt.c
     src\kernel\startscreen.c
     src\kernel\screenshot.c
@@ -25,6 +29,7 @@ for %%S in (
     src\kernel\drivers\serial.c
     src\kernel\drivers\floppy.c
     src\kernel\drivers\power.c
+    src\kernel\drivers\ps2.c
     src\kernel\kernel_net.c
     src\kernel\net\ipv4.c
     src\kernel\net\etherframe.c
@@ -72,8 +77,12 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o ^
     src\kernel\main.o src\kernel\idt.o src\kernel\task.o ^
     src\system\shell\commands.o ^
+    src\system\shell\network_commands.o ^
     src\system\init\main.o ^
     src\system\graphics\wm\wm.o ^
+    src\system\graphics\session.o ^
+    src\system\services\input\input.o ^
+    src\system\loader\app_loader.o ^
     src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o ^
     src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o ^
     src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\net\dhcp.o ^
@@ -82,7 +91,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
     src\system\graphics\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
-    src\kernel\startscreen.o src\kernel\screenshot.o src\kernel\drivers\power.o ^
+    src\kernel\startscreen.o src\kernel\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
     src/kernel/png.o src\kernel\net\dns.o^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
@@ -92,7 +101,7 @@ if not exist "src\boot.bin" ( echo [ERROR] Missing src\boot.bin & exit /b 1 )
 if not exist "src\boot_stage2.bin" ( echo [ERROR] Missing src\boot_stage2.bin & exit /b 1 )
 if not exist "src\kernel\kernel.bin" ( echo [ERROR] Missing src\kernel\kernel.bin & exit /b 1 )
 
-powershell -NoProfile -Command "$p='src\kernel\kernel.bin';$b=[IO.File]::ReadAllBytes($p);if($b.Length -lt 65536){[IO.File]::WriteAllBytes($p,$b+(New-Object byte[](65536-$b.Length)))}"
+powershell -NoProfile -Command "$p='src\kernel\kernel.bin';$b=[IO.File]::ReadAllBytes($p);if($b.Length -lt 98304){[IO.File]::WriteAllBytes($p,$b+(New-Object byte[](98304-$b.Length)))}"
 ::copy /b src\boot.bin+src\boot_stage2.bin+src\kernel\kernel.bin ..\hdd.img >nul
 copy /b "src\boot.bin" + "src\boot_stage2.bin" + "src\kernel\kernel.bin" "..\hdd.img" 1>nul
 powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','ReadWrite');$f.SetLength(33554432);$f.Close()"
@@ -100,7 +109,7 @@ powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','Re
 call :run python inject_sfs.py ..\hdd.img
 copy /y ..\hdd.img os.img >nul
 
-del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o src\system\shell\*.o src\system\init\*.o src\system\graphics\wm\*.o
+del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o src\system\shell\*.o src\system\init\*.o src\system\graphics\wm\*.o src\system\graphics\session.o src\system\services\input\*.o src\system\loader\*.o
 del /q src\apps\notepad\*.o src\apps\viewer\*.o src\system\graphics\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin crash_debug.bin shutdown.bin curl.bin
 

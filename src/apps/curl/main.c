@@ -56,7 +56,7 @@ static uint8_t send_segment(uint8_t flags, const uint8_t* payload, uint16_t leng
     packet[16] = packet[17] = packet[18] = packet[19] = 0;
     for (uint16_t i = 0; i < length; i++) packet[20 + i] = payload[i];
 
-    uint32_t local_ip = os->ipv4_get_local_ip();
+    uint32_t local_ip = os->network.ipv4_get_local_ip();
     pseudo[0] = (uint8_t)(local_ip >> 24);
     pseudo[1] = (uint8_t)(local_ip >> 16);
     pseudo[2] = (uint8_t)(local_ip >> 8);
@@ -74,7 +74,7 @@ static uint8_t send_segment(uint8_t flags, const uint8_t* payload, uint16_t leng
     uint16_t sum = checksum(pseudo, 12 + tcp_length);
     packet[16] = (uint8_t)(sum >> 8);
     packet[17] = (uint8_t)sum;
-    if (!os->ipv4_send(server_ip, TCP_PROTOCOL, packet, tcp_length)) return 0;
+    if (!os->network.ipv4_send(server_ip, TCP_PROTOCOL, packet, tcp_length)) return 0;
 
     if (flags & (TCP_SYN | TCP_FIN)) local_seq++;
     else local_seq += length;
@@ -132,7 +132,7 @@ static void print_number(uint32_t value) {
     char digits[11];
     int count = 0;
     if (!value) {
-        os->term_print("0");
+        os->shell.term_print("0");
         return;
     }
     while (value) {
@@ -141,7 +141,7 @@ static void print_number(uint32_t value) {
     }
     while (count) {
         char digit[2] = { digits[--count], '\0' };
-        os->term_print(digit);
+        os->shell.term_print(digit);
     }
 }
 
@@ -182,7 +182,7 @@ static int run_request(const char* host, const char* path) {
     for (int attempt = 0; attempt < 3 && !connected; attempt++) {
         send_segment(TCP_SYN, 0, 0);
         for (uint32_t poll = 0; poll < 100000 && !connected; poll++) {
-            os->net_poll();
+            os->network.net_poll();
             for (volatile int delay = 0; delay < 50; delay++) __asm__ volatile ("pause");
         }
     }
@@ -201,7 +201,7 @@ static int run_request(const char* host, const char* path) {
     send_segment(TCP_PSH | TCP_ACK, (const uint8_t*)request, (uint16_t)length);
 
     for (uint32_t poll = 0; poll < 400000 && !response_done; poll++) {
-        os->net_poll();
+        os->network.net_poll();
         for (volatile int delay = 0; delay < 50; delay++) __asm__ volatile ("pause");
     }
     return response_len != 0;
@@ -210,7 +210,7 @@ static int run_request(const char* host, const char* path) {
 int main_app(os_api_t* api) {
     if (!api) return -1;
     os = api;
-    const char* args = os->command_args();
+    const char* args = os->shell.command_args();
     char host[128];
     char path[256];
     char output_file[64];
@@ -218,7 +218,7 @@ int main_app(os_api_t* api) {
 
     while (*args == ' ') args++;
     if (!*args || text_equal(args, "--help")) {
-        os->term_print("Usage: curl [-o file] http://host/path\n");
+        os->shell.term_print("Usage: curl [-o file] http://host/path\n");
         return 0;
     }
     if (args[0] == '-' && args[1] == 'o' && args[2] == ' ') {
@@ -230,18 +230,18 @@ int main_app(os_api_t* api) {
         args += i;
     }
     if (!parse_url(args, host, path)) {
-        os->term_print("curl: invalid URL\n");
+        os->shell.term_print("curl: invalid URL\n");
         return -1;
     }
 
-    if (!os->dns_resolve(host, &server_ip)) {
-        os->term_print("curl: DNS lookup failed\n");
+    if (!os->network.dns_resolve(host, &server_ip)) {
+        os->shell.term_print("curl: DNS lookup failed\n");
         return -1;
     }
-    os->ipv4_set_handler(TCP_PROTOCOL, tcp_handler);
+    os->network.ipv4_set_handler(TCP_PROTOCOL, tcp_handler);
     if (!run_request(host, path)) {
-        os->term_print("curl: request failed\n");
-        os->ipv4_set_handler(TCP_PROTOCOL, 0);
+        os->shell.term_print("curl: request failed\n");
+        os->network.ipv4_set_handler(TCP_PROTOCOL, 0);
         return -1;
     }
 
@@ -255,16 +255,16 @@ int main_app(os_api_t* api) {
     }
     if (!body_start) body_start = response_len;
     if (output_file[0]) {
-        int written = os->fs_write(output_file, response + body_start,
+        int written = os->fs.write(output_file, response + body_start,
                                    response_len - body_start);
-        os->term_print(written >= 0 ? "curl: saved " : "curl: save failed\n");
-        if (written >= 0) { print_number(response_len - body_start); os->term_print(" bytes\n"); }
+        os->shell.term_print(written >= 0 ? "curl: saved " : "curl: save failed\n");
+        if (written >= 0) { print_number(response_len - body_start); os->shell.term_print(" bytes\n"); }
     } else {
         for (uint32_t i = 0; i < response_len; i++) {
             char text[2] = { (char)response[i], '\0' };
-            os->term_print(text);
+            os->shell.term_print(text);
         }
     }
-    os->ipv4_set_handler(TCP_PROTOCOL, 0);
+    os->network.ipv4_set_handler(TCP_PROTOCOL, 0);
     return 0;
 }

@@ -13,8 +13,12 @@ nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
 kernel_sources=(
     src/kernel/main.c
     src/system/shell/commands.c
+    src/system/shell/network_commands.c
     src/system/init/main.c
     src/system/graphics/wm/wm.c
+    src/system/graphics/session.c
+    src/system/services/input/input.c
+    src/system/loader/app_loader.c
     src/kernel/idt.c
     src/kernel/startscreen.c
     src/kernel/screenshot.c
@@ -26,6 +30,7 @@ kernel_sources=(
     src/kernel/drivers/serial.c
     src/kernel/drivers/floppy.c
     src/kernel/drivers/power.c
+    src/kernel/drivers/ps2.c
     src/kernel/kernel_net.c
     src/kernel/net/ipv4.c
     src/kernel/net/etherframe.c
@@ -80,8 +85,12 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/task_switch.o \
     src/kernel/main.o \
     src/system/shell/commands.o \
+    src/system/shell/network_commands.o \
     src/system/init/main.o \
     src/system/graphics/wm/wm.o \
+    src/system/graphics/session.o \
+    src/system/services/input/input.o \
+    src/system/loader/app_loader.o \
     src/kernel/idt.o \
     src/kernel/task.o \
     src/kernel/dialog.o \
@@ -112,6 +121,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/screenshot.o \
     src/kernel/png.o \
     src/kernel/drivers/power.o \
+    src/kernel/drivers/ps2.o \
     -o src/kernel/kernel.tmp
 
 objcopy -O binary src/kernel/kernel.tmp src/kernel/kernel.bin
@@ -128,8 +138,8 @@ from pathlib import Path
 path = Path("src/kernel/kernel.bin")
 data = path.read_bytes()
 
-if len(data) < 65536:
-    data += bytes(65536 - len(data))
+if len(data) < 98304:
+    data += bytes(98304 - len(data))
     path.write_bytes(data)
 PY
 
@@ -147,6 +157,9 @@ rm -f src/kernel/*.o
 rm -f src/system/shell/*.o
 rm -f src/system/init/*.o
 rm -f src/system/graphics/wm/*.o
+rm -f src/system/graphics/session.o
+rm -f src/system/services/input/*.o
+rm -f src/system/loader/*.o
 rm -f src/kernel/drivers/*.o
 rm -f src/kernel/net/*.o
 rm -f src/kernel/dialog.o

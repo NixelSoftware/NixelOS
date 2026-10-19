@@ -50,16 +50,16 @@ static void draw_app(Window* w) {
     int y = w->y;
 
     
-    os->fill_rect(x, y, w->w, w->h, COLOR_BG);
+    os->graphics.fill_rect(x, y, w->w, w->h, COLOR_BG);
 
     
-    os->draw_string(x + 10, y + 10, "Floppy Disk Diagnostic", 0x00000080);
-    os->draw_string(x + 10, y + 28, status_msg, COLOR_TEXT);
+    os->graphics.draw_string(x + 10, y + 10, "Floppy Disk Diagnostic", 0x00000080);
+    os->graphics.draw_string(x + 10, y + 28, status_msg, COLOR_TEXT);
 
     
-    os->draw_button(x + 10,  y + 50, 105, 24, "Read Boot (0)", 0);
-    os->draw_button(x + 120, y + 50, 110, 24, "Verify Track 0", 0);
-    os->draw_button(x + 235, y + 50, 95,  24, "Test Write", 0);
+    os->graphics.draw_button(x + 10,  y + 50, 105, 24, "Read Boot (0)", 0);
+    os->graphics.draw_button(x + 120, y + 50, 110, 24, "Verify Track 0", 0);
+    os->graphics.draw_button(x + 235, y + 50, 95,  24, "Test Write", 0);
 
     
     int box_x = x + 10;
@@ -67,10 +67,10 @@ static void draw_app(Window* w) {
     int box_w = w->w - 20;
     int box_h = 160;
 
-    os->fill_rect(box_x, box_y, box_w, box_h, COLOR_HEX_BG);
+    os->graphics.fill_rect(box_x, box_y, box_w, box_h, COLOR_HEX_BG);
 
     if (!data_valid) {
-        os->draw_string(box_x + 10, box_y + 10, "No sector data loaded.", 0x00808080);
+        os->graphics.draw_string(box_x + 10, box_y + 10, "No sector data loaded.", 0x00808080);
         return;
     }
 
@@ -83,21 +83,21 @@ static void draw_app(Window* w) {
 
         
         byte_to_hex((uint8_t)row_offset, hex_out);
-        os->draw_string(draw_x, draw_y, "0x", 0x00800000);
-        os->draw_string(draw_x + 16, draw_y, hex_out, 0x00800000);
-        os->draw_string(draw_x + 32, draw_y, ":", 0x00800000);
+        os->graphics.draw_string(draw_x, draw_y, "0x", 0x00800000);
+        os->graphics.draw_string(draw_x + 16, draw_y, hex_out, 0x00800000);
+        os->graphics.draw_string(draw_x + 32, draw_y, ":", 0x00800000);
 
         draw_x += 45;
 
         
         for (int b = 0; b < 8; b++) {
             byte_to_hex(sector_data[row_offset + b], hex_out);
-            os->draw_string(draw_x, draw_y, hex_out, 0x00000000);
+            os->graphics.draw_string(draw_x, draw_y, hex_out, 0x00000000);
             draw_x += 22;
         }
 
         draw_x += 10;
-        os->draw_string(draw_x, draw_y, "|", 0x00808080);
+        os->graphics.draw_string(draw_x, draw_y, "|", 0x00808080);
         draw_x += 10;
 
         
@@ -107,13 +107,13 @@ static void draw_app(Window* w) {
             ascii_str[b] = (c >= 32 && c <= 126) ? (char)c : '.';
         }
         ascii_str[8] = '\0';
-        os->draw_string(draw_x, draw_y, ascii_str, 0x000000A0);
+        os->graphics.draw_string(draw_x, draw_y, ascii_str, 0x000000A0);
     }
 }
 
 static void refresh_window(Window* w) {
     draw_app(w);
-    os->blit_rect(w->x, w->y, w->w, w->h);
+    os->graphics.blit_rect(w->x, w->y, w->w, w->h);
 }
 
 static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t btn) {
@@ -124,7 +124,7 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
         str_copy(status_msg, "Reading sector 0 (Boot Sector)...");
         refresh_window(w);
 
-        if (os->floppy_read(0, 1, sector_data)) {
+        if (os->devices.floppy_read(0, 1, sector_data)) {
             data_valid = 1;
             current_lba = 0;
             if (sector_data[510] == 0x55 && sector_data[511] == 0xAA) {
@@ -147,7 +147,7 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
 
         int ok = 1;
         for (uint32_t sec = 0; sec < 18; sec++) {
-            if (!os->floppy_read(sec, 1, sector_data)) {
+            if (!os->devices.floppy_read(sec, 1, sector_data)) {
                 ok = 0;
                 char err[48] = "Failed reading track 0, sector: ";
                 char num[8];
@@ -178,9 +178,9 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
             write_pattern[i] = (uint8_t)(i ^ 0xA5);
         }
 
-        if (os->floppy_write(2879, 1, write_pattern)) {
+        if (os->devices.floppy_write(2879, 1, write_pattern)) {
             uint8_t read_back[512];
-            if (os->floppy_read(2879, 1, read_back)) {
+            if (os->devices.floppy_read(2879, 1, read_back)) {
                 int matched = 1;
                 for (int i = 0; i < 512; i++) {
                     if (read_back[i] != write_pattern[i]) {
@@ -218,12 +218,12 @@ void main_app(os_api_t* api) {
     win.handle_mouse = handle_mouse;
     win.handle_key = 0;
 
-    if (os->floppy_init) {
-        if (!os->floppy_init()) {
+    if (os->devices.floppy_init) {
+        if (!os->devices.floppy_init()) {
             str_copy(status_msg, "Floppy drive not detected or not ready.");
         }
     }
 
-    os->register_window(&win);
-    os->term_print("Floppy Diagnostic is running.\n");
+    os->windows.register_window(&win);
+    os->shell.term_print("Floppy Diagnostic is running.\n");
 }

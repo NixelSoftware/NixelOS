@@ -1,4 +1,5 @@
 #include "commands.h"
+#include "network_commands.h"
 
 static os_api_t* shell_api;
 static shell_output_fn shell_output;
@@ -42,7 +43,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
     shell_output = output;
     shell_clear = clear;
     if (!shell_api) return;
-    if (shell_api->shell_set_output) shell_api->shell_set_output(output);
+    if (shell_api->shell.shell_set_output) shell_api->shell.shell_set_output(output);
 
     if (command[0] == '>' && command[1] == ' ') command += 2;
     while (*command == ' ') command++;
@@ -56,10 +57,10 @@ void shell_execute_command(const char* command, shell_output_fn output,
     } else if (has_prefix(command, "rm ")) {
         const char* filename = command + 3;
         while (*filename == ' ') filename++;
-        print(shell_api->fs_delete(filename) ? "File deleted.\n" : "Failed to delete file.\n");
+        print(shell_api->fs.delete_file(filename) ? "File deleted.\n" : "Failed to delete file.\n");
     } else if (has_prefix(command, "ls") || has_prefix(command, "dir")) {
         char files[FS_MAX_FILES][FS_MAX_FILENAME];
-        int count = shell_api->fs_list(files);
+        int count = shell_api->fs.list(files);
         if (count == 0) print("No files found.\n");
         else for (int i = 0; i < count; i++) { print(files[i]); print("\n"); }
     } else if (has_prefix(command, "cat ")) {
@@ -68,7 +69,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         if (*filename == '\0') print("Usage: cat <filename>\n");
         else {
             char buffer[512];
-            int bytes = shell_api->fs_read(filename, (uint8_t*)buffer, 511);
+            int bytes = shell_api->fs.read(filename, (uint8_t*)buffer, 511);
             if (bytes < 0) print("File not found!\n");
             else { buffer[bytes] = '\0'; print(buffer); print("\n"); }
         }
@@ -76,15 +77,15 @@ void shell_execute_command(const char* command, shell_output_fn output,
         const char* filename = command + 5;
         while (*filename == ' ') filename++;
         if (*filename == '\0') print("Usage: view <filename.bmp>\n");
-        else if (shell_api->shell_open_viewer(filename)) {
+        else if (shell_api->shell.shell_open_viewer(filename)) {
             print("Loaded "); print(filename); print(" in Viewer\n");
         } else print("Failed to load BMP!\n");
     } else if (has_prefix(command, "ifconfig")) {
-        if (shell_api->shell_run_ifconfig) shell_api->shell_run_ifconfig();
+        shell_network_ifconfig(shell_output);
     } else if (has_prefix(command, "netdiag")) {
-        if (shell_api->shell_run_netdiag) shell_api->shell_run_netdiag();
+        shell_network_netdiag(shell_output);
     } else if (has_prefix(command, "ping ")) {
-        if (shell_api->shell_run_ping) shell_api->shell_run_ping(command + 5);
+        shell_network_ping(command + 5, shell_output);
     } else if (has_prefix(command, "echo ")) {
         const char* text = command + 5;
         const char* redirect = 0;
@@ -100,7 +101,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
             const char* filename = redirect + 1;
             while (*filename == ' ') filename++;
             if (*filename == '\0') print("Usage: echo <text> > <file>\n");
-            else if (shell_api->fs_write(filename, (const uint8_t*)contents, length) >= 0) {
+            else if (shell_api->fs.write(filename, (const uint8_t*)contents, length) >= 0) {
                 print("Saved to "); print(filename); print("\n");
             } else print("Write failed!\n");
         }
@@ -116,8 +117,8 @@ void shell_execute_command(const char* command, shell_output_fn output,
         int out = 0;
         while (command[length] && out < FS_MAX_FILENAME - 1) shell_args[out++] = command[length++];
         shell_args[out] = '\0';
-        int result = shell_api->shell_launch_app ?
-            shell_api->shell_launch_app(name, shell_args) : -1;
+        int result = shell_api->shell.launch_app ?
+            shell_api->shell.launch_app(name, shell_args) : -1;
         if (result == 0) return;
         if (result == -2) print("Invalid executable format.\n");
         else print("Unknown cmd. Type 'help'\n");
@@ -126,4 +127,5 @@ void shell_execute_command(const char* command, shell_output_fn output,
 
 void shell_initialize(os_api_t* api) {
     shell_api = api;
+    shell_network_initialize(api);
 }

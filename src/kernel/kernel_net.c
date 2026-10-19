@@ -2,6 +2,11 @@
 #include "drivers/net.h"
 #include "drivers/net_e1000.h"
 #include "drivers/serial.h"
+#include "net/arp.h"
+#include "net/dhcp.h"
+#include "net/icmp.h"
+#include "net/ipv4.h"
+#include "net/udp.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    0xCFC
@@ -141,4 +146,32 @@ void sys_net_get_diagnostics(net_diagnostics_t* d) {
     } else if (net_driver_type == 0) {
         net_get_diagnostics(d);
     }
+}
+
+void sys_net_initialize_stack(void) {
+    uint64_t mac_value = sys_net_get_mac_address();
+    uint8_t mac[6];
+    for (int i = 5; i >= 0; i--) {
+        mac[i] = (uint8_t)mac_value;
+        mac_value >>= 8;
+    }
+
+    ipv4_init(0, mac, 0, 0);
+    arp_init(0, mac);
+    icmp_init();
+    udp_init();
+}
+
+void sys_net_configure_address(void) {
+    dhcp_lease_t lease;
+    if (!dhcp_request(&lease, 100000))
+        ipv4_set_configuration(0x0A0000E3, 0x0A000002, 0xFFFFFF00);
+}
+
+void sys_net_get_configuration(uint32_t* subnet_mask, uint32_t* gateway,
+                               uint8_t* dhcp_leased) {
+    const dhcp_lease_t* lease = dhcp_get_lease();
+    if (subnet_mask) *subnet_mask = lease->leased ? lease->subnet_mask : 0xFFFFFF00;
+    if (gateway) *gateway = lease->leased ? lease->gateway : 0x0A000002;
+    if (dhcp_leased) *dhcp_leased = lease->leased;
 }

@@ -42,25 +42,25 @@ static void load_current_file(void) {
     for (int i = 0; i < MAX_FILE_SIZE; i++) {
         file_buffer[i] = 0;
     }
-    total_bytes = os->fs_read(target_file, file_buffer, MAX_FILE_SIZE);
+    total_bytes = os->fs.read(target_file, file_buffer, MAX_FILE_SIZE);
     if (total_bytes < 0) total_bytes = 0;
     current_offset = 0;
 }
 
 static void draw_sunken_panel(int32_t x, int32_t y, int32_t w, int32_t h) {
-    os->fill_rect(x, y, w, h, COLOR_BLACK);
-    os->fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    os->fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    os->fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    os->fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, w, h, COLOR_BLACK);
+    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
+    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
 }
 
 void hex_draw_content(Window* win) {
-    os->draw_string(win->x + 10, win->y + 24, "File: ", COLOR_BLACK);
-    os->draw_string(win->x + 50, win->y + 24, target_file, COLOR_BLACK);
+    os->graphics.draw_string(win->x + 10, win->y + 24, "File: ", COLOR_BLACK);
+    os->graphics.draw_string(win->x + 50, win->y + 24, target_file, COLOR_BLACK);
 
-    os->draw_button(win->x + win->w - 130, win->y + 22, 55, 18, "Prev", 0);
-    os->draw_button(win->x + win->w - 70, win->y + 22, 55, 18, "Next", 0);
+    os->graphics.draw_button(win->x + win->w - 130, win->y + 22, 55, 18, "Prev", 0);
+    os->graphics.draw_button(win->x + win->w - 70, win->y + 22, 55, 18, "Next", 0);
 
     int32_t panel_x = win->x + 10;
     int32_t panel_y = win->y + 44;
@@ -68,7 +68,7 @@ void hex_draw_content(Window* win) {
     int32_t panel_h = win->h - 52;
     draw_sunken_panel(panel_x, panel_y, panel_w, panel_h);
 
-    os->draw_string(panel_x + 6, panel_y + 4, "OFFSET  00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII", 0x00A0A0A0);
+    os->graphics.draw_string(panel_x + 6, panel_y + 4, "OFFSET  00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII", 0x00A0A0A0);
 
     char offset_str[6] = "0000:";
     char hex_str[4] = "00 ";
@@ -81,7 +81,7 @@ void hex_draw_content(Window* win) {
         int row_y = panel_y + 18 + (r * 11);
 
         u16_to_hex((uint16_t)row_offset, offset_str);
-        os->draw_string(panel_x + 6, row_y, offset_str, COLOR_ADDR_TEXT);
+        os->graphics.draw_string(panel_x + 6, row_y, offset_str, COLOR_ADDR_TEXT);
 
         for (int c = 0; c < BYTES_PER_ROW; c++) {
             int byte_idx = row_offset + c;
@@ -89,7 +89,7 @@ void hex_draw_content(Window* win) {
 
             if (byte_idx < total_bytes) {
                 byte_to_hex(file_buffer[byte_idx], hex_str);
-                os->draw_string(hx, row_y, hex_str, COLOR_HEX_TEXT);
+                os->graphics.draw_string(hx, row_y, hex_str, COLOR_HEX_TEXT);
             }
         }
 
@@ -99,7 +99,7 @@ void hex_draw_content(Window* win) {
             if (byte_idx < total_bytes) {
                 uint8_t ch = file_buffer[byte_idx];
                 ascii_str[0] = (ch >= 32 && ch <= 126) ? (char)ch : '.';
-                os->draw_string(ascii_x_start + (c * 8), row_y, ascii_str, COLOR_ASCII_TEXT);
+                os->graphics.draw_string(ascii_x_start + (c * 8), row_y, ascii_str, COLOR_ASCII_TEXT);
             }
         }
     }
@@ -114,7 +114,7 @@ void hex_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
             current_offset = 0;
         }
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
@@ -123,14 +123,14 @@ void hex_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
             current_offset += (VISIBLE_ROWS * BYTES_PER_ROW);
         }
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 }
 
 void hex_handle_key(Window* win, char c) {
     if ((uint8_t)c == 0x01) {
-        os->unregister_window(win);
+        os->windows.unregister_window(win);
         return;
     }
 
@@ -139,7 +139,7 @@ void hex_handle_key(Window* win, char c) {
             current_offset += (VISIBLE_ROWS * BYTES_PER_ROW);
         }
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
@@ -150,7 +150,7 @@ void hex_handle_key(Window* win, char c) {
             current_offset = 0;
         }
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
@@ -159,19 +159,19 @@ void hex_handle_key(Window* win, char c) {
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
     } else if (c == '2') {
         char name[] = "mines.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
     } else if (c == '3') {
         char name[] = "calc.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
         hex_draw_content(win);
-        os->blit_all();
+        os->graphics.blit_all();
     }
 }
 
@@ -192,7 +192,7 @@ int main_app(os_api_t* api) {
     hex_window.handle_key = hex_handle_key;
     hex_window.handle_mouse = hex_handle_mouse;
 
-    os->register_window(&hex_window);
-    os->term_print("Hex Viewer is running.\n");
+    os->windows.register_window(&hex_window);
+    os->shell.term_print("Hex Viewer is running.\n");
     return 0;
 }

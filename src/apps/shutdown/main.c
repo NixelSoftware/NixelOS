@@ -4,10 +4,10 @@
 int main_app(os_api_t* os) {
     if (!os) return -1;
 
-    os->term_print("Shutting down the system...\n");
+    os->shell.term_print("Shutting down the system...\n");
 
-    if (os->shutdown) {
-        os->shutdown();
+    if (os->system.shutdown) {
+        os->system.shutdown();
     }
 
     return 0;

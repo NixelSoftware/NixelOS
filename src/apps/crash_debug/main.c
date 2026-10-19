@@ -3,7 +3,7 @@
 
 int main_app(os_api_t* os) {
     if (os) {
-        os->term_print("Triggering kernel panic...\n");
+        os->shell.term_print("Triggering kernel panic...\n");
     }
 
     __asm__ volatile ("ud2");

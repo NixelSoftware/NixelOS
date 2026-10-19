@@ -170,7 +170,7 @@ static uint8_t send_tcp_seg(uint8_t flags, const uint8_t* payload, uint16_t payl
         packet[20 + i] = payload[i];
     }
 
-    uint32_t local_ip = os->ipv4_get_local_ip();
+    uint32_t local_ip = os->network.ipv4_get_local_ip();
     pseudo[0] = (uint8_t)(local_ip >> 24);
     pseudo[1] = (uint8_t)(local_ip >> 16);
     pseudo[2] = (uint8_t)(local_ip >> 8);
@@ -190,7 +190,7 @@ static uint8_t send_tcp_seg(uint8_t flags, const uint8_t* payload, uint16_t payl
     packet[16] = (uint8_t)(csum >> 8);
     packet[17] = (uint8_t)(csum & 0xFF);
 
-    uint8_t ok = os->ipv4_send(target_ip, TCP_PROTOCOL, packet, tcp_len);
+    uint8_t ok = os->network.ipv4_send(target_ip, TCP_PROTOCOL, packet, tcp_len);
     if (ok) {
         if (flags & (TCP_SYN | TCP_FIN)) local_seq++;
         else local_seq += payload_len;
@@ -258,7 +258,7 @@ static int fetch_image_resource(const char* host, const char* path, uint8_t* out
     for (int attempt = 0; attempt < 3 && !connected; attempt++) {
         send_tcp_seg(TCP_SYN, 0, 0);
         for (uint32_t poll = 0; poll < 60000; poll++) {
-            os->net_poll();
+            os->network.net_poll();
             if (net_state == TCP_ST_ESTABLISHED) {
                 connected = 1;
                 break;
@@ -288,7 +288,7 @@ static int fetch_image_resource(const char* host, const char* path, uint8_t* out
     send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
 
     for (uint32_t poll = 0; poll < 200000; poll++) {
-        os->net_poll();
+        os->network.net_poll();
         if (img_done || (net_state == TCP_ST_CLOSED && img_raw_len > 0)) {
             break;
         }
@@ -608,11 +608,11 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
 }
 
 static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t bg_col) {
-    os->fill_rect(x, y, w, h, bg_col);
-    os->fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    os->fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    os->fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    os->fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, w, h, bg_col);
+    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
+    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
 }
 
 static void browser_draw(Window* win) {
@@ -621,22 +621,22 @@ static void browser_draw(Window* win) {
     int32_t w = win->w;
     int32_t h = win->h - 20;
 
-    os->fill_rect(x + 2, y, w - 4, h - 2, COLOR_WIN_BG);
+    os->graphics.fill_rect(x + 2, y, w - 4, h - 2, COLOR_WIN_BG);
 
     
-    os->draw_string(x + 10, y + 8, "URL:", COLOR_BLACK);
+    os->graphics.draw_string(x + 10, y + 8, "URL:", COLOR_BLACK);
     int32_t url_x = x + 44;
     int32_t url_y = y + 4;
     int32_t url_w = w - 110;
     int32_t url_h = 20;
     draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_WHITE);
-    os->draw_string(url_x + 4, url_y + 4, url_input, COLOR_BLACK);
+    os->graphics.draw_string(url_x + 4, url_y + 4, url_input, COLOR_BLACK);
 
     if (win->focused) {
-        os->draw_string(url_x + 4 + (url_cursor * 8), url_y + 4, "_", COLOR_BLACK);
+        os->graphics.draw_string(url_x + 4 + (url_cursor * 8), url_y + 4, "_", COLOR_BLACK);
     }
 
-    os->draw_button(x + w - 60, y + 3, 50, 22, "Go", 0);
+    os->graphics.draw_button(x + w - 60, y + 3, 50, 22, "Go", 0);
 
     
     int32_t canvas_x = x + 10;
@@ -652,7 +652,7 @@ static void browser_draw(Window* win) {
 
             int img_x = canvas_x + 8 + (lines[i].indent * 6);
             int idx = lines[i].image_index;
-            os->png_render(image_pool[idx], image_sizes[idx],
+            os->graphics.png_render(image_pool[idx], image_sizes[idx],
                            img_x, draw_y, PNG_TARGET_W, PNG_TARGET_H);
             draw_y += PNG_TARGET_H + 4;
         } else {
@@ -660,9 +660,9 @@ static void browser_draw(Window* win) {
 
             if (lines[i].text[0] != '\0') {
                 int row_x = canvas_x + 8 + (lines[i].indent * 6);
-                os->draw_string(row_x, draw_y, lines[i].text, lines[i].color);
+                os->graphics.draw_string(row_x, draw_y, lines[i].text, lines[i].color);
                 if (lines[i].is_bold) {
-                    os->draw_string(row_x + 1, draw_y, lines[i].text, lines[i].color);
+                    os->graphics.draw_string(row_x + 1, draw_y, lines[i].text, lines[i].color);
                 }
             }
             draw_y += 12;
@@ -671,7 +671,7 @@ static void browser_draw(Window* win) {
 
     
     draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_WIN_BG);
-    os->draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
+    os->graphics.draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
 }
 
 static int copy_string(char* dst, int max_len, const char* src) {
@@ -798,12 +798,12 @@ static int resolve_redirect(const char* location, const char* current_host,
 }
 
 static int fetch_http_document(const char* host, const char* path) {
-    if (!os->dns_resolve(host, &target_ip)) return -1;
+    if (!os->network.dns_resolve(host, &target_ip)) return -1;
 
     uint32_t gw = (10U << 24) | (0U << 16) | (1U << 8) | 2U;
-    os->icmp_request_echo(gw, 0x9999, 1, (const uint8_t*)"probe", 5);
+    os->network.icmp_request_echo(gw, 0x9999, 1, (const uint8_t*)"probe", 5);
     for (int p = 0; p < 20000; p++) {
-        os->net_poll();
+        os->network.net_poll();
         for (volatile int d = 0; d < 50; d++) __asm__ volatile ("pause");
     }
 
@@ -818,7 +818,7 @@ static int fetch_http_document(const char* host, const char* path) {
     for (int attempt = 0; attempt < 5 && !connected; attempt++) {
         send_tcp_seg(TCP_SYN, 0, 0);
         for (uint32_t poll = 0; poll < 100000; poll++) {
-            os->net_poll();
+            os->network.net_poll();
             if (net_state == TCP_ST_ESTABLISHED) {
                 connected = 1;
                 break;
@@ -830,13 +830,13 @@ static int fetch_http_document(const char* host, const char* path) {
     if (!connected) {
         set_status("Connection failed");
         browser_draw(&browser_win);
-        os->blit_all();
+        os->graphics.blit_all();
         return -2;
     }
 
     set_status("Requesting document...");
     browser_draw(&browser_win);
-    os->blit_all();
+    os->graphics.blit_all();
 
     char req[384];
     int p = 0;
@@ -863,7 +863,7 @@ static int fetch_http_document(const char* host, const char* path) {
     send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
 
     for (uint32_t poll = 0; poll < 400000; poll++) {
-        os->net_poll();
+        os->network.net_poll();
         if (http_done || (net_state == TCP_ST_CLOSED && http_raw_len > 0)) {
             break;
         }
@@ -885,27 +885,27 @@ static void browser_fetch(void) {
         !parse_url(current_url, host, sizeof(host), path, sizeof(path))) {
         set_status("Invalid URL");
         browser_draw(&browser_win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
     for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
         set_status(redirect == 0 ? "Connecting..." : "Following redirect...");
         browser_draw(&browser_win);
-        os->blit_all();
+        os->graphics.blit_all();
 
         int status = fetch_http_document(host, path);
         request_post = 0;
         if (status < 0) {
             set_status(status == -1 ? "DNS lookup failed" : "Connection failed");
             browser_draw(&browser_win);
-            os->blit_all();
+            os->graphics.blit_all();
             return;
         }
         if (status == 0) {
             set_status("Invalid HTTP response");
             browser_draw(&browser_win);
-            os->blit_all();
+            os->graphics.blit_all();
             return;
         }
         if (status >= 300 && status < 400) {
@@ -915,7 +915,7 @@ static void browser_fetch(void) {
                 !parse_url(current_url, host, sizeof(host), path, sizeof(path))) {
                 set_status("Redirect failed");
                 browser_draw(&browser_win);
-                os->blit_all();
+                os->graphics.blit_all();
                 return;
             }
             copy_string(url_input, sizeof(url_input), current_url);
@@ -926,18 +926,18 @@ static void browser_fetch(void) {
         if (status < 200 || status >= 300) {
             set_status("HTTP error");
             browser_draw(&browser_win);
-            os->blit_all();
+            os->graphics.blit_all();
             return;
         }
         parse_and_layout_html((const char*)http_raw_buf, http_raw_len);
         set_status("Document Loaded");
         browser_draw(&browser_win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
     browser_draw(&browser_win);
-    os->blit_all();
+    os->graphics.blit_all();
 }
 
 static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
@@ -949,8 +949,8 @@ static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t bt
     int32_t btn_y2 = 46;
 
     if (lx >= btn_x1 && lx <= btn_x2 && ly >= btn_y1 && ly <= btn_y2) {
-        os->draw_button(win->x + win->w - 60, win->y + 20 + 3, 50, 22, "Go", 1);
-        os->blit_rect(win->x + win->w - 60, win->y + 20 + 3, 50, 22);
+        os->graphics.draw_button(win->x + win->w - 60, win->y + 20 + 3, 50, 22, "Go", 1);
+        os->graphics.blit_rect(win->x + win->w - 60, win->y + 20 + 3, 50, 22);
 
         browser_fetch();
         return;
@@ -975,7 +975,7 @@ static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t bt
             active_control = i;
             if (controls[i].type == CONTROL_CHECKBOX || controls[i].type == CONTROL_RADIO) {
                 controls[i].checked = controls[i].type == CONTROL_RADIO ? 1 : !controls[i].checked;
-                browser_draw(win); os->blit_all();
+                browser_draw(win); os->graphics.blit_all();
             } else if (controls[i].type == CONTROL_SUBMIT) {
                 request_body_len = 0;
                 for (int j = 0; j < num_controls; j++) {
@@ -1004,7 +1004,7 @@ static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t bt
                 }
                 browser_fetch();
             } else if (controls[i].type == CONTROL_TEXT || controls[i].type == CONTROL_PASSWORD) {
-                control_editing = 1; set_status("Editing form field"); browser_draw(win); os->blit_all();
+                control_editing = 1; set_status("Editing form field"); browser_draw(win); os->graphics.blit_all();
             }
             return;
         }
@@ -1015,7 +1015,7 @@ static void browser_handle_key(Window* win, char c) {
     uint8_t key = (uint8_t)c;
 
     if (key == 0x01 || key == 27) {
-        os->unregister_window(win);
+        os->windows.unregister_window(win);
         return;
     }
 
@@ -1029,7 +1029,7 @@ static void browser_handle_key(Window* win, char c) {
         if (scroll_y > 0) {
             scroll_y--;
             browser_draw(win);
-            os->blit_all();
+            os->graphics.blit_all();
         }
         return;
     }
@@ -1037,7 +1037,7 @@ static void browser_handle_key(Window* win, char c) {
         scroll_y -= (visible_rows / 2);
         if (scroll_y < 0) scroll_y = 0;
         browser_draw(win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
@@ -1046,7 +1046,7 @@ static void browser_handle_key(Window* win, char c) {
         if (scroll_y < max_scroll) {
             scroll_y++;
             browser_draw(win);
-            os->blit_all();
+            os->graphics.blit_all();
         }
         return;
     }
@@ -1054,12 +1054,12 @@ static void browser_handle_key(Window* win, char c) {
         scroll_y += (visible_rows / 2);
         if (scroll_y > max_scroll) scroll_y = max_scroll;
         browser_draw(win);
-        os->blit_all();
+        os->graphics.blit_all();
         return;
     }
 
     if (c == '\n' || c == '\r') {
-        if (control_editing && active_control >= 0) { control_editing = 0; set_status("Ready"); browser_draw(win); os->blit_all(); }
+        if (control_editing && active_control >= 0) { control_editing = 0; set_status("Ready"); browser_draw(win); os->graphics.blit_all(); }
         else browser_fetch();
         return;
     }
@@ -1068,7 +1068,7 @@ static void browser_handle_key(Window* win, char c) {
         control_t* ctl = &controls[active_control]; int n = 0; while (ctl->value[n] && n < CONTROL_VALUE_LEN - 1) n++;
         if (c == '\b') { if (n) ctl->value[n - 1] = 0; }
         else if (c >= ' ' && c <= '~' && n < CONTROL_VALUE_LEN - 1) { ctl->value[n] = c; ctl->value[n + 1] = 0; }
-        browser_draw(win); os->blit_all(); return;
+        browser_draw(win); os->graphics.blit_all(); return;
     }
 
     if (c == '\b') {
@@ -1076,7 +1076,7 @@ static void browser_handle_key(Window* win, char c) {
             url_cursor--;
             url_input[url_cursor] = '\0';
             browser_draw(win);
-            os->blit_all();
+            os->graphics.blit_all();
         }
         return;
     }
@@ -1085,7 +1085,7 @@ static void browser_handle_key(Window* win, char c) {
         url_input[url_cursor++] = c;
         url_input[url_cursor] = '\0';
         browser_draw(win);
-        os->blit_all();
+        os->graphics.blit_all();
     }
 }
 
@@ -1093,7 +1093,7 @@ int main_app(os_api_t* api) {
     if (!api) return -1;
     os = api;
 
-    os->ipv4_set_handler(TCP_PROTOCOL, browser_tcp_rx);
+    os->network.ipv4_set_handler(TCP_PROTOCOL, browser_tcp_rx);
 
     browser_win.x = 80;
     browser_win.y = 40;
@@ -1112,8 +1112,8 @@ int main_app(os_api_t* api) {
     while (default_page[dlen]) dlen++;
     parse_and_layout_html(default_page, dlen);
 
-    os->register_window(&browser_win);
-    os->term_print("Browser started.\n");
+    os->windows.register_window(&browser_win);
+    os->shell.term_print("Browser started.\n");
 
     browser_fetch();
     

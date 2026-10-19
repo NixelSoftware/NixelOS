@@ -90,7 +90,7 @@ void desktop_draw(void) {
                 if (px < 0 || px >= SCREEN_WIDTH) continue;
                 uint8_t val = sprite[r][c];
                 if (val != 0) {
-                    desktop_api->put_pixel(px, py, resolve_color(val));
+                    desktop_api->graphics.put_pixel(px, py, resolve_color(val));
                 }
             }
         }
@@ -99,11 +99,11 @@ void desktop_draw(void) {
         int text_y = icon->y + 20;
 
         if (icon->selected) {
-            desktop_api->fill_rect(text_x - 2, text_y - 1, 36, 11, COLOR_TITLE_BAR);
-            desktop_api->draw_string(text_x, text_y, icon->label, COLOR_WHITE);
+            desktop_api->graphics.fill_rect(text_x - 2, text_y - 1, 36, 11, COLOR_TITLE_BAR);
+            desktop_api->graphics.draw_string(text_x, text_y, icon->label, COLOR_WHITE);
         } else {
-            desktop_api->draw_string(text_x + 1, text_y + 1, icon->label, COLOR_BLACK);
-            desktop_api->draw_string(text_x, text_y, icon->label, COLOR_WHITE);
+            desktop_api->graphics.draw_string(text_x + 1, text_y + 1, icon->label, COLOR_BLACK);
+            desktop_api->graphics.draw_string(text_x, text_y, icon->label, COLOR_WHITE);
         }
     }
 }

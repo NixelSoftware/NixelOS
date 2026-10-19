@@ -41,30 +41,30 @@ void files_draw_content(Window* win) {
     int32_t box_h = win->h - 60;
 
     
-    os->fill_rect(box_x, box_y, box_w, box_h, COLOR_WHITE);
-    os->fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
-    os->fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
-    os->fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
-    os->fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(box_x, box_y, box_w, box_h, COLOR_WHITE);
+    os->graphics.fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
+    os->graphics.fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
 
     
-    os->draw_string(box_x + 6, box_y + 4, "Name", COLOR_DARK_GRAY);
-    os->draw_string(box_x + 180, box_y + 4, "Size", COLOR_DARK_GRAY);
-    os->fill_rect(box_x + 4, box_y + 16, box_w - 8, 1, COLOR_DARK_GRAY);
+    os->graphics.draw_string(box_x + 6, box_y + 4, "Name", COLOR_DARK_GRAY);
+    os->graphics.draw_string(box_x + 180, box_y + 4, "Size", COLOR_DARK_GRAY);
+    os->graphics.fill_rect(box_x + 4, box_y + 16, box_w - 8, 1, COLOR_DARK_GRAY);
 
     
     for (int i = 0; i < file_count && i < 10; i++) {
         int row_y = box_y + 20 + (i * 14);
 
         if (i == selected_file) {
-            os->fill_rect(box_x + 2, row_y - 2, box_w - 4, 14, COLOR_SELECT_BG);
-            os->draw_string(box_x + 6, row_y, file_list[i], COLOR_WHITE);
+            os->graphics.fill_rect(box_x + 2, row_y - 2, box_w - 4, 14, COLOR_SELECT_BG);
+            os->graphics.draw_string(box_x + 6, row_y, file_list[i], COLOR_WHITE);
         } else {
-            os->draw_string(box_x + 6, row_y, file_list[i], COLOR_BLACK);
+            os->graphics.draw_string(box_x + 6, row_y, file_list[i], COLOR_BLACK);
         }
 
         uint8_t dummy[1];
-        int size = os->fs_read(file_list[i], dummy, 0);
+        int size = os->fs.read(file_list[i], dummy, 0);
         if (size >= 0) {
             char size_str[16];
             itoa(size, size_str);
@@ -73,15 +73,15 @@ void files_draw_content(Window* win) {
             size_str[len++] = ' ';
             size_str[len++] = 'B';
             size_str[len] = '\0';
-            os->draw_string(box_x + 180, row_y, size_str, (i == selected_file) ? COLOR_WHITE : COLOR_DARK_GRAY);
+            os->graphics.draw_string(box_x + 180, row_y, size_str, (i == selected_file) ? COLOR_WHITE : COLOR_DARK_GRAY);
         }
     }
 
     
     char count_str[16];
     itoa(file_count, count_str);
-    os->draw_string(win->x + 10, win->y + win->h - 24, "Total files: ", COLOR_BLACK);
-    os->draw_string(win->x + 110, win->y + win->h - 24, count_str, COLOR_BLACK);
+    os->graphics.draw_string(win->x + 10, win->y + win->h - 24, "Total files: ", COLOR_BLACK);
+    os->graphics.draw_string(win->x + 110, win->y + win->h - 24, count_str, COLOR_BLACK);
 }
 
 void files_handle_key(Window* win, char c) {
@@ -95,7 +95,7 @@ void files_handle_key(Window* win, char c) {
             selected_file--;
         }
     } else if ((uint8_t)c == 0x01) { 
-        os->unregister_window(&files_window);
+        os->windows.unregister_window(&files_window);
     }
 }
 
@@ -104,7 +104,7 @@ int main_app(os_api_t* api) {
     if (!api) return -1;
     os = api;
 
-    file_count = os->fs_list(file_list);
+    file_count = os->fs.list(file_list);
     selected_file = 0;
 
     
@@ -119,8 +119,8 @@ int main_app(os_api_t* api) {
     files_window.handle_key = files_handle_key;
 
     
-    os->register_window(&files_window);
-    os->term_print("File Explorer is running.\n");
+    os->windows.register_window(&files_window);
+    os->shell.term_print("File Explorer is running.\n");
 
     return 0;
 }

@@ -29,12 +29,12 @@ static void str_copy(char* dest, const char* src, int max) {
 
 static void draw_dialog_button(int32_t x, int32_t y, int32_t w, int32_t h, const char* label) {
     if (!os) return;
-    os->fill_rect(x, y, w, h, COLOR_WIN_BG);
-    os->fill_rect(x, y, w, 1, COLOR_WHITE);
-    os->fill_rect(x, y, 1, h, COLOR_WHITE);
-    os->fill_rect(x, y + h - 1, w, 1, COLOR_DARK_GRAY);
-    os->fill_rect(x + w - 1, y, 1, h, COLOR_DARK_GRAY);
-    os->draw_string(x + (w / 2) - 8, y + 4, label, COLOR_BLACK);
+    os->graphics.fill_rect(x, y, w, h, COLOR_WIN_BG);
+    os->graphics.fill_rect(x, y, w, 1, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, 1, h, COLOR_WHITE);
+    os->graphics.fill_rect(x, y + h - 1, w, 1, COLOR_DARK_GRAY);
+    os->graphics.fill_rect(x + w - 1, y, 1, h, COLOR_DARK_GRAY);
+    os->graphics.draw_string(x + (w / 2) - 8, y + 4, label, COLOR_BLACK);
 }
 
 static void dialog_draw_content(Window* win) {
@@ -47,12 +47,12 @@ static void dialog_draw_content(Window* win) {
         for (int c = 0; c < 16; c++) {
             uint32_t pixel = icon_info_16x16[r * 16 + c];
             if (pixel != ICON_TRANS) {
-                os->fill_rect(icon_x + c, icon_y + r, 1, 1, pixel);
+                os->graphics.fill_rect(icon_x + c, icon_y + r, 1, 1, pixel);
             }
         }
     }
 
-    os->draw_string(win->x + 40, win->y + 34, dialog_msg_buf, COLOR_BLACK);
+    os->graphics.draw_string(win->x + 40, win->y + 34, dialog_msg_buf, COLOR_BLACK);
 
     int32_t btn_w = 60;
     int32_t btn_h = 22;
@@ -66,7 +66,7 @@ static void dialog_close(void) {
     dialog_window.visible = 0;
     dialog_window.focused = 0;
     dialog_active = 0;
-    os->unregister_window(&dialog_window);
+    os->windows.unregister_window(&dialog_window);
 }
 
 static void dialog_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
@@ -112,6 +112,6 @@ void show_info_dialog(const char* title, const char* message) {
     dialog_window.handle_mouse = dialog_handle_mouse;
     dialog_window.handle_key = dialog_handle_key;
 
-    os->register_window(&dialog_window);
+    os->windows.register_window(&dialog_window);
     dialog_active = 1;
 }
