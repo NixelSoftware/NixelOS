@@ -19,6 +19,7 @@
 #include "net/dhcp.h"
 #include "net/udp.h"
 #include "dialog.h"
+#include "startscreen.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
 #include "../apps/terminal/terminal.h"
@@ -967,15 +968,29 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     debug_print("[INIT] Display init...\n");
 
     display_init(lfb_address, bpp, pitch);
+
+    startscreen_show("Starting Desktop...", 100);
+    //render_screen();
+    //needs_redraw = 0;
+
+    startscreen_show("Initializing IDT...", 5);
+
     debug_print("[INIT] IDT init...\n");
 
     idt_init();
+
+    startscreen_show("Configuring PIT...", 15);
+
     debug_print("[INIT] PIT init...\n");
 
     pit_init(100);
 
+    startscreen_show("Detecting Network Adapter...", 25);
+
     debug_print("[INIT] Net init...\n");
     sys_net_init(0);
+
+    startscreen_show("Configuring IPv4", 35);
     {
         uint64_t mac_value = net_get_mac_address();
         uint8_t mac[6];
@@ -989,6 +1004,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     icmp_init();
     icmp_set_echo_reply_handler(ping_reply);
     udp_init();
+    startscreen_show("Requesting DHCP Lease...", 50);
     {
         dhcp_lease_t lease;
         if (!dhcp_request(&lease, 100000)) {
@@ -997,12 +1013,15 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     }
 
     debug_print("[INIT] FS init...\n");
+    startscreen_show("Mounting SFS Filesystem...", 65);
     fs_init();
 
+    startscreen_show("Initializing Tasking...", 75);
     debug_print("[INIT] Tasking init...\n");
     tasking_init();
 
     debug_print("[INIT] Windows+Apps init...\n");
+    startscreen_show("Loading Built-in Applications...", 85);
     terminal_init(&kernel_api);
     notepad_init();
     viewer_init();
@@ -1018,7 +1037,10 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     desktop_init(&terminal_window, &notepad_window);
 
     debug_print("[INIT] PS/2 Mouse init...\n");
+    startscreen_show("Initializing PS/2 Mouse...", 95);
     init_mouse();
+
+    startscreen_stop();
 
     debug_print("[INIT] Drawing to display...\n");
     render_screen();
@@ -1026,6 +1048,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     debug_print("[INIT] Enable interrupt...\n");
     __asm__ volatile ("sti");
+
 
     debug_print("[INIT] Exec Main Loop.\n");
     while (1) {

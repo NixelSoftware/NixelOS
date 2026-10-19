@@ -12,6 +12,7 @@ call :run nasm -f elf32 src\kernel\task_switch.asm -o src\kernel\task_switch.o
 for %%S in (
     src\kernel\main.c
     src\kernel\idt.c
+    src\kernel\startscreen.c
     src\kernel\drivers\display.c
     src\kernel\drivers\ata.c
     src\kernel\drivers\net.c
@@ -71,6 +72,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
     src\apps\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
+    src\kernel\startscreen.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
