@@ -1,5 +1,5 @@
 #include "viewer.h"
-#include "../../kernel/font.h"
+#include "../../kernel/drivers/display/font.h"
 #include "../../kernel/drivers/display.h"
 #include "../../kernel/fs.h"
 

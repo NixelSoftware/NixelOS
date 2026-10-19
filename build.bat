@@ -15,13 +15,15 @@ for %%S in (
     src\system\shell\network_commands.c
     src\system\init\main.c
     src\system\graphics\wm\wm.c
+    src\system\graphics\wm\presentation.c
+    src\system\graphics\widgets.c
     src\system\graphics\session.c
     src\system\services\input\input.c
     src\system\loader\app_loader.c
     src\kernel\idt.c
-    src\kernel\startscreen.c
-    src\kernel\screenshot.c
-    src/kernel/png.c
+    src\system\init\splash\startscreen.c
+    src\system\graphics\screenshot\screenshot.c
+    src\system\graphics\image\png.c
     src\kernel\drivers\display.c
     src\kernel\drivers\ata.c
     src\kernel\drivers\net.c
@@ -40,12 +42,12 @@ for %%S in (
     src\kernel\net\icmp.c
     src\kernel\net\dhcp.c
     src\kernel\fs.c
-    src\kernel\cursor.c
-    src\kernel\font.c
+    src\system\graphics\wm\cursor.c
+    src\kernel\drivers\display\font.c
     src\kernel\keyboard.c
     src\system\graphics\wm\desktop.c
     src\kernel\task.c
-    src\kernel\dialog.c
+    src\system\graphics\dialog\dialog.c
     src\apps\notepad\notepad.c
     src\apps\viewer\viewer.c
     src\system\graphics\terminal\terminal.c
@@ -80,19 +82,20 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\system\shell\network_commands.o ^
     src\system\init\main.o ^
     src\system\graphics\wm\wm.o ^
+    src\system\graphics\wm\presentation.o src\system\graphics\widgets.o ^
     src\system\graphics\session.o ^
     src\system\services\input\input.o ^
     src\system\loader\app_loader.o ^
     src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o ^
     src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o ^
     src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\net\dhcp.o ^
-    src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o ^
-    src\system\graphics\wm\desktop.o src\kernel\dialog.o ^
+    src\kernel\fs.o src\system\graphics\wm\cursor.o src\kernel\drivers\display\font.o src\kernel\keyboard.o ^
+    src\system\graphics\wm\desktop.o src\system\graphics\dialog\dialog.o ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
     src\system\graphics\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
-    src\kernel\startscreen.o src\kernel\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
-    src/kernel/png.o src\kernel\net\dns.o^
+    src\system\init\splash\startscreen.o src\system\graphics\screenshot\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
+    src\system\graphics\image\png.o src\kernel\net\dns.o^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
@@ -109,7 +112,7 @@ powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','Re
 call :run python inject_sfs.py ..\hdd.img
 copy /y ..\hdd.img os.img >nul
 
-del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o src\system\shell\*.o src\system\init\*.o src\system\graphics\wm\*.o src\system\graphics\session.o src\system\services\input\*.o src\system\loader\*.o
+del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\drivers\display\*.o src\kernel\net\*.o src\system\shell\*.o src\system\init\*.o src\system\init\splash\*.o src\system\graphics\*.o src\system\graphics\wm\*.o src\system\graphics\dialog\*.o src\system\graphics\screenshot\*.o src\system\graphics\image\*.o src\system\graphics\session.o src\system\services\input\*.o src\system\loader\*.o
 del /q src\apps\notepad\*.o src\apps\viewer\*.o src\system\graphics\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin crash_debug.bin shutdown.bin curl.bin
 

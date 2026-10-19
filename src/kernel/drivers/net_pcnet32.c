@@ -198,9 +198,8 @@ void pcnet_poll(void) {
         uint16_t status = s_rx_ring[s_rx_idx].status;
 
         if ((status & (DESC_STP | DESC_ENP)) && !(status & DESC_ERR)) {
-            uint16_t frame_len = (s_rx_ring[s_rx_idx].msg_length & 0x0FFF) - 4; /* strip CRC */
+            uint16_t frame_len = (s_rx_ring[s_rx_idx].msg_length & 0x0FFF) - 4;
             if (frame_len <= PCNET_BUF_SIZE) {
-                /* REPLACE net_receive_packet WITH YOUR FUNCTION HERE: */
                 etherframe_receive(s_rx_buffers[s_rx_idx], frame_len);
             }
         }

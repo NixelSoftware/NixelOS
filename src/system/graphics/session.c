@@ -4,7 +4,7 @@
 #include "../../apps/viewer/viewer.h"
 #include "../shell/commands.h"
 #include "terminal/terminal.h"
-#include "../../kernel/dialog.h"
+#include "dialog/dialog.h"
 #include "wm/desktop.h"
 #include "wm/wm.h"
 

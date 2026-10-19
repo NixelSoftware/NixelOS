@@ -1,7 +1,7 @@
 #ifndef DIALOG_ICON_H
 #define DIALOG_ICON_H
 
-#include "types.h"
+#include "../../../kernel/types.h"
 
 #define ICON_TRANS 0x00FF00FF
 #define ICON_BLUE  0x000000AA

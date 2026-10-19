@@ -1,6 +1,6 @@
 #include "startscreen.h"
-#include "font.h"
-#include "drivers/display.h"
+#include "../../../kernel/drivers/display/font.h"
+#include "../../../kernel/drivers/display.h"
 
 static uint8_t splash_active = 0;
 
@@ -21,8 +21,8 @@ void startscreen_show(const char* status_text, int percent) {
     display_fill_rect(box_x, box_y + box_h - 2, box_w, 2, COLOR_DARK_GRAY);
     display_fill_rect(box_x + box_w - 2, box_y, 2, box_h, COLOR_DARK_GRAY);
 
-    draw_string(box_x + 20, box_y + 24, "VixelOS", COLOR_TITLE_BAR);
-    draw_string(box_x + 21, box_y + 24, "VixelOS", COLOR_TITLE_BAR);
+    draw_string(box_x + 20, box_y + 24, "NixelOS", COLOR_TITLE_BAR);
+    draw_string(box_x + 21, box_y + 24, "NixelOS", COLOR_TITLE_BAR);
     draw_string(box_x + 90, box_y + 24, "Workstation", COLOR_BLACK);
 
     draw_string(box_x + 20, box_y + 44, "Starting operating system services...", COLOR_DARK_GRAY);

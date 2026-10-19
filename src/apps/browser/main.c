@@ -1099,7 +1099,7 @@ int main_app(os_api_t* api) {
     browser_win.y = 40;
     browser_win.w = 480;
     browser_win.h = 360;
-    browser_win.title = "Vixel Web Browser";
+    browser_win.title = "Nixel Web Browser";
     browser_win.visible = 1;
     browser_win.focused = 1;
     browser_win.draw_content = browser_draw;

@@ -1,8 +1,8 @@
 #include "screenshot.h"
-#include "fs.h"
-#include "drivers/display.h"
-#include "drivers/ata.h"
-#include "drivers/serial.h"
+#include "../../../kernel/fs.h"
+#include "../../../kernel/drivers/display.h"
+#include "../../../kernel/drivers/ata.h"
+#include "../../../kernel/drivers/serial.h"
 
 #pragma pack(push, 1)
 typedef struct {

@@ -1,7 +1,7 @@
 #include "dialog.h"
 #include "dialog_icon.h"
-#include "window.h"
-#include "os_api.h"
+#include "../../../kernel/window.h"
+#include "../../../kernel/os_api.h"
 
 #define COLOR_WIN_BG     0x00C0C0C0
 #define COLOR_DARK_GRAY  0x00808080

@@ -16,5 +16,6 @@ void wm_draw_windows(void);
 void wm_draw_taskbar(uint8_t start_menu_open);
 void wm_poll(void);
 uint8_t wm_start_menu_is_open(void);
+void wm_render_screen(void);
 
 #endif

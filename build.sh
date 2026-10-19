@@ -16,13 +16,15 @@ kernel_sources=(
     src/system/shell/network_commands.c
     src/system/init/main.c
     src/system/graphics/wm/wm.c
+    src/system/graphics/wm/presentation.c
+    src/system/graphics/widgets.c
     src/system/graphics/session.c
     src/system/services/input/input.c
     src/system/loader/app_loader.c
     src/kernel/idt.c
-    src/kernel/startscreen.c
-    src/kernel/screenshot.c
-    src/kernel/png.c
+    src/system/init/splash/startscreen.c
+    src/system/graphics/screenshot/screenshot.c
+    src/system/graphics/image/png.c
     src/kernel/drivers/display.c
     src/kernel/drivers/ata.c
     src/kernel/drivers/net.c
@@ -41,12 +43,12 @@ kernel_sources=(
     src/kernel/net/dhcp.c
     src/kernel/net/dns.c
     src/kernel/fs.c
-    src/kernel/cursor.c
-    src/kernel/font.c
+    src/system/graphics/wm/cursor.c
+    src/kernel/drivers/display/font.c
     src/kernel/keyboard.c
     src/system/graphics/wm/desktop.c
     src/kernel/task.c
-    src/kernel/dialog.c
+    src/system/graphics/dialog/dialog.c
     src/apps/notepad/notepad.c
     src/apps/viewer/viewer.c
     src/system/graphics/terminal/terminal.c
@@ -88,12 +90,14 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/system/shell/network_commands.o \
     src/system/init/main.o \
     src/system/graphics/wm/wm.o \
+    src/system/graphics/wm/presentation.o \
+    src/system/graphics/widgets.o \
     src/system/graphics/session.o \
     src/system/services/input/input.o \
     src/system/loader/app_loader.o \
     src/kernel/idt.o \
     src/kernel/task.o \
-    src/kernel/dialog.o \
+    src/system/graphics/dialog/dialog.o \
     src/kernel/drivers/display.o \
     src/kernel/drivers/ata.o \
     src/kernel/drivers/net.o \
@@ -106,8 +110,8 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/net/dhcp.o \
     src/kernel/net/dns.o \
     src/kernel/fs.o \
-    src/kernel/cursor.o \
-    src/kernel/font.o \
+    src/system/graphics/wm/cursor.o \
+    src/kernel/drivers/display/font.o \
     src/kernel/keyboard.o \
     src/system/graphics/wm/desktop.o \
     src/apps/notepad/notepad.o \
@@ -117,9 +121,9 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/drivers/floppy.o \
     src/kernel/kernel_net.o \
     src/kernel/drivers/net_e1000.o \
-    src/kernel/startscreen.o \
-    src/kernel/screenshot.o \
-    src/kernel/png.o \
+    src/system/init/splash/startscreen.o \
+    src/system/graphics/screenshot/screenshot.o \
+    src/system/graphics/image/png.o \
     src/kernel/drivers/power.o \
     src/kernel/drivers/ps2.o \
     -o src/kernel/kernel.tmp
@@ -158,11 +162,16 @@ rm -f src/system/shell/*.o
 rm -f src/system/init/*.o
 rm -f src/system/graphics/wm/*.o
 rm -f src/system/graphics/session.o
+rm -f src/system/graphics/widgets.o
 rm -f src/system/services/input/*.o
 rm -f src/system/loader/*.o
 rm -f src/kernel/drivers/*.o
+rm -f src/kernel/drivers/display/*.o
 rm -f src/kernel/net/*.o
-rm -f src/kernel/dialog.o
+rm -f src/system/graphics/dialog/*.o
+rm -f src/system/graphics/screenshot/*.o
+rm -f src/system/graphics/image/*.o
+rm -f src/system/init/splash/*.o
 rm -f src/apps/notepad/*.o
 rm -f src/apps/viewer/*.o
 rm -f src/system/graphics/terminal/*.o

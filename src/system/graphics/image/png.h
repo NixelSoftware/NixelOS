@@ -1,7 +1,7 @@
 #ifndef KERNEL_PNG_H
 #define KERNEL_PNG_H
 
-#include "types.h"
+#include "../../../kernel/types.h"
 
 #define PNG_TARGET_W 64
 #define PNG_TARGET_H 64

@@ -1,7 +1,7 @@
 #include "png.h"
-#include "drivers/display.h"
+#include "../../../kernel/drivers/display.h"
 
-#include "../apps/browser/png.c"
+#include "../../../apps/browser/png.c"
 
 void png_render(const uint8_t* data, uint32_t len,
                 int32_t x, int32_t y, int32_t w, int32_t h) {

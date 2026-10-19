@@ -1,5 +1,5 @@
 #include "idt.h"
-#include "font.h"
+#include "drivers/display/font.h"
 #include "drivers/display.h"
 #include "drivers/serial.h"
 

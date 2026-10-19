@@ -196,7 +196,7 @@ static int perform_http_transaction(const char* host, const char* path, uint8_t*
     const char* part2 = " HTTP/1.1\r\nHost: ";
     while (*part2) req[p++] = *part2++;
     while (*host) req[p++] = *host++;
-    const char* part3 = "\r\nUser-Agent: VixelOS-Connection-Test\r\nConnection: close\r\n\r\n";
+    const char* part3 = "\r\nUser-Agent: NixelOS-Connection-Test\r\nConnection: close\r\n\r\n";
     while (*part3) req[p++] = *part3++;
     req[p] = '\0';
 
