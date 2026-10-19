@@ -3,16 +3,17 @@
 
 #include "types.h"
 
-#define FS_MAX_FILENAME  32
-#define FS_MAX_INODES    128
-#define FS_MAX_FILES FS_MAX_INODES
-#define FS_SUPER_LBA     200
-#define FS_BITMAP_LBA    201
-#define FS_INODES_LBA    202
-#define FS_INODE_SECTORS 16
-#define FS_DATA_LBA      (FS_INODES_LBA + FS_INODE_SECTORS)
-
-#define SFS2_MAGIC       0x53465332
+#define FS_MAX_FILENAME      32
+#define FS_MAX_INODES        128
+#define FS_MAX_FILES         FS_MAX_INODES
+#define FS_SUPER_LBA         200
+#define FS_BITMAP_LBA        201
+#define FS_BITMAP_SECTORS    4                     // 4 sectors = 2048 bytes = 16,384 sectors (8 MB)
+#define FS_INODES_LBA        (FS_BITMAP_LBA + FS_BITMAP_SECTORS) // LBA 205
+#define FS_INODE_SECTORS     16
+#define FS_DATA_LBA          (FS_INODES_LBA + FS_INODE_SECTORS)  // LBA 221
+#define SFS2_MAGIC           0x53465332
+#define SFS_TOTAL_SECTORS    16384
 
 typedef struct {
     uint32_t start_lba;

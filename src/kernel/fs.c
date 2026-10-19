@@ -2,7 +2,7 @@
 #include "drivers/ata.h"
 
 static fs_super_t super;
-static uint8_t    block_bitmap[512];
+static uint8_t block_bitmap[FS_BITMAP_SECTORS * 512];
 static fs_inode_t inodes[FS_MAX_INODES];
 
 static int str_equals(const char* a, const char* b) {
@@ -24,7 +24,7 @@ static void str_copy(char* dest, const char* src, int max) {
 }
 
 static void bitmap_set(uint32_t bit, int val) {
-    if (bit >= 4096) return;
+    if (bit >= SFS_TOTAL_SECTORS) return;
     if (val) {
         block_bitmap[bit / 8] |= (1 << (bit % 8));
     } else {
@@ -33,15 +33,15 @@ static void bitmap_set(uint32_t bit, int val) {
 }
 
 static int bitmap_get(uint32_t bit) {
-    if (bit >= 4096) return 1;
+    if (bit >= SFS_TOTAL_SECTORS) return 1;
     return (block_bitmap[bit / 8] & (1 << (bit % 8))) != 0;
 }
 
 static int bitmap_alloc_sectors(uint32_t count) {
     uint32_t consecutive = 0;
     uint32_t start_idx = 0;
-
-    for (uint32_t i = 0; i < 4096; i++) {
+    
+    for (uint32_t i = 0; i < SFS_TOTAL_SECTORS; i++) {
         if (!bitmap_get(i)) {
             if (consecutive == 0) start_idx = i;
             consecutive++;
@@ -49,7 +49,7 @@ static int bitmap_alloc_sectors(uint32_t count) {
                 for (uint32_t b = 0; b < count; b++) {
                     bitmap_set(start_idx + b, 1);
                 }
-                ata_write_sectors(FS_BITMAP_LBA, 1, block_bitmap);
+                ata_write_sectors(FS_BITMAP_LBA, FS_BITMAP_SECTORS, block_bitmap);
                 return (int)(FS_DATA_LBA + start_idx);
             }
         } else {
@@ -65,7 +65,7 @@ static void bitmap_free_sectors(uint32_t start_lba, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         bitmap_set(start_bit + i, 0);
     }
-    ata_write_sectors(FS_BITMAP_LBA, 1, block_bitmap);
+    ata_write_sectors(FS_BITMAP_LBA, FS_BITMAP_SECTORS, block_bitmap);
 }
 
 static void flush_inodes(void) {
@@ -75,29 +75,26 @@ static void flush_inodes(void) {
 void fs_init(void) {
     uint8_t sec[512];
     if (!ata_read_sectors(FS_SUPER_LBA, 1, sec)) return;
-
     fs_super_t* s = (fs_super_t*)sec;
     if (s->magic == SFS2_MAGIC) {
         super = *s;
-        ata_read_sectors(FS_BITMAP_LBA, 1, block_bitmap);
+        ata_read_sectors(FS_BITMAP_LBA, FS_BITMAP_SECTORS, block_bitmap);
         ata_read_sectors(FS_INODES_LBA, FS_INODE_SECTORS, (uint8_t*)inodes);
     } else {
         // shit gotta be formatted bro
         super.magic = SFS2_MAGIC;
-        super.total_sectors = 4096;
+        super.total_sectors = SFS_TOTAL_SECTORS;
         super.inode_count = FS_MAX_INODES;
-        super.free_sectors = 4096;
-
-        for (int i = 0; i < 512; i++) block_bitmap[i] = 0;
+        super.free_sectors = SFS_TOTAL_SECTORS;
+        for (int i = 0; i < (int)sizeof(block_bitmap); i++) block_bitmap[i] = 0;
         for (int i = 0; i < FS_MAX_INODES; i++) {
             inodes[i].used = 0;
             inodes[i].name[0] = '\0';
             inodes[i].size_bytes = 0;
             inodes[i].extent_count = 0;
         }
-
         ata_write_sectors(FS_SUPER_LBA, 1, (uint8_t*)&super);
-        ata_write_sectors(FS_BITMAP_LBA, 1, block_bitmap);
+        ata_write_sectors(FS_BITMAP_LBA, FS_BITMAP_SECTORS, block_bitmap);
         flush_inodes();
     }
 }

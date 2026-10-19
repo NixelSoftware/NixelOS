@@ -20,6 +20,7 @@
 #include "net/udp.h"
 #include "dialog.h"
 #include "startscreen.h"
+#include "screenshot.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
 #include "../apps/terminal/terminal.h"
@@ -1232,6 +1233,15 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                 }
             } else {
                 uint8_t scancode = inb(0x60);
+                if (scancode & 0x80) {
+                    continue;
+                }
+
+                if (scancode == 0x58) {
+                    debug_print("[KBD] Triggering Screenshot Capture via Function Key!\n");
+                    screenshot_capture();
+                    needs_redraw = 1;
+                }
 
                 if (scancode == 0x3C || scancode == 0x3D || scancode == 0x48 || scancode == 0x50 || scancode == 0x01) {
                     for (int i = 0; i < NUM_WINDOWS; i++) {
