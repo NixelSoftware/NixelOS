@@ -42,7 +42,7 @@ for %%S in (
     call :run %CC% -c %%S -o %%~dpnS.o
 )
 
-for %%A in (files mines calc hexview floppy_debug ping netdiag http_test) do (
+for %%A in (files mines calc hexview floppy_debug ping netdiag http_test crash_debug) do (
     if not exist src\apps\%%A mkdir src\apps\%%A
     call :run nasm -f elf32 src\apps\%%A\entry.asm -o src\apps\%%A\entry.o
     call :run %CC% -c src\apps\%%A\main.c -o src\apps\%%A\main.o
@@ -89,7 +89,7 @@ copy /y ..\hdd.img os.img >nul
 
 del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o
 del /q src\apps\notepad\*.o src\apps\viewer\*.o src\apps\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
-del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin
+del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin crash_debug.bin
 
 start qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
     -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 ^

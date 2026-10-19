@@ -28,6 +28,7 @@ files = [
         "image.bmp",
         "http_test.bin",
         "browser.bin",
+        "crash_debug.bin"
     )
 ]
 
