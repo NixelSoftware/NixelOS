@@ -97,7 +97,7 @@ static uint16_t calc_checksum(const void* data, uint32_t len) {
 
 static uint8_t send_tcp_seg(uint8_t flags, const uint8_t* payload, uint16_t payload_len) {
     uint8_t packet[512];
-    uint8_t pseudo[12 + 20 + 256];
+    uint8_t pseudo[12 + 20 + 384];
     uint16_t tcp_len = 20 + payload_len;
 
     packet[0] = (uint8_t)(client_port >> 8);
@@ -223,7 +223,7 @@ static int fetch_image_resource(const char* host, const char* path, uint8_t* out
         return 0;
     }
 
-    char req[256];
+    char req[384];
     int p = 0;
     const char* r1 = "GET ";
     while (*r1) req[p++] = *r1++;
@@ -233,7 +233,7 @@ static int fetch_image_resource(const char* host, const char* path, uint8_t* out
     while (*r2) req[p++] = *r2++;
     u = 0;
     while (host[u] && p < 220) req[p++] = host[u++];
-    const char* r3 = "\r\nUser-Agent: VixelBrowser/1.0\r\nConnection: close\r\n\r\n";
+    const char* r3 = "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: image/png, image/*;q=0.8, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
     while (*r3) req[p++] = *r3++;
     req[p] = '\0';
 
@@ -640,13 +640,13 @@ static void browser_fetch(void) {
     browser_draw(&browser_win);
     os->blit_all();
 
-    char req[256];
+    char req[384];
     int p = 0;
     const char* r1 = "GET / HTTP/1.1\r\nHost: ";
     while (*r1) req[p++] = *r1++;
     int u = 0;
     while (url_input[u] && p < 200) req[p++] = url_input[u++];
-    const char* r2 = "\r\nUser-Agent: VixelBrowser/1.0\r\nConnection: close\r\n\r\n";
+    const char* r2 = "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, text/plain;q=0.9, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
     while (*r2) req[p++] = *r2++;
     req[p] = '\0';
 

@@ -159,5 +159,5 @@ rm -f shutdown.bin
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
     -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 \
-    -device e1000,netdev=net0 \
+    -device pcnet,netdev=net0 \
     -serial stdio
