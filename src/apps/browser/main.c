@@ -1,6 +1,7 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
+#include "png.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -20,9 +21,10 @@
 #define TCP_ACK           0x10
 
 #define MAX_URL_LEN       128
-#define MAX_HTML_BUF      32768
-#define MAX_RENDER_LINES  512
+#define MAX_HTML_BUF      16384
+#define MAX_RENDER_LINES  128
 #define LINE_MAX_CHARS    64
+#define MAX_PAGE_IMAGES   4
 
 typedef enum {
     TCP_ST_CLOSED,
@@ -32,10 +34,11 @@ typedef enum {
 } tcp_state_t;
 
 typedef struct {
-    char text[LINE_MAX_CHARS];
+    char    text[LINE_MAX_CHARS];
     uint32_t color;
     uint8_t is_bold;
     uint8_t indent;
+    int8_t  image_index; 
 } render_line_t;
 
 static os_api_t* os = 0;
@@ -53,13 +56,31 @@ static uint32_t local_seq = 0x20003000;
 static uint32_t remote_seq = 0;
 static uint16_t client_port = 50100;
 static uint32_t target_ip = 0;
+
+
 static uint8_t  http_raw_buf[MAX_HTML_BUF];
 static uint32_t http_raw_len = 0;
 static volatile uint8_t http_done = 0;
 
+static uint8_t  img_raw_buf[32768];
+static uint32_t img_raw_len = 0;
+static volatile uint8_t img_fetch_active = 0;
+static volatile uint8_t img_done = 0;
+
 
 static render_line_t lines[MAX_RENDER_LINES];
 static int num_lines = 0;
+static uint32_t image_pool[MAX_PAGE_IMAGES][PNG_TARGET_W * PNG_TARGET_H];
+static int num_images = 0;
+
+static void set_status(const char* msg) {
+    for (int i = 0; i < (int)sizeof(status_text); i++) status_text[i] = '\0';
+    int i = 0;
+    while (msg[i] && i < (int)sizeof(status_text) - 1) {
+        status_text[i] = msg[i];
+        i++;
+    }
+}
 
 static uint16_t calc_checksum(const void* data, uint32_t len) {
     const uint8_t* bytes = (const uint8_t*)data;
@@ -151,8 +172,14 @@ static uint8_t browser_tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t* p
 
     if (data_len > 0) {
         remote_seq = seq + data_len;
-        for (uint16_t i = 0; i < data_len && http_raw_len < sizeof(http_raw_buf) - 1; i++) {
-            http_raw_buf[http_raw_len++] = payload[hlen + i];
+        if (img_fetch_active) {
+            for (uint16_t i = 0; i < data_len && img_raw_len < sizeof(img_raw_buf) - 1; i++) {
+                img_raw_buf[img_raw_len++] = payload[hlen + i];
+            }
+        } else {
+            for (uint16_t i = 0; i < data_len && http_raw_len < sizeof(http_raw_buf) - 1; i++) {
+                http_raw_buf[http_raw_len++] = payload[hlen + i];
+            }
         }
         send_tcp_seg(TCP_ACK, 0, 0);
         return 1;
@@ -162,17 +189,91 @@ static uint8_t browser_tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t* p
         remote_seq = seq + 1;
         send_tcp_seg(TCP_ACK, 0, 0);
         net_state = TCP_ST_CLOSED;
-        http_done = 1;
+        if (img_fetch_active) img_done = 1;
+        else http_done = 1;
         return 1;
     }
 
     return 0;
 }
 
+static int fetch_image_resource(const char* host, const char* path, uint8_t* out_buf, uint32_t max_len, uint32_t* out_len) {
+    client_port++;
+    if (client_port < 40000) client_port = 50100;
+    net_state = TCP_ST_SYN_SENT;
+    local_seq = 0x87654 + client_port;
+    img_raw_len = 0;
+    img_done = 0;
+    img_fetch_active = 1;
 
-static int str_has_tag(const char* p, const char* tag) {
+    int connected = 0;
+    for (int attempt = 0; attempt < 3 && !connected; attempt++) {
+        send_tcp_seg(TCP_SYN, 0, 0);
+        for (uint32_t poll = 0; poll < 60000; poll++) {
+            os->net_poll();
+            if (net_state == TCP_ST_ESTABLISHED) {
+                connected = 1;
+                break;
+            }
+            for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
+        }
+    }
+    if (!connected) {
+        img_fetch_active = 0;
+        return 0;
+    }
+
+    char req[256];
+    int p = 0;
+    const char* r1 = "GET ";
+    while (*r1) req[p++] = *r1++;
+    int u = 0;
+    while (path[u] && p < 180) req[p++] = path[u++];
+    const char* r2 = " HTTP/1.1\r\nHost: ";
+    while (*r2) req[p++] = *r2++;
+    u = 0;
+    while (host[u] && p < 220) req[p++] = host[u++];
+    const char* r3 = "\r\nUser-Agent: VixelBrowser/1.0\r\nConnection: close\r\n\r\n";
+    while (*r3) req[p++] = *r3++;
+    req[p] = '\0';
+
+    send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
+
+    for (uint32_t poll = 0; poll < 200000; poll++) {
+        os->net_poll();
+        if (img_done || (net_state == TCP_ST_CLOSED && img_raw_len > 0)) {
+            break;
+        }
+        for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
+    }
+
+    img_fetch_active = 0;
+    if (img_raw_len == 0) return 0;
+
+    uint32_t body_start = 0;
+    for (uint32_t i = 0; i + 3 < img_raw_len; i++) {
+        if (img_raw_buf[i] == '\r' && img_raw_buf[i+1] == '\n' &&
+            img_raw_buf[i+2] == '\r' && img_raw_buf[i+3] == '\n') {
+            body_start = i + 4;
+            break;
+        }
+    }
+    if (body_start == 0) return 0;
+
+    uint32_t payload_size = img_raw_len - body_start;
+    if (payload_size > max_len) payload_size = max_len;
+
+    for (uint32_t i = 0; i < payload_size; i++) {
+        out_buf[i] = img_raw_buf[body_start + i];
+    }
+    *out_len = payload_size;
+    return 1;
+}
+
+static int str_has_tag_bounded(const char* p, const char* end, const char* tag) {
     int i = 0;
     while (tag[i]) {
+        if (p + i >= end) return 0;
         char c1 = p[i];
         char c2 = tag[i];
         if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
@@ -180,14 +281,16 @@ static int str_has_tag(const char* p, const char* tag) {
         if (c1 != c2) return 0;
         i++;
     }
-    return (p[i] == '>' || p[i] == ' ' || p[i] == '/' || p[i] == '\0');
+    if (p + i >= end) return 0;
+    char term = p[i];
+    return (term == '>' || term == ' ' || term == '/' || term == '\t' || term == '\r' || term == '\n');
 }
 
 static const char* skip_until_close_tag(const char* p, const char* end, const char* close_tag) {
     int tag_len = 0;
     while (close_tag[tag_len]) tag_len++;
 
-    while (p + tag_len + 2 < end) {
+    while (p + tag_len + 3 <= end) {
         if (p[0] == '<' && p[1] == '/') {
             const char* check = p + 2;
             int match = 1;
@@ -201,7 +304,8 @@ static const char* skip_until_close_tag(const char* p, const char* end, const ch
                     break;
                 }
             }
-            if (match && (check[tag_len] == '>' || check[tag_len] == ' ')) {
+            if (match) {
+                p += 2 + tag_len;
                 while (p < end && *p != '>') p++;
                 if (p < end) p++;
                 return p;
@@ -223,16 +327,20 @@ static void add_render_line(const char* txt, uint32_t color, uint8_t bold, uint8
     lines[num_lines].color = color;
     lines[num_lines].is_bold = bold;
     lines[num_lines].indent = indent;
+    lines[num_lines].image_index = -1;
     num_lines++;
 }
 
 static void parse_and_layout_html(const char* doc, uint32_t len) {
     num_lines = 0;
     scroll_y = 0;
+    num_images = 0;
+
+    if (!doc || len == 0) return;
 
     
     uint32_t body_start = 0;
-    for (uint32_t i = 0; i < len - 3; i++) {
+    for (uint32_t i = 0; i + 3 < len; i++) {
         if (doc[i] == '\r' && doc[i+1] == '\n' && doc[i+2] == '\r' && doc[i+3] == '\n') {
             body_start = i + 4;
             break;
@@ -243,18 +351,17 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
 
     
     {
-        const char* hex_test = p;
-        while (hex_test < end && *hex_test == ' ') hex_test++;
-        int hex_count = 0;
-        while (hex_test < end && 
-               ((*hex_test >= '0' && *hex_test <= '9') || 
-                (*hex_test >= 'a' && *hex_test <= 'f') || 
-                (*hex_test >= 'A' && *hex_test <= 'F'))) {
-            hex_test++;
-            hex_count++;
+        const char* hscan = p;
+        while (hscan < end && (*hscan == ' ' || *hscan == '\t')) hscan++;
+        int hex_digits = 0;
+        while (hscan < end && ((*hscan >= '0' && *hscan <= '9') ||
+                              (*hscan >= 'a' && *hscan <= 'f') ||
+                              (*hscan >= 'A' && *hscan <= 'F'))) {
+            hscan++;
+            hex_digits++;
         }
-        if (hex_count > 0 && hex_test + 1 < end && hex_test[0] == '\r' && hex_test[1] == '\n') {
-            p = hex_test + 2;
+        if (hex_digits > 0 && hscan + 1 < end && hscan[0] == '\r' && hscan[1] == '\n') {
+            p = hscan + 2;
         }
     }
 
@@ -264,9 +371,10 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
     uint8_t cur_bold = 0;
     uint8_t cur_indent = 0;
 
-    while (p < end) {
+    while (p < end && num_lines < MAX_RENDER_LINES) {
         if (*p == '<') {
             p++;
+            if (p >= end) break;
 
             
             if (p + 2 < end && p[0] == '!' && p[1] == '-' && p[2] == '-') {
@@ -280,48 +388,46 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
             if (*p == '/') {
                 is_close = 1;
                 p++;
+                if (p >= end) break;
             }
 
             
-            if (!is_close && str_has_tag(p, "style")) {
+            if (!is_close && str_has_tag_bounded(p, end, "style")) {
                 p = skip_until_close_tag(p, end, "style");
                 continue;
             }
-
-            
-            if (!is_close && str_has_tag(p, "script")) {
+            if (!is_close && str_has_tag_bounded(p, end, "script")) {
                 p = skip_until_close_tag(p, end, "script");
                 continue;
             }
-
-            
-            if (!is_close && str_has_tag(p, "head")) {
+            if (!is_close && str_has_tag_bounded(p, end, "head")) {
                 p = skip_until_close_tag(p, end, "head");
                 continue;
             }
 
-            if (str_has_tag(p, "h1")) {
+            
+            if (str_has_tag_bounded(p, end, "h1")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
                 cur_col = is_close ? COLOR_BLACK : COLOR_H1;
                 cur_bold = !is_close;
                 if (is_close) add_render_line("", COLOR_BLACK, 0, 0);
-            } else if (str_has_tag(p, "h2") || str_has_tag(p, "h3")) {
+            } else if (str_has_tag_bounded(p, end, "h2") || str_has_tag_bounded(p, end, "h3")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
                 cur_col = is_close ? COLOR_BLACK : COLOR_H2;
                 cur_bold = !is_close;
                 if (is_close) add_render_line("", COLOR_BLACK, 0, 0);
-            } else if (str_has_tag(p, "p") || str_has_tag(p, "div") || str_has_tag(p, "section")) {
+            } else if (str_has_tag_bounded(p, end, "p") || str_has_tag_bounded(p, end, "div") || str_has_tag_bounded(p, end, "section")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
                 if (is_close) add_render_line("", COLOR_BLACK, 0, 0);
-            } else if (str_has_tag(p, "br")) {
+            } else if (str_has_tag_bounded(p, end, "br")) {
                 current_line[line_len] = '\0';
                 add_render_line(current_line, cur_col, cur_bold, cur_indent);
                 line_len = 0;
-            } else if (str_has_tag(p, "b") || str_has_tag(p, "strong")) {
+            } else if (str_has_tag_bounded(p, end, "b") || str_has_tag_bounded(p, end, "strong")) {
                 cur_bold = !is_close;
-            } else if (str_has_tag(p, "a")) {
+            } else if (str_has_tag_bounded(p, end, "a")) {
                 cur_col = is_close ? COLOR_BLACK : COLOR_LINK;
-            } else if (str_has_tag(p, "li")) {
+            } else if (str_has_tag_bounded(p, end, "li")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
                 if (!is_close) {
                     current_line[0] = '-'; current_line[1] = ' ';
@@ -330,12 +436,55 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
                 } else {
                     cur_indent = 0;
                 }
-            } else if (str_has_tag(p, "img")) {
+            } else if (str_has_tag_bounded(p, end, "img")) {
                 if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-                add_render_line("[Image]", COLOR_DARK_GRAY, 0, cur_indent);
+
+                char img_src[64];
+                int src_len = 0;
+                const char* scan = p;
+                while (scan < end && *scan != '>') {
+                    if ((scan[0] == 's' || scan[0] == 'S') &&
+                        (scan[1] == 'r' || scan[1] == 'R') &&
+                        (scan[2] == 'c' || scan[2] == 'C') &&
+                        scan[3] == '=') {
+                        scan += 4;
+                        char quote = 0;
+                        if (*scan == '"' || *scan == '\'') {
+                            quote = *scan++;
+                        }
+                        while (scan < end && *scan != '>' && src_len < 63) {
+                            if (quote && *scan == quote) break;
+                            if (!quote && (*scan == ' ' || *scan == '>')) break;
+                            img_src[src_len++] = *scan++;
+                        }
+                        break;
+                    }
+                    scan++;
+                }
+                img_src[src_len] = '\0';
+
+                if (src_len > 0 && num_lines < MAX_RENDER_LINES && num_images < MAX_PAGE_IMAGES) {
+                    static uint8_t png_fetch_buf[32768];
+                    uint32_t png_file_size = 0;
+
+                    if (fetch_image_resource(url_input, img_src, png_fetch_buf, sizeof(png_fetch_buf), &png_file_size)) {
+                        if (png_decode_and_resize(png_fetch_buf, png_file_size, image_pool[num_images])) {
+                            lines[num_lines].image_index = num_images;
+                            lines[num_lines].text[0] = '\0';
+                            lines[num_lines].indent = cur_indent;
+                            num_images++;
+                            num_lines++;
+                        } else {
+                            add_render_line("[Image decode error]", COLOR_DARK_GRAY, 0, cur_indent);
+                        }
+                    } else {
+                        add_render_line("[Image load failed]", COLOR_DARK_GRAY, 0, cur_indent);
+                    }
+                } else {
+                    add_render_line("[Image]", COLOR_DARK_GRAY, 0, cur_indent);
+                }
             }
 
-            
             while (p < end && *p != '>') p++;
             if (p < end) p++;
             continue;
@@ -352,7 +501,6 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
         }
 
         if (ch == '\r' || ch == '\n' || ch == '\t') ch = ' ';
-
         if (ch == ' ' && line_len > 0 && current_line[line_len - 1] == ' ') {
             p++;
             continue;
@@ -367,7 +515,7 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
         p++;
     }
 
-    if (line_len > 0) {
+    if (line_len > 0 && num_lines < MAX_RENDER_LINES) {
         current_line[line_len] = '\0';
         add_render_line(current_line, cur_col, cur_bold, cur_indent);
     }
@@ -383,16 +531,16 @@ static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t
 
 static void browser_draw(Window* win) {
     int32_t x = win->x;
-    int32_t y = win->y + 20;
+    int32_t y = win->y + 20; 
     int32_t w = win->w;
     int32_t h = win->h - 20;
 
-    os->fill_rect(x, y, w, h, COLOR_WIN_BG);
+    os->fill_rect(x + 2, y, w - 4, h - 2, COLOR_WIN_BG);
 
     
-    os->draw_string(x + 10, y + 26, "URL:", COLOR_BLACK);
+    os->draw_string(x + 10, y + 8, "URL:", COLOR_BLACK);
     int32_t url_x = x + 44;
-    int32_t url_y = y + 22;
+    int32_t url_y = y + 4;
     int32_t url_w = w - 110;
     int32_t url_h = 20;
     draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_WHITE);
@@ -402,41 +550,55 @@ static void browser_draw(Window* win) {
         os->draw_string(url_x + 4 + (url_cursor * 8), url_y + 4, "_", COLOR_BLACK);
     }
 
-    os->draw_button(x + w - 60, y + 21, 50, 22, "Go", 0);
+    os->draw_button(x + w - 60, y + 3, 50, 22, "Go", 0);
 
     
     int32_t canvas_x = x + 10;
-    int32_t canvas_y = y + 48;
+    int32_t canvas_y = y + 30;
     int32_t canvas_w = w - 20;
-    int32_t canvas_h = h - 72;
+    int32_t canvas_h = h - 56;
     draw_sunken_box(canvas_x, canvas_y, canvas_w, canvas_h, COLOR_WHITE);
 
-    
-    int visible_rows = (canvas_h - 10) / 12;
-    for (int i = 0; i < visible_rows; i++) {
-        int idx = scroll_y + i;
-        if (idx >= num_lines) break;
-        int row_y = canvas_y + 6 + (i * 12);
-        int row_x = canvas_x + 8 + (lines[idx].indent * 6);
-        os->draw_string(row_x, row_y, lines[idx].text, lines[idx].color);
-        if (lines[idx].is_bold) {
-            os->draw_string(row_x + 1, row_y, lines[idx].text, lines[idx].color);
+    int draw_y = canvas_y + 6;
+    for (int i = scroll_y; i < num_lines; i++) {
+        if (lines[i].image_index >= 0) {
+            if (draw_y + PNG_TARGET_H > canvas_y + canvas_h - 4) break;
+
+            int img_x = canvas_x + 8 + (lines[i].indent * 6);
+            int idx = lines[i].image_index;
+            for (int r = 0; r < PNG_TARGET_H; r++) {
+                int py = draw_y + r;
+                for (int c = 0; c < PNG_TARGET_W; c++) {
+                    int px = img_x + c;
+                    uint32_t col = image_pool[idx][r * PNG_TARGET_W + c];
+                    os->fill_rect(px, py, 1, 1, col);
+                }
+            }
+            draw_y += PNG_TARGET_H + 4;
+        } else {
+            if (draw_y + 12 > canvas_y + canvas_h - 4) break;
+
+            if (lines[i].text[0] != '\0') {
+                int row_x = canvas_x + 8 + (lines[i].indent * 6);
+                os->draw_string(row_x, draw_y, lines[i].text, lines[i].color);
+                if (lines[i].is_bold) {
+                    os->draw_string(row_x + 1, draw_y, lines[i].text, lines[i].color);
+                }
+            }
+            draw_y += 12;
         }
     }
 
     
-    draw_sunken_box(x + 10, y + h - 20, w - 20, 16, COLOR_WIN_BG);
+    draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_WIN_BG);
     os->draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
 }
 
 static void browser_fetch(void) {
-    for (int i = 0; status_text[i]; i++) status_text[i] = 0;
-    const char* m1 = "Connecting...";
-    for (int i = 0; m1[i]; i++) status_text[i] = m1[i];
+    set_status("Connecting...");
     browser_draw(&browser_win);
     os->blit_all();
 
-    
     target_ip = (104U << 24) | (254U << 16) | (42U << 8) | 159U;
 
     
@@ -468,15 +630,13 @@ static void browser_fetch(void) {
     }
 
     if (!connected) {
-        const char* m2 = "Connection failed";
-        for (int i = 0; m2[i]; i++) status_text[i] = m2[i];
+        set_status("Connection failed");
         browser_draw(&browser_win);
         os->blit_all();
         return;
     }
 
-    const char* m3 = "Requesting document...";
-    for (int i = 0; m3[i]; i++) status_text[i] = m3[i];
+    set_status("Requesting document...");
     browser_draw(&browser_win);
     os->blit_all();
 
@@ -503,11 +663,9 @@ static void browser_fetch(void) {
     if (http_raw_len > 0) {
         http_raw_buf[http_raw_len] = '\0';
         parse_and_layout_html((const char*)http_raw_buf, http_raw_len);
-        const char* m4 = "Document Loaded";
-        for (int i = 0; m4[i]; i++) status_text[i] = m4[i];
+        set_status("Document Loaded");
     } else {
-        const char* m5 = "Empty response";
-        for (int i = 0; m5[i]; i++) status_text[i] = m5[i];
+        set_status("Empty response");
     }
 
     browser_draw(&browser_win);
@@ -517,16 +675,12 @@ static void browser_fetch(void) {
 static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
     if (btn != 1) return;
 
-    
-    
-    
     int32_t btn_x1 = win->w - 65;
     int32_t btn_x2 = win->w - 8;
     int32_t btn_y1 = 22;
     int32_t btn_y2 = 46;
 
     if (lx >= btn_x1 && lx <= btn_x2 && ly >= btn_y1 && ly <= btn_y2) {
-        
         os->draw_button(win->x + win->w - 60, win->y + 20 + 3, 50, 22, "Go", 1);
         os->blit_rect(win->x + win->w - 60, win->y + 20 + 3, 50, 22);
 
@@ -538,13 +692,11 @@ static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t bt
 static void browser_handle_key(Window* win, char c) {
     uint8_t key = (uint8_t)c;
 
-    
     if (key == 0x01 || key == 27) {
         os->unregister_window(win);
         return;
     }
 
-    
     int canvas_h = (win->h - 20) - 56;
     int visible_rows = (canvas_h - 10) / 12;
     int max_scroll = num_lines - visible_rows;
@@ -559,6 +711,13 @@ static void browser_handle_key(Window* win, char c) {
         }
         return;
     }
+    if (key == 0x49) {
+        scroll_y -= (visible_rows / 2);
+        if (scroll_y < 0) scroll_y = 0;
+        browser_draw(win);
+        os->blit_all();
+        return;
+    }
 
     
     if (key == 0x50) {
@@ -569,17 +728,6 @@ static void browser_handle_key(Window* win, char c) {
         }
         return;
     }
-
-    
-    if (key == 0x49) {
-        scroll_y -= (visible_rows / 2);
-        if (scroll_y < 0) scroll_y = 0;
-        browser_draw(win);
-        os->blit_all();
-        return;
-    }
-
-    
     if (key == 0x51) {
         scroll_y += (visible_rows / 2);
         if (scroll_y > max_scroll) scroll_y = max_scroll;
@@ -588,13 +736,11 @@ static void browser_handle_key(Window* win, char c) {
         return;
     }
 
-    
     if (c == '\n' || c == '\r') {
         browser_fetch();
         return;
     }
 
-    
     if (c == '\b') {
         if (url_cursor > 0) {
             url_cursor--;
@@ -605,7 +751,6 @@ static void browser_handle_key(Window* win, char c) {
         return;
     }
 
-    
     if (c >= ' ' && c <= '~' && url_cursor < MAX_URL_LEN - 1) {
         url_input[url_cursor++] = c;
         url_input[url_cursor] = '\0';
@@ -631,7 +776,6 @@ int main_app(os_api_t* api) {
     browser_win.handle_key = browser_handle_key;
     browser_win.handle_mouse = browser_handle_mouse;
 
-    
     const char* default_page =
         "HTTP/1.1 200 OK\r\n\r\n"
         "<h1>VixelOS Browser</h1>"

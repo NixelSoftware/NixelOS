@@ -744,14 +744,14 @@ static void shell_execute_command(const char* cmd, shell_output_fn output,
         prog_name[ci] = '\0';
 
         uint8_t* app_target_mem = (uint8_t*)0x00200000;
-        int bytes = fs_read_file(prog_name, app_target_mem, 16384);
+        int bytes = fs_read_file(prog_name, app_target_mem, 1048576);
         if (bytes <= 0) {
             prog_name[ci++] = '.';
             prog_name[ci++] = 'b';
             prog_name[ci++] = 'i';
             prog_name[ci++] = 'n';
             prog_name[ci]   = '\0';
-            bytes = fs_read_file(prog_name, app_target_mem, 16384);
+            bytes = fs_read_file(prog_name, app_target_mem, 1048576);
         }
 
         if (bytes > (int)sizeof(app_header_t)) {
@@ -760,6 +760,16 @@ static void shell_execute_command(const char* cmd, shell_output_fn output,
                 (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE)) {
                 term_print("Invalid executable format.\n");
                 return;
+            }
+
+            uint32_t bss_start = (uint32_t)app_target_mem + bytes;
+            uint32_t bss_end   = 0x003F0000;
+            if (bss_start < bss_end) {
+                uint8_t* bss_ptr = (uint8_t*)bss_start;
+                uint32_t bss_size = bss_end - bss_start;
+                for (uint32_t i = 0; i < bss_size; i++) {
+                    bss_ptr[i] = 0;
+                }
             }
 
             int arg_index = 0;

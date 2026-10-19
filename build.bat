@@ -42,7 +42,7 @@ for %%S in (
     call :run %CC% -c %%S -o %%~dpnS.o
 )
 
-for %%A in (files mines calc hexview floppy_debug ping netdiag http_test browser) do (
+for %%A in (files mines calc hexview floppy_debug ping netdiag http_test) do (
     if not exist src\apps\%%A mkdir src\apps\%%A
     call :run nasm -f elf32 src\apps\%%A\entry.asm -o src\apps\%%A\entry.o
     call :run %CC% -c src\apps\%%A\main.c -o src\apps\%%A\main.o
@@ -50,6 +50,15 @@ for %%A in (files mines calc hexview floppy_debug ping netdiag http_test browser
     call :run objcopy -O binary src\apps\%%A\%%A.tmp %%A.bin
     del /q src\apps\%%A\%%A.tmp src\apps\%%A\main.o src\apps\%%A\entry.o
 )
+
+if not exist src\apps\browser mkdir src\apps\browser
+call :run nasm -f elf32 src\apps\browser\entry.asm -o src\apps\browser\entry.o
+call :run %CC% -c src\apps\browser\main.c -o src\apps\browser\main.o
+call :run %CC% -c src\apps\browser\png.c -o src\apps\browser\png.o
+::call :run ld -mi386pe -Ttext 0x200000 -e _start src\apps\browser\entry.o src\apps\browser\main.o src\apps\browser\png.o -o src\apps\browser\browser.tmp
+call :run ld -mi386pe --omagic -Ttext 0x200000 -e _start src\apps\browser\entry.o src\apps\browser\main.o src\apps\browser\png.o -o src\apps\browser\browser.tmp
+call :run objcopy -O binary src\apps\browser\browser.tmp browser.bin
+del /q src\apps\browser\browser.tmp src\apps\browser\main.o src\apps\browser\entry.o src\apps\browser\png.o
 
 call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o ^
