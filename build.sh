@@ -15,6 +15,7 @@ kernel_sources=(
     src/kernel/idt.c
     src/kernel/startscreen.c
     src/kernel/screenshot.c
+    src/kernel/png.c
     src/kernel/drivers/display.c
     src/kernel/drivers/ata.c
     src/kernel/drivers/net.c
@@ -62,13 +63,12 @@ done
 mkdir -p src/apps/browser
 nasm -f elf32 src/apps/browser/entry.asm -o src/apps/browser/entry.o
 "${cc[@]}" -c src/apps/browser/main.c -o src/apps/browser/main.o
-"${cc[@]}" -c src/apps/browser/png.c -o src/apps/browser/png.o
 ld -m elf_i386 --omagic -Ttext 0x200000 -e _start \
-    src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o \
+    src/apps/browser/entry.o src/apps/browser/main.o \
     -o src/apps/browser/browser.tmp
 objcopy -O binary src/apps/browser/browser.tmp browser.bin
 rm -f src/apps/browser/browser.tmp src/apps/browser/main.o \
-    src/apps/browser/entry.o src/apps/browser/png.o
+    src/apps/browser/entry.o
 
 ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/kernel_entry.o \
@@ -102,6 +102,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/drivers/net_e1000.o \
     src/kernel/startscreen.o \
     src/kernel/screenshot.o \
+    src/kernel/png.o \
     src/kernel/drivers/power.o \
     -o src/kernel/kernel.tmp
 

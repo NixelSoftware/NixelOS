@@ -4,6 +4,7 @@
 #include "types.h"
 #include "fs.h"
 #include "window.h"
+#include "png.h"
 #include "drivers/net.h"
 #include "net/icmp.h"
 
@@ -29,6 +30,10 @@ typedef struct {
     void (*draw_button)(int32_t x, int32_t y, int32_t w, int32_t h, const char* label, uint8_t pressed);
     void (*blit_rect)(int32_t x, int32_t y, int32_t w, int32_t h);
     void (*blit_all)(void);
+    int  (*png_decode_and_resize)(const uint8_t* data, uint32_t len,
+                                  uint32_t out_pixels[PNG_TARGET_W * PNG_TARGET_H]);
+    void (*png_render)(const uint8_t* data, uint32_t len,
+                       int32_t x, int32_t y, int32_t w, int32_t h);
     // ata filesystem functions
     int  (*fs_list)(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]);
     int  (*fs_read)(const char* filename, uint8_t* dest, uint32_t max_bytes);

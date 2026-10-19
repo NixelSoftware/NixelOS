@@ -1,7 +1,6 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
-#include "png.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -25,6 +24,7 @@
 #define MAX_RENDER_LINES  128
 #define LINE_MAX_CHARS    64
 #define MAX_PAGE_IMAGES   4
+#define MAX_PNG_SIZE      32768
 
 typedef enum {
     TCP_ST_CLOSED,
@@ -70,7 +70,8 @@ static volatile uint8_t img_done = 0;
 
 static render_line_t lines[MAX_RENDER_LINES];
 static int num_lines = 0;
-static uint32_t image_pool[MAX_PAGE_IMAGES][PNG_TARGET_W * PNG_TARGET_H];
+static uint8_t image_pool[MAX_PAGE_IMAGES][MAX_PNG_SIZE];
+static uint32_t image_sizes[MAX_PAGE_IMAGES];
 static int num_images = 0;
 
 static void set_status(const char* msg) {
@@ -468,15 +469,15 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
                     uint32_t png_file_size = 0;
 
                     if (fetch_image_resource(url_input, img_src, png_fetch_buf, sizeof(png_fetch_buf), &png_file_size)) {
-                        if (png_decode_and_resize(png_fetch_buf, png_file_size, image_pool[num_images])) {
-                            lines[num_lines].image_index = num_images;
-                            lines[num_lines].text[0] = '\0';
-                            lines[num_lines].indent = cur_indent;
-                            num_images++;
-                            num_lines++;
-                        } else {
-                            add_render_line("[Image decode error]", COLOR_DARK_GRAY, 0, cur_indent);
+                        for (uint32_t i = 0; i < png_file_size; i++) {
+                            image_pool[num_images][i] = png_fetch_buf[i];
                         }
+                        image_sizes[num_images] = png_file_size;
+                        lines[num_lines].image_index = num_images;
+                        lines[num_lines].text[0] = '\0';
+                        lines[num_lines].indent = cur_indent;
+                        num_images++;
+                        num_lines++;
                     } else {
                         add_render_line("[Image load failed]", COLOR_DARK_GRAY, 0, cur_indent);
                     }
@@ -566,14 +567,8 @@ static void browser_draw(Window* win) {
 
             int img_x = canvas_x + 8 + (lines[i].indent * 6);
             int idx = lines[i].image_index;
-            for (int r = 0; r < PNG_TARGET_H; r++) {
-                int py = draw_y + r;
-                for (int c = 0; c < PNG_TARGET_W; c++) {
-                    int px = img_x + c;
-                    uint32_t col = image_pool[idx][r * PNG_TARGET_W + c];
-                    os->fill_rect(px, py, 1, 1, col);
-                }
-            }
+            os->png_render(image_pool[idx], image_sizes[idx],
+                           img_x, draw_y, PNG_TARGET_W, PNG_TARGET_H);
             draw_y += PNG_TARGET_H + 4;
         } else {
             if (draw_y + 12 > canvas_y + canvas_h - 4) break;
