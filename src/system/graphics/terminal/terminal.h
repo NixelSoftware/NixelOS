@@ -1,7 +1,7 @@
 #ifndef TERMINAL_APP_H
 #define TERMINAL_APP_H
 
-#include "../../kernel/os_api.h"
+#include "../../../kernel/os_api.h"
 
 extern Window terminal_window;
 

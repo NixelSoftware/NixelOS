@@ -3,14 +3,15 @@ setlocal EnableExtensions
 
 set "CC=gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe"
 
-call :run nasm -f bin src\boot.asm -o src\boot.bin
-call :run nasm -f bin src\boot_stage2.asm -o src\boot_stage2.bin
+call :run nasm -f bin src\boot\boot.asm -o src\boot.bin
+call :run nasm -f bin src\boot\boot_stage2.asm -o src\boot_stage2.bin
 call :run nasm -f elf32 src\kernel\kernel_entry.asm -o src\kernel\kernel_entry.o
 call :run nasm -f elf32 src\kernel\idt_asm.asm -o src\kernel\idt_asm.o
 call :run nasm -f elf32 src\kernel\task_switch.asm -o src\kernel\task_switch.o
 
 for %%S in (
     src\kernel\main.c
+    src\system\shell\commands.c
     src\kernel\idt.c
     src\kernel\startscreen.c
     src\kernel\screenshot.c
@@ -40,7 +41,7 @@ for %%S in (
     src\kernel\dialog.c
     src\apps\notepad\notepad.c
     src\apps\viewer\viewer.c
-    src\apps\terminal\terminal.c
+    src\system\graphics\terminal\terminal.c
     src\apps\ping\main.c
     src\apps\netdiag\main.c
 ) do (
@@ -68,13 +69,14 @@ del /q src\apps\browser\browser.tmp src\apps\browser\main.o src\apps\browser\ent
 call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o ^
     src\kernel\main.o src\kernel\idt.o src\kernel\task.o ^
+    src\system\shell\commands.o ^
     src\kernel\drivers\display.o src\kernel\drivers\ata.o src\kernel\drivers\net.o ^
     src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o ^
     src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\net\dhcp.o ^
     src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o ^
     src\kernel\desktop.o src\kernel\dialog.o ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
-    src\apps\terminal\terminal.o ^
+    src\system\graphics\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
     src\kernel\startscreen.o src\kernel\screenshot.o src\kernel\drivers\power.o ^
     src/kernel/png.o src\kernel\net\dns.o^
@@ -94,8 +96,8 @@ powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','Re
 call :run python inject_sfs.py ..\hdd.img
 copy /y ..\hdd.img os.img >nul
 
-del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o
-del /q src\apps\notepad\*.o src\apps\viewer\*.o src\apps\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
+del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\net\*.o src\system\shell\*.o
+del /q src\apps\notepad\*.o src\apps\viewer\*.o src\system\graphics\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin crash_debug.bin shutdown.bin curl.bin
 
 start qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^

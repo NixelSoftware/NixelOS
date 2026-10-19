@@ -45,6 +45,12 @@ typedef struct {
     void (*shell_execute)(const char* command, shell_output_fn output,
                           shell_clear_fn clear);
     const char* (*command_args)(void);
+    void (*shell_set_output)(shell_output_fn output);
+    void (*shell_run_ifconfig)(void);
+    void (*shell_run_netdiag)(void);
+    void (*shell_run_ping)(const char* argument);
+    int (*shell_open_viewer)(const char* filename);
+    int (*shell_launch_app)(const char* name, const char* arguments);
     // net shit
     void (*net_poll)(void);
     uint32_t (*get_ticks)(void);

@@ -3,8 +3,8 @@ set -euo pipefail
 
 cc=(gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe)
 
-nasm -f bin src/boot.asm -o src/boot.bin
-nasm -f bin src/boot_stage2.asm -o src/boot_stage2.bin
+nasm -f bin src/boot/boot.asm -o src/boot.bin
+nasm -f bin src/boot/boot_stage2.asm -o src/boot_stage2.bin
 
 nasm -f elf32 src/kernel/kernel_entry.asm -o src/kernel/kernel_entry.o
 nasm -f elf32 src/kernel/idt_asm.asm -o src/kernel/idt_asm.o
@@ -12,6 +12,7 @@ nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
 
 kernel_sources=(
     src/kernel/main.c
+    src/system/shell/commands.c
     src/kernel/idt.c
     src/kernel/startscreen.c
     src/kernel/screenshot.c
@@ -41,7 +42,7 @@ kernel_sources=(
     src/kernel/dialog.c
     src/apps/notepad/notepad.c
     src/apps/viewer/viewer.c
-    src/apps/terminal/terminal.c
+    src/system/graphics/terminal/terminal.c
     src/apps/ping/main.c
     src/apps/netdiag/main.c
 )
@@ -76,6 +77,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/idt_asm.o \
     src/kernel/task_switch.o \
     src/kernel/main.o \
+    src/system/shell/commands.o \
     src/kernel/idt.o \
     src/kernel/task.o \
     src/kernel/dialog.o \
@@ -97,7 +99,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/desktop.o \
     src/apps/notepad/notepad.o \
     src/apps/viewer/viewer.o \
-    src/apps/terminal/terminal.o \
+    src/system/graphics/terminal/terminal.o \
     src/kernel/drivers/serial.o \
     src/kernel/drivers/floppy.o \
     src/kernel/kernel_net.o \
@@ -138,12 +140,13 @@ cp -f ../hdd.img os.img
 rm -f src/boot.bin
 rm -f src/boot_stage2.bin
 rm -f src/kernel/*.o
+rm -f src/system/shell/*.o
 rm -f src/kernel/drivers/*.o
 rm -f src/kernel/net/*.o
 rm -f src/kernel/dialog.o
 rm -f src/apps/notepad/*.o
 rm -f src/apps/viewer/*.o
-rm -f src/apps/terminal/*.o
+rm -f src/system/graphics/terminal/*.o
 rm -f src/apps/ping/*.o
 rm -f src/apps/netdiag/*.o
 rm -f src/kernel/kernel.bin
