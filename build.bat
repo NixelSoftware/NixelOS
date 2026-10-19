@@ -38,7 +38,7 @@ for %%S in (
     src\kernel\cursor.c
     src\kernel\font.c
     src\kernel\keyboard.c
-    src\kernel\desktop.c
+    src\system\graphics\wm\desktop.c
     src\kernel\task.c
     src\kernel\dialog.c
     src\apps\notepad\notepad.c
@@ -78,7 +78,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\net\ipv4.o src\kernel\net\etherframe.o src\kernel\net\arp.o ^
     src\kernel\net\tcp.o src\kernel\net\udp.o src\kernel\net\icmp.o src\kernel\net\dhcp.o ^
     src\kernel\fs.o src\kernel\cursor.o src\kernel\font.o src\kernel\keyboard.o ^
-    src\kernel\desktop.o src\kernel\dialog.o ^
+    src\system\graphics\wm\desktop.o src\kernel\dialog.o ^
     src\apps\notepad\notepad.o src\apps\viewer\viewer.o ^
     src\system\graphics\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^

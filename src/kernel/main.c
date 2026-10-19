@@ -3,7 +3,7 @@
 #include "font.h"
 #include "keyboard.h"
 #include "window.h"
-#include "desktop.h"
+#include "../system/graphics/wm/desktop.h"
 #include "drivers/display.h"
 #include "drivers/serial.h"
 #include "drivers/floppy.h"
@@ -37,6 +37,7 @@
 
 
 static void term_print(const char* text);
+static void api_put_pixel(int32_t x, int32_t y, uint32_t color);
 static void api_shell_set_output(shell_output_fn output);
 static int api_shell_open_viewer(const char* filename);
 static int api_shell_launch_app(const char* name, const char* arguments);
@@ -384,38 +385,6 @@ void draw_button(int32_t x, int32_t y, int32_t w, int32_t h, const char* label, 
     }
 }
 
-void draw_window_frame(const Window* win) {
-    if (!win || !win->visible) return;
-
-    fill_rect(win->x, win->y, win->w, win->h, COLOR_WIN_BG);
-
-    uint32_t bar_color = win->focused ? COLOR_TITLE_BAR : COLOR_DARK_GRAY;
-    fill_rect(win->x + 2, win->y + 2, win->w - 4, 15, bar_color);
-
-    if (win->title) {
-        draw_string(win->x + 6, win->y + 5, win->title, COLOR_WHITE);
-    }
-
-    int32_t btn_x = win->x + win->w - 16;
-    int32_t btn_y = win->y + 3;
-    draw_button(btn_x, btn_y, 13, 13, 0, 0);
-
-    uint32_t* buf = display_get_backbuffer();
-    for (int i = 0; i < 7; i++) {
-        buf[(btn_y + 3 + i) * SCREEN_WIDTH + (btn_x + 3 + i)] = COLOR_BLACK;
-        buf[(btn_y + 3 + i) * SCREEN_WIDTH + (btn_x + 9 - i)] = COLOR_BLACK;
-    }
-
-    fill_rect(win->x, win->y, win->w, 1, COLOR_WHITE);
-    fill_rect(win->x, win->y, 1, win->h, COLOR_WHITE);
-    fill_rect(win->x, win->y + win->h - 1, win->w, 1, COLOR_DARK_GRAY);
-    fill_rect(win->x + win->w - 1, win->y, 1, win->h, COLOR_DARK_GRAY);
-
-    if (win->draw_content) {
-        win->draw_content((Window*)win);
-    }
-}
-
 static uint8_t child_poll_events(int32_t* out_mx, int32_t* out_my, uint8_t* out_btn) {
     uint8_t scancode_out = 0;
 
@@ -478,6 +447,7 @@ static void api_sync_cursor(void) {
 
 static os_api_t kernel_api = {
     .fill_rect          = fill_rect,
+    .put_pixel          = api_put_pixel,
     .draw_string        = draw_string,
     .draw_button        = draw_button,
     .blit_rect          = display_blit_rect,
@@ -516,6 +486,12 @@ static os_api_t kernel_api = {
     .shutdown = power_shutdown,
     .reboot   = power_reboot
 };
+
+static void api_put_pixel(int32_t x, int32_t y, uint32_t color) {
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) return;
+    uint32_t* buffer = display_get_backbuffer();
+    buffer[y * SCREEN_WIDTH + x] = color;
+}
 
 static void api_shell_set_output(shell_output_fn output) {
     shell_output = output;
@@ -588,53 +564,6 @@ static int str_prefix(const char* str, const char* prefix) {
 }
 
 
-void draw_taskbar(void) {
-    fill_rect(0, TASKBAR_Y, SCREEN_WIDTH, TASKBAR_HEIGHT, COLOR_WIN_BG);
-    fill_rect(0, TASKBAR_Y, SCREEN_WIDTH, 1, COLOR_WHITE);
-
-    draw_button(4, TASKBAR_Y + 4, 60, 24, "Start", start_menu_open);
-
-    draw_button(68,  TASKBAR_Y + 4, 80, 24, "Terminal", terminal_window.visible && terminal_window.focused);
-    draw_button(152, TASKBAR_Y + 4, 80, 24, "Notepad",  notepad_window.visible && notepad_window.focused);
-    draw_button(236, TASKBAR_Y + 4, 80, 24, "Viewer",   viewer_window.visible && viewer_window.focused);
-
-    
-    Window* files_window = wm_get_window(3);
-    if (files_window && files_window->title) {
-        draw_button(320, TASKBAR_Y + 4, 80, 24, "Files", files_window->visible && files_window->focused);
-    }
-
-    fill_rect(SCREEN_WIDTH - 64, TASKBAR_Y + 5, 58, 22, COLOR_WIN_BG);
-    fill_rect(SCREEN_WIDTH - 64, TASKBAR_Y + 5, 58, 1, COLOR_DARK_GRAY);
-    fill_rect(SCREEN_WIDTH - 64, TASKBAR_Y + 5, 1, 22, COLOR_DARK_GRAY);
-    fill_rect(SCREEN_WIDTH - 64, TASKBAR_Y + 26, 58, 1, COLOR_WHITE);
-    fill_rect(SCREEN_WIDTH - 7,  TASKBAR_Y + 5, 1, 22, COLOR_WHITE);
-    draw_string(SCREEN_WIDTH - 52, TASKBAR_Y + 11, "12:00", COLOR_BLACK);
-
-    if (start_menu_open) {
-        int32_t menu_x = 4;
-        int32_t menu_y = TASKBAR_Y - 96;
-        int32_t menu_w = 120;
-        int32_t menu_h = 92;
-
-        fill_rect(menu_x, menu_y, menu_w, menu_h, COLOR_WIN_BG);
-        fill_rect(menu_x, menu_y, menu_w, 1, COLOR_WHITE);
-        fill_rect(menu_x, menu_y, 1, menu_h, COLOR_WHITE);
-        fill_rect(menu_x, menu_y + menu_h - 1, menu_w, 1, COLOR_DARK_GRAY);
-        fill_rect(menu_x + menu_w - 1, menu_y, 1, menu_h, COLOR_DARK_GRAY);
-
-        draw_string(menu_x + 12, menu_y + 10, "Terminal", COLOR_BLACK);
-        fill_rect(menu_x + 6, menu_y + 28, menu_w - 12, 1, COLOR_DARK_GRAY);
-        fill_rect(menu_x + 6, menu_y + 29, menu_w - 12, 1, COLOR_WHITE);
-
-        draw_string(menu_x + 12, menu_y + 38, "Notepad", COLOR_BLACK);
-        fill_rect(menu_x + 6, menu_y + 56, menu_w - 12, 1, COLOR_DARK_GRAY);
-        fill_rect(menu_x + 6, menu_y + 57, menu_w - 12, 1, COLOR_WHITE);
-
-        draw_string(menu_x + 12, menu_y + 66, "Viewer", COLOR_BLACK);
-    }
-}
-
 static void cursor_save(int32_t x, int32_t y) {
     uint32_t* buf = display_get_backbuffer();
     for (int r = 0; r < MOUSE_CURSOR_H; r++) {
@@ -680,12 +609,8 @@ static void render_screen(void) {
     display_clear(COLOR_DESKTOP);
     desktop_draw();
 
-    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
-        Window* window = wm_get_window(i);
-        if (window) draw_window_frame(window);
-    }
-
-    draw_taskbar();
+    wm_draw_windows();
+    wm_draw_taskbar(start_menu_open);
 
     cursor_save(mouse_x, mouse_y);
     draw_cursor(mouse_x, mouse_y);
@@ -814,11 +739,11 @@ static void kernel_initialize_system_apps(void) {
     viewer_init();
     dialog_init(&kernel_api);
 
-    wm_initialize(kernel_mark_redraw);
+    wm_initialize(&kernel_api, kernel_mark_redraw);
     wm_register_window(&notepad_window);
     wm_register_window(&viewer_window);
     wm_register_window(&terminal_window);
-    desktop_init(&terminal_window, &notepad_window);
+    desktop_init(&kernel_api, &terminal_window, &notepad_window);
 }
 
 static void kernel_initialize_input(void) {

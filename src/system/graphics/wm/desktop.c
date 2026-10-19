@@ -1,7 +1,5 @@
 #include "desktop.h"
-#include "font.h"
-#include "drivers/display.h"
-#include "../system/graphics/wm/wm.h"
+#include "wm.h"
 
 #define NUM_ICONS 2
 static DesktopIcon icons[NUM_ICONS];
@@ -9,6 +7,7 @@ static DesktopIcon icons[NUM_ICONS];
 static uint32_t last_click_time = 0;
 static int last_clicked_icon = -1;
 #define DOUBLE_CLICK_THRESHOLD 5000
+static os_api_t* desktop_api;
 
 static const uint8_t icon_terminal[16][16] = {
     {0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
@@ -59,7 +58,8 @@ static uint32_t resolve_color(uint8_t c) {
     }
 }
 
-void desktop_init(Window* term_win, Window* note_win) {
+void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
+    desktop_api = api;
     icons[0].x = 24;
     icons[0].y = 20;
     icons[0].label = "Term";
@@ -76,7 +76,7 @@ void desktop_init(Window* term_win, Window* note_win) {
 }
 
 void desktop_draw(void) {
-    uint32_t* buf = display_get_backbuffer();
+    if (!desktop_api) return;
 
     for (int i = 0; i < NUM_ICONS; i++) {
         DesktopIcon* icon = &icons[i];
@@ -90,7 +90,7 @@ void desktop_draw(void) {
                 if (px < 0 || px >= SCREEN_WIDTH) continue;
                 uint8_t val = sprite[r][c];
                 if (val != 0) {
-                    buf[py * SCREEN_WIDTH + px] = resolve_color(val);
+                    desktop_api->put_pixel(px, py, resolve_color(val));
                 }
             }
         }
@@ -99,11 +99,11 @@ void desktop_draw(void) {
         int text_y = icon->y + 20;
 
         if (icon->selected) {
-            fill_rect(text_x - 2, text_y - 1, 36, 11, COLOR_TITLE_BAR);
-            draw_string(text_x, text_y, icon->label, COLOR_WHITE);
+            desktop_api->fill_rect(text_x - 2, text_y - 1, 36, 11, COLOR_TITLE_BAR);
+            desktop_api->draw_string(text_x, text_y, icon->label, COLOR_WHITE);
         } else {
-            draw_string(text_x + 1, text_y + 1, icon->label, COLOR_BLACK);
-            draw_string(text_x, text_y, icon->label, COLOR_WHITE);
+            desktop_api->draw_string(text_x + 1, text_y + 1, icon->label, COLOR_BLACK);
+            desktop_api->draw_string(text_x, text_y, icon->label, COLOR_WHITE);
         }
     }
 }

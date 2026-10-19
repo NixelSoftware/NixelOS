@@ -15,6 +15,5 @@ typedef struct Window {
 
 void fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
 void draw_button(int32_t x, int32_t y, int32_t w, int32_t h, const char* label, uint8_t pressed);
-void draw_window_frame(const Window* win);
 
 #endif

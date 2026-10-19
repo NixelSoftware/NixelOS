@@ -39,7 +39,7 @@ kernel_sources=(
     src/kernel/cursor.c
     src/kernel/font.c
     src/kernel/keyboard.c
-    src/kernel/desktop.c
+    src/system/graphics/wm/desktop.c
     src/kernel/task.c
     src/kernel/dialog.c
     src/apps/notepad/notepad.c
@@ -100,7 +100,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/cursor.o \
     src/kernel/font.o \
     src/kernel/keyboard.o \
-    src/kernel/desktop.o \
+    src/system/graphics/wm/desktop.o \
     src/apps/notepad/notepad.o \
     src/apps/viewer/viewer.o \
     src/system/graphics/terminal/terminal.o \

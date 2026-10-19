@@ -27,6 +27,7 @@ typedef void (*shell_clear_fn)(void);
 typedef struct {
     // screen draw functions
     void (*fill_rect)(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
+    void (*put_pixel)(int32_t x, int32_t y, uint32_t color);
     void (*draw_string)(int32_t x, int32_t y, const char* str, uint32_t color);
     void (*draw_button)(int32_t x, int32_t y, int32_t w, int32_t h, const char* label, uint8_t pressed);
     void (*blit_rect)(int32_t x, int32_t y, int32_t w, int32_t h);
