@@ -59,6 +59,9 @@ typedef struct {
     int  (*floppy_init)(void);
     int  (*floppy_read)(uint32_t lba, uint8_t count, uint8_t* buf);
     int  (*floppy_write)(uint32_t lba, uint8_t count, const uint8_t* buf);
+    // acpi shit
+    void (*shutdown)(void);
+    void (*reboot)(void);
 } os_api_t;
 
 #endif

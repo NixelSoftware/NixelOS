@@ -7,6 +7,7 @@
 #include "drivers/display.h"
 #include "drivers/serial.h"
 #include "drivers/floppy.h"
+#include "drivers/power.h"
 #include "idt.h"
 #include "fs.h" 
 #include "os_api.h"
@@ -584,7 +585,9 @@ static os_api_t kernel_api = {
     .floppy_write = floppy_write_sectors,
     .ipv4_send = ipv4_send,
     .ipv4_set_handler = ipv4_set_protocol_handler,
-    .ipv4_get_local_ip = ipv4_get_local_ip
+    .ipv4_get_local_ip = ipv4_get_local_ip,
+    .shutdown = power_shutdown,
+    .reboot   = power_reboot
 };
 
 static void term_print(const char* text) {
