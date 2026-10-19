@@ -56,7 +56,7 @@ static Window browser_win;
 
 //static char url_input[MAX_URL_LEN] = "connectiontest.menifeetech.pp.ua";
 static char url_input[MAX_URL_LEN] = "home.menifeetech.pp.ua";
-static int  url_cursor = 23; // pmo
+static int  url_cursor = 22; // pmo
 static char status_text[64] = "Ready";
 static int  scroll_y = 0;
 
@@ -1107,7 +1107,7 @@ int main_app(os_api_t* api) {
     browser_win.handle_mouse = browser_handle_mouse;
 
     const char* default_page = "HTTP/1.1 200 OK\r\n\r\n";
-    
+
     int dlen = 0;
     while (default_page[dlen]) dlen++;
     parse_and_layout_html(default_page, dlen);
