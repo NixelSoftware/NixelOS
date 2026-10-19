@@ -1115,6 +1115,9 @@ int main_app(os_api_t* api) {
     os->windows.register_window(&browser_win);
     os->shell.term_print("Browser started.\n");
 
+    set_status("Loading page...");
+    os->graphics.render_screen();
+
     browser_fetch();
     
     return 0;
