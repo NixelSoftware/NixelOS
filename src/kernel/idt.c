@@ -1,6 +1,7 @@
 #include "idt.h"
 #include "font.h"
 #include "drivers/display.h"
+#include "drivers/serial.h"
 
 static idt_entry_t idt_entries[256];
 static idt_ptr_t   idt_ptr;
@@ -69,6 +70,48 @@ static void u32_to_hex(uint32_t val, char* out) {
 static void kernel_panic(registers_t* regs) {
     __asm__ volatile ("cli");
 
+    const char* reason = (regs->int_no < 32) ? exception_messages[regs->int_no] : "Hardware IRQ Exception";
+    
+    debug_print("\n========================================\n");
+    debug_print("Uh-oh. Something bad happened!\n");
+    debug_print("========================================\n");
+    debug_print("Exception: ");
+    debug_print(reason);
+    debug_print("\nInterrupt: ");
+    debug_hex(regs->int_no);
+    debug_print("  Error Code: ");
+    debug_hex(regs->err_code);
+    debug_print("\nEIP: ");
+    debug_hex(regs->eip);
+    debug_print("  CS: ");
+    debug_hex(regs->cs);
+    debug_print("  EFLAGS: ");
+    debug_hex(regs->eflags);
+    debug_print("\nEAX: ");
+    debug_hex(regs->eax);
+    debug_print("  EBX: ");
+    debug_hex(regs->ebx);
+    debug_print("  ECX: ");
+    debug_hex(regs->ecx);
+    debug_print("  EDX: ");
+    debug_hex(regs->edx);
+    debug_print("\nESI: ");
+    debug_hex(regs->esi);
+    debug_print("  EDI: ");
+    debug_hex(regs->edi);
+    debug_print("  EBP: ");
+    debug_hex(regs->ebp);
+    debug_print("  ESP: ");
+    debug_hex(regs->esp);
+    debug_print("\nDS:  ");
+    debug_hex(regs->ds);
+    debug_print("  ES:  ");
+    debug_hex(regs->es);
+    debug_print("  FS:  ");
+    debug_hex(regs->fs);
+    debug_print("  GS:  ");
+    debug_hex(regs->gs);
+    debug_print("\n========================================\n");
     
     display_clear(0x000000AA); 
 
@@ -76,7 +119,6 @@ static void kernel_panic(registers_t* regs) {
     display_fill_rect(80, 60, 640, 480, 0x00000088);
     draw_string(290, 80, "*** KERNEL PANIC ***", COLOR_WHITE);
 
-    const char* reason = (regs->int_no < 32) ? exception_messages[regs->int_no] : "Hardware IRQ Exception";
     draw_string(100, 120, "A fatal exception halted the operating system:", COLOR_WHITE);
     draw_string(100, 140, reason, 0x00FFFF00); 
 
