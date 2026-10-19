@@ -31,6 +31,7 @@ kernel_sources=(
     src/kernel/net/udp.c
     src/kernel/net/icmp.c
     src/kernel/net/dhcp.c
+    src/kernel/net/dns.c
     src/kernel/fs.c
     src/kernel/cursor.c
     src/kernel/font.c
@@ -49,7 +50,7 @@ for source in "${kernel_sources[@]}"; do
     "${cc[@]}" -c "$source" -o "${source%.c}.o"
 done
 
-for app in files mines calc hexview floppy_debug ping netdiag http_test crash_debug shutdown; do
+for app in files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown; do
     mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
     "${cc[@]}" -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
@@ -88,6 +89,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/net/udp.o \
     src/kernel/net/icmp.o \
     src/kernel/net/dhcp.o \
+    src/kernel/net/dns.o \
     src/kernel/fs.o \
     src/kernel/cursor.o \
     src/kernel/font.o \
@@ -153,6 +155,7 @@ rm -f floppy_debug.bin
 rm -f ping.bin
 rm -f netdiag.bin
 rm -f http_test.bin
+rm -f curl.bin
 rm -f browser.bin
 rm -f crash_debug.bin
 rm -f shutdown.bin

@@ -7,6 +7,7 @@
 #include "png.h"
 #include "drivers/net.h"
 #include "net/icmp.h"
+#include "net/dns.h"
 
 typedef enum {
     APP_TYPE_GUI = 1,
@@ -56,6 +57,7 @@ typedef struct {
     uint8_t (*ipv4_send)(uint32_t dest_ip, uint8_t protocol, const uint8_t* payload, uint32_t length);
     void    (*ipv4_set_handler)(uint8_t protocol, ipv4_protocol_handler_t handler);
     uint32_t (*ipv4_get_local_ip)(void);
+    uint8_t (*dns_resolve)(const char* hostname, uint32_t* address);
     // window manager functions
     int  (*register_window)(Window* win);
     void (*unregister_window)(Window* win);

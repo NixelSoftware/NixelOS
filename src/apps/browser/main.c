@@ -594,7 +594,21 @@ static void browser_fetch(void) {
     browser_draw(&browser_win);
     os->blit_all();
 
-    target_ip = (104U << 24) | (254U << 16) | (42U << 8) | 159U;
+    {
+        char host[128];
+        int host_len = 0;
+        while (url_input[host_len] && url_input[host_len] != '/' && host_len < 127) {
+            host[host_len] = url_input[host_len];
+            host_len++;
+        }
+        host[host_len] = '\0';
+        if (!os->dns_resolve(host, &target_ip)) {
+            set_status("DNS lookup failed");
+            browser_draw(&browser_win);
+            os->blit_all();
+            return;
+        }
+    }
 
     
     uint32_t gw = (10U << 24) | (0U << 16) | (1U << 8) | 2U;

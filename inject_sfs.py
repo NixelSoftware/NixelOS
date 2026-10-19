@@ -29,6 +29,7 @@ files = [
         "netdiag.bin",
         "image.bmp",
         "http_test.bin",
+        "curl.bin",
         "browser.bin",
         "crash_debug.bin",
         "shutdown.bin"

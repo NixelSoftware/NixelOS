@@ -588,6 +588,7 @@ static os_api_t kernel_api = {
     .ipv4_send = ipv4_send,
     .ipv4_set_handler = ipv4_set_protocol_handler,
     .ipv4_get_local_ip = ipv4_get_local_ip,
+    .dns_resolve = dns_resolve,
     .shutdown = power_shutdown,
     .reboot   = power_reboot
 };
