@@ -54,8 +54,9 @@ static os_api_t* os = 0;
 static Window browser_win;
 
 
-static char url_input[MAX_URL_LEN] = "connectiontest.menifeetech.pp.ua";
-static int  url_cursor = 32;
+//static char url_input[MAX_URL_LEN] = "connectiontest.menifeetech.pp.ua";
+static char url_input[MAX_URL_LEN] = "home.menifeetech.pp.ua";
+static int  url_cursor = 23; // pmo
 static char status_text[64] = "Ready";
 static int  scroll_y = 0;
 
@@ -1105,21 +1106,16 @@ int main_app(os_api_t* api) {
     browser_win.handle_key = browser_handle_key;
     browser_win.handle_mouse = browser_handle_mouse;
 
-    const char* default_page =
-        "HTTP/1.1 200 OK\r\n\r\n"
-        "<h1>VixelOS Browser</h1>"
-        "<p>Welcome to the VixelOS Web Browser!</p>"
-        "<p>Press <b>Go</b> or hit <b>Enter</b> to navigate to the address bar URL.</p>"
-        "<ul>"
-        "<li>Full TCP/IP HTTP Client</li>"
-        "<li>Automatic line wrapping</li>"
-        "<li>HTML tag & entity parsing</li>"
-        "</ul>";
+    const char* default_page = "HTTP/1.1 200 OK\r\n\r\n";
+    
     int dlen = 0;
     while (default_page[dlen]) dlen++;
     parse_and_layout_html(default_page, dlen);
 
     os->register_window(&browser_win);
     os->term_print("Browser started.\n");
+
+    browser_fetch();
+    
     return 0;
 }
