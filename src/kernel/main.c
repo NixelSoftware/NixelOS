@@ -22,9 +22,10 @@
 #include "dialog.h"
 #include "startscreen.h"
 #include "screenshot.h"
+#include "../system/shell/commands.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
-#include "../apps/terminal/terminal.h"
+#include "../system/graphics/terminal/terminal.h"
 
 #define TASKBAR_Y       568
 #define TASKBAR_HEIGHT  32
@@ -35,9 +36,9 @@
 #define NUM_WINDOWS 6
 
 static void term_print(const char* text);
-static void shell_execute_command(const char* cmd, shell_output_fn output,
-                                  shell_clear_fn clear);
-static const char* api_command_args(void);
+static void api_shell_set_output(shell_output_fn output);
+static int api_shell_open_viewer(const char* filename);
+static int api_shell_launch_app(const char* name, const char* arguments);
 static uint32_t api_get_ticks(void);
 static int str_prefix(const char* str, const char* prefix);
 static void update_cursor_fast(int32_t new_x, int32_t new_y);
@@ -65,8 +66,6 @@ static uint32_t ping_target_ip;
 static uint32_t ping_start_time;
 static uint16_t ping_sequence;
 static shell_output_fn shell_output;
-static shell_clear_fn shell_clear;
-static char shell_command_args[FS_MAX_FILENAME];
 
 
 static void draw_heartbeat_indicator(void) {
@@ -575,7 +574,13 @@ static os_api_t kernel_api = {
     .show_info_dialog = show_info_dialog,
     .fs_delete = fs_delete_file,
     .shell_execute     = shell_execute_command,
-    .command_args      = api_command_args,
+    .command_args      = shell_command_args,
+    .shell_set_output  = api_shell_set_output,
+    .shell_run_ifconfig = terminal_ifconfig,
+    .shell_run_netdiag = terminal_netdiag,
+    .shell_run_ping    = terminal_ping,
+    .shell_open_viewer = api_shell_open_viewer,
+    .shell_launch_app  = api_shell_launch_app,
     .net_poll          = sys_net_poll,
     .get_ticks         = api_get_ticks,
     .icmp_request_echo = icmp_request_echo,
@@ -593,12 +598,61 @@ static os_api_t kernel_api = {
     .reboot   = power_reboot
 };
 
-static void term_print(const char* text) {
-    if (shell_output) shell_output(text);
+static void api_shell_set_output(shell_output_fn output) {
+    shell_output = output;
 }
 
-static const char* api_command_args(void) {
-    return shell_command_args;
+static int api_shell_open_viewer(const char* filename) {
+    if (!viewer_load_bmp(filename)) return 0;
+    viewer_window.visible = 1;
+    bring_to_front(&viewer_window);
+    needs_redraw = 1;
+    return 1;
+}
+
+typedef int (*app_entry_fn)(os_api_t* api);
+
+static int api_shell_launch_app(const char* name, const char* arguments) {
+    char filename[FS_MAX_FILENAME];
+    int name_length = 0;
+    while (name[name_length] && name_length < FS_MAX_FILENAME - 5) {
+        filename[name_length] = name[name_length];
+        name_length++;
+    }
+    filename[name_length] = '\0';
+
+    uint8_t* app_memory = (uint8_t*)0x00200000;
+    int bytes = fs_read_file(filename, app_memory, 1048576);
+    if (bytes <= 0) {
+        filename[name_length++] = '.';
+        filename[name_length++] = 'b';
+        filename[name_length++] = 'i';
+        filename[name_length++] = 'n';
+        filename[name_length] = '\0';
+        bytes = fs_read_file(filename, app_memory, 1048576);
+    }
+    if (bytes <= (int)sizeof(app_header_t)) return -1;
+
+    app_header_t* header = (app_header_t*)app_memory;
+    if (header->magic != APP_HEADER_MAGIC ||
+        (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE)) return -2;
+
+    uint32_t bss_start = (uint32_t)app_memory + bytes;
+    uint32_t bss_end = 0x003F0000;
+    if (bss_start < bss_end) {
+        uint8_t* bss = (uint8_t*)bss_start;
+        for (uint32_t i = 0; i < bss_end - bss_start; i++) bss[i] = 0;
+    }
+
+    (void)arguments;
+    app_entry_fn entry = (app_entry_fn)(app_memory + sizeof(app_header_t));
+    entry(&kernel_api);
+    needs_redraw = 1;
+    return 0;
+}
+
+static void term_print(const char* text) {
+    if (shell_output) shell_output(text);
 }
 
 static uint32_t api_get_ticks(void) {
@@ -614,190 +668,6 @@ static int str_prefix(const char* str, const char* prefix) {
     return 1;
 }
 
-typedef int (*app_entry_fn)(os_api_t* api);
-
-static void shell_execute_command(const char* cmd, shell_output_fn output,
-                                  shell_clear_fn clear) {
-    shell_output = output;
-    shell_clear = clear;
-
-    if (cmd[0] == '>' && cmd[1] == ' ') cmd += 2;
-    while (*cmd == ' ') cmd++;
-
-    shell_command_args[0] = '\0';
-
-    if (*cmd == '\0') return;
-
-    if (str_prefix(cmd, "help")) {
-        term_print("Commands:\n");
-        term_print(" ls              List files\n");
-        term_print(" rm              Remove files\n");
-        term_print(" cat <file>      Read file\n");
-        term_print(" echo <t>><file> Write file\n");
-        term_print(" view <file>     Open in Viewer\n");
-        term_print(" ping <IPv4>     Ping four times\n");
-        term_print(" ifconfig        Show network configuration\n");
-        term_print(" netdiag         Inspect network driver state\n");
-        term_print(" clear           Clear screen\n");
-    }
-    else if (str_prefix(cmd, "clear")) {
-        if (shell_clear) shell_clear();
-    }
-    else if (str_prefix(cmd, "rm ")) {
-        const char* fname = cmd + 3;
-        while (*fname == ' ') fname++;
-        if (fs_delete_file(fname)) {
-            term_print("File deleted.\n");
-        } else {
-            term_print("Failed to delete file.\n");
-        }
-    }
-    else if (str_prefix(cmd, "ls") || str_prefix(cmd, "dir")) {
-        char file_list[FS_MAX_FILES][FS_MAX_FILENAME];
-        int count = fs_list(file_list);
-
-        if (count == 0) {
-            term_print("No files found.\n");
-        } else {
-            for (int i = 0; i < count; i++) {
-                term_print(file_list[i]);
-                term_print("\n");
-            }
-        }
-    }
-    else if (str_prefix(cmd, "cat ")) {
-        const char* fname = cmd + 4;
-        while (*fname == ' ') fname++;
-
-        if (*fname == '\0') {
-            term_print("Usage: cat <filename>\n");
-        } else {
-            char read_buf[512];
-            int bytes = fs_read_file(fname, (uint8_t*)read_buf, 511);
-            if (bytes < 0) {
-                term_print("File not found!\n");
-            } else {
-                read_buf[bytes] = '\0';
-                term_print(read_buf);
-                term_print("\n");
-            }
-        }
-    }
-    else if (str_prefix(cmd, "view ")) {
-        const char* fname = cmd + 5;
-        while (*fname == ' ') fname++;
-
-        if (*fname == '\0') {
-            term_print("Usage: view <filename.bmp>\n");
-        } else {
-            if (viewer_load_bmp(fname)) {
-                viewer_window.visible = 1;
-                bring_to_front(&viewer_window);
-                term_print("Loaded ");
-                term_print(fname);
-                term_print(" in Viewer\n");
-            } else {
-                term_print("Failed to load BMP!\n");
-            }
-        }
-    }
-    else if (str_prefix(cmd, "ifconfig")) {
-        terminal_ifconfig();
-    }
-    else if (str_prefix(cmd, "echo ")) {
-        const char* p = cmd + 5;
-        const char* redirect = 0;
-        for (const char* s = p; *s; s++) {
-            if (*s == '>') {
-                redirect = s;
-                break;
-            }
-        }
-
-        if (!redirect) {
-            term_print(p);
-            term_print("\n");
-        } else {
-            char text_to_save[128];
-            int text_len = (int)(redirect - p);
-            if (text_len > 127) text_len = 127;
-            for (int i = 0; i < text_len; i++) text_to_save[i] = p[i];
-            while (text_len > 0 && text_to_save[text_len - 1] == ' ') text_len--;
-            text_to_save[text_len] = '\0';
-
-            const char* fname = redirect + 1;
-            while (*fname == ' ') fname++;
-
-            if (*fname == '\0') {
-                term_print("Usage: echo <text> > <file>\n");
-            } else {
-                int written = fs_write_file(fname, (const uint8_t*)text_to_save, text_len);
-                if (written >= 0) {
-                    term_print("Saved to ");
-                    term_print(fname);
-                    term_print("\n");
-                } else {
-                    term_print("Write failed!\n");
-                }
-            }
-        }
-    }
-    else {
-        char prog_name[FS_MAX_FILENAME];
-        int ci = 0;
-        while (cmd[ci] && cmd[ci] != ' ' && ci < FS_MAX_FILENAME - 5) {
-            prog_name[ci] = cmd[ci];
-            ci++;
-        }
-        prog_name[ci] = '\0';
-
-        uint8_t* app_target_mem = (uint8_t*)0x00200000;
-        int bytes = fs_read_file(prog_name, app_target_mem, 1048576);
-        if (bytes <= 0) {
-            prog_name[ci++] = '.';
-            prog_name[ci++] = 'b';
-            prog_name[ci++] = 'i';
-            prog_name[ci++] = 'n';
-            prog_name[ci]   = '\0';
-            bytes = fs_read_file(prog_name, app_target_mem, 1048576);
-        }
-
-        if (bytes > (int)sizeof(app_header_t)) {
-            app_header_t* header = (app_header_t*)app_target_mem;
-            if (header->magic != APP_HEADER_MAGIC ||
-                (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE)) {
-                term_print("Invalid executable format.\n");
-                return;
-            }
-
-            uint32_t bss_start = (uint32_t)app_target_mem + bytes;
-            uint32_t bss_end   = 0x003F0000;
-            if (bss_start < bss_end) {
-                uint8_t* bss_ptr = (uint8_t*)bss_start;
-                uint32_t bss_size = bss_end - bss_start;
-                for (uint32_t i = 0; i < bss_size; i++) {
-                    bss_ptr[i] = 0;
-                }
-            }
-
-            int arg_index = 0;
-            while (cmd[arg_index] && cmd[arg_index] != ' ') arg_index++;
-            while (cmd[arg_index] == ' ') arg_index++;
-            int arg_out = 0;
-            while (cmd[arg_index] && arg_out < FS_MAX_FILENAME - 1) {
-                shell_command_args[arg_out++] = cmd[arg_index++];
-            }
-            shell_command_args[arg_out] = '\0';
-
-            app_entry_fn entry = (app_entry_fn)(app_target_mem + sizeof(app_header_t));
-            entry(&kernel_api);
-
-            needs_redraw = 1;
-        } else {
-            term_print("Unknown cmd. Type 'help'\n");
-        }
-    }
-}
 
 void draw_taskbar(void) {
     fill_rect(0, TASKBAR_Y, SCREEN_WIDTH, TASKBAR_HEIGHT, COLOR_WIN_BG);
@@ -1029,6 +899,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     debug_print("[INIT] Windows+Apps init...\n");
     startscreen_show("Loading Built-in Applications...", 85);
+    shell_initialize(&kernel_api);
     terminal_init(&kernel_api);
     notepad_init();
     viewer_init();

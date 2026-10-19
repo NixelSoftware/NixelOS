@@ -1,6 +1,4 @@
 #include "terminal.h"
-#include "../../kernel/font.h"
-#include "../../kernel/drivers/display.h"
 
 #define TERM_MAX_LINES 16
 #define TERM_MAX_COLS 44
@@ -66,22 +64,23 @@ static void terminal_draw(Window* win) {
     int32_t box_w = win->w - 12;
     int32_t box_h = win->h - 26;
 
-    fill_rect(box_x, box_y, box_w, box_h, COLOR_BLACK);
-    fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
-    fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
-    fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
-    fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
+    terminal_api->fill_rect(box_x, box_y, box_w, box_h, COLOR_BLACK);
+    terminal_api->fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
+    terminal_api->fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
+    terminal_api->fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
+    terminal_api->fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
 
     for (int row = 0; row < TERM_MAX_LINES; row++) {
         if (term_lines[row][0] != 0) {
-            draw_string(box_x + 6, box_y + 6 + row * 12, term_lines[row], COLOR_WHITE);
+            terminal_api->draw_string(box_x + 6, box_y + 6 + row * 12,
+                                      term_lines[row], COLOR_WHITE);
         }
     }
 
     if (win->focused) {
         int caret_x = box_x + 6 + term_cursor_col * 8;
         int caret_y = box_y + 6 + term_cursor_row * 12;
-        draw_char(caret_x, caret_y, '_', COLOR_WHITE, 1, 0);
+        terminal_api->draw_string(caret_x, caret_y, "_", COLOR_WHITE);
     }
 }
 
