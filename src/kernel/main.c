@@ -23,6 +23,8 @@
 #include "startscreen.h"
 #include "screenshot.h"
 #include "../system/shell/commands.h"
+#include "../system/init/nixinit.h"
+#include "../system/graphics/wm/wm.h"
 #include "../apps/notepad/notepad.h"
 #include "../apps/viewer/viewer.h"
 #include "../system/graphics/terminal/terminal.h"
@@ -33,7 +35,6 @@
 #define MOUSE_CURSOR_W 12
 #define MOUSE_CURSOR_H 19
 
-#define NUM_WINDOWS 6
 
 static void term_print(const char* text);
 static void api_shell_set_output(shell_output_fn output);
@@ -58,7 +59,6 @@ static uint8_t prev_left_click = 0;
 static uint8_t start_menu_open = 0;
 static uint8_t needs_redraw = 1;
 
-static Window* windows[NUM_WINDOWS] = {0};
 
 static volatile uint8_t ping_reply_received;
 static volatile uint32_t ping_reply_time;
@@ -416,87 +416,6 @@ void draw_window_frame(const Window* win) {
     }
 }
 
-void bring_to_front(Window* target) {
-    if (!target) return;
-
-    for (int i = 0; i < NUM_WINDOWS; i++) {
-        if (windows[i]) {
-            windows[i]->focused = (windows[i] == target);
-        }
-    }
-
-    int target_idx = -1;
-    for (int i = 0; i < NUM_WINDOWS; i++) {
-        if (windows[i] == target) {
-            target_idx = i;
-            break;
-        }
-    }
-
-    if (target_idx != -1) {
-        
-        int last_occupied = NUM_WINDOWS - 1;
-        while (last_occupied > target_idx && windows[last_occupied] == 0) {
-            last_occupied--;
-        }
-
-        for (int j = target_idx; j < last_occupied; j++) {
-            windows[j] = windows[j + 1];
-        }
-        windows[last_occupied] = target;
-    }
-}
-
-static int api_register_window(Window* win) {
-    if (!win) return -1;
-
-    
-    for (int i = 0; i < NUM_WINDOWS; i++) {
-        if (windows[i] == win) {
-            win->visible = 1;
-            win->focused = 1;
-            bring_to_front(win);
-            needs_redraw = 1;
-            return i;
-        }
-    }
-
-    
-    for (int i = 0; i < NUM_WINDOWS; i++) {
-        if (windows[i] == 0) {
-            windows[i] = win;
-            win->visible = 1;
-            win->focused = 1;
-
-            for (int j = 0; j < NUM_WINDOWS; j++) {
-                if (windows[j] && windows[j] != win) {
-                    windows[j]->focused = 0;
-                }
-            }
-            bring_to_front(win);
-            needs_redraw = 1;
-            return i;
-        }
-    }
-    return -1;
-}
-
-static void api_unregister_window(Window* win) {
-    if (!win) return;
-    for (int i = 0; i < NUM_WINDOWS; i++) {
-        if (windows[i] == win) {
-            windows[i] = 0;
-            
-            for (int j = i; j < NUM_WINDOWS - 1; j++) {
-                windows[j] = windows[j + 1];
-            }
-            windows[NUM_WINDOWS - 1] = 0;
-            needs_redraw = 1;
-            break;
-        }
-    }
-}
-
 static uint8_t child_poll_events(int32_t* out_mx, int32_t* out_my, uint8_t* out_btn) {
     uint8_t scancode_out = 0;
 
@@ -569,8 +488,8 @@ static os_api_t kernel_api = {
     .fs_read            = fs_read_file,
     .fs_write           = fs_write_file,
     .term_print         = term_print,
-    .register_window    = api_register_window,
-    .unregister_window  = api_unregister_window,
+    .register_window    = wm_register_window,
+    .unregister_window  = wm_unregister_window,
     .show_info_dialog = show_info_dialog,
     .fs_delete = fs_delete_file,
     .shell_execute     = shell_execute_command,
@@ -605,7 +524,7 @@ static void api_shell_set_output(shell_output_fn output) {
 static int api_shell_open_viewer(const char* filename) {
     if (!viewer_load_bmp(filename)) return 0;
     viewer_window.visible = 1;
-    bring_to_front(&viewer_window);
+    wm_bring_to_front(&viewer_window);
     needs_redraw = 1;
     return 1;
 }
@@ -680,8 +599,9 @@ void draw_taskbar(void) {
     draw_button(236, TASKBAR_Y + 4, 80, 24, "Viewer",   viewer_window.visible && viewer_window.focused);
 
     
-    if (windows[3] && windows[3]->title) {
-        draw_button(320, TASKBAR_Y + 4, 80, 24, "Files", windows[3]->visible && windows[3]->focused);
+    Window* files_window = wm_get_window(3);
+    if (files_window && files_window->title) {
+        draw_button(320, TASKBAR_Y + 4, 80, 24, "Files", files_window->visible && files_window->focused);
     }
 
     fill_rect(SCREEN_WIDTH - 64, TASKBAR_Y + 5, 58, 22, COLOR_WIN_BG);
@@ -760,10 +680,9 @@ static void render_screen(void) {
     display_clear(COLOR_DESKTOP);
     desktop_draw();
 
-    for (int i = 0; i < NUM_WINDOWS; i++) {
-        if (windows[i]) {
-            draw_window_frame(windows[i]);
-        }
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        Window* window = wm_get_window(i);
+        if (window) draw_window_frame(window);
     }
 
     draw_taskbar();
@@ -833,6 +752,89 @@ void init_mouse(void) {
     ps2_flush_buffer();
 }
 
+static void nixinit_show_status(const char* text, int percent) {
+    startscreen_show(text, percent);
+}
+
+static void kernel_init_interrupts(void) {
+    debug_print("[INIT] IDT init...\n");
+    idt_init();
+}
+
+static void kernel_init_timer(void) {
+    debug_print("[INIT] PIT init...\n");
+    pit_init(100);
+}
+
+static void kernel_init_network_device(void) {
+    debug_print("[INIT] Net init...\n");
+    sys_net_init(0);
+}
+
+static void kernel_init_network_stack(void) {
+    uint64_t mac_value = net_get_mac_address();
+    uint8_t mac[6];
+    for (int i = 5; i >= 0; i--) {
+        mac[i] = (uint8_t)mac_value;
+        mac_value >>= 8;
+    }
+    ipv4_init(0, mac, 0, 0);
+    arp_init(0, mac);
+    icmp_init();
+    icmp_set_echo_reply_handler(ping_reply);
+    udp_init();
+}
+
+static void kernel_configure_network(void) {
+    dhcp_lease_t lease;
+    if (!dhcp_request(&lease, 100000)) {
+        ipv4_set_configuration(0x0A0000E3, 0x0a000002, 0xFFFFFF00);
+    }
+}
+
+static void kernel_mount_filesystem(void) {
+    debug_print("[INIT] FS init...\n");
+    fs_init();
+}
+
+static void kernel_initialize_tasking(void) {
+    debug_print("[INIT] Tasking init...\n");
+    tasking_init();
+}
+
+static void kernel_mark_redraw(void) {
+    needs_redraw = 1;
+}
+
+static void kernel_initialize_system_apps(void) {
+    debug_print("[INIT] Windows+Apps init...\n");
+    shell_initialize(&kernel_api);
+    terminal_init(&kernel_api);
+    notepad_init();
+    viewer_init();
+    dialog_init(&kernel_api);
+
+    wm_initialize(kernel_mark_redraw);
+    wm_register_window(&notepad_window);
+    wm_register_window(&viewer_window);
+    wm_register_window(&terminal_window);
+    desktop_init(&terminal_window, &notepad_window);
+}
+
+static void kernel_initialize_input(void) {
+    debug_print("[INIT] PS/2 Mouse init...\n");
+    init_mouse();
+}
+
+static void kernel_finish_boot(void) {
+    startscreen_stop();
+    debug_print("[INIT] Drawing to display...\n");
+    render_screen();
+    needs_redraw = 0;
+    debug_print("[INIT] Enable interrupt...\n");
+    __asm__ volatile ("sti");
+}
+
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     __asm__ volatile ("cli");
     
@@ -846,87 +848,20 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     display_init(lfb_address, bpp, pitch);
 
-    startscreen_show("Starting Desktop...", 100);
-    //render_screen();
-    //needs_redraw = 0;
-
-    startscreen_show("Initializing IDT...", 5);
-
-    debug_print("[INIT] IDT init...\n");
-
-    idt_init();
-
-    startscreen_show("Configuring PIT...", 15);
-
-    debug_print("[INIT] PIT init...\n");
-
-    pit_init(100);
-
-    startscreen_show("Detecting Network Adapter...", 25);
-
-    debug_print("[INIT] Net init...\n");
-    sys_net_init(0);
-
-    startscreen_show("Configuring IPv4", 35);
-    {
-        uint64_t mac_value = net_get_mac_address();
-        uint8_t mac[6];
-        for (int i = 5; i >= 0; i--) {
-            mac[i] = (uint8_t)mac_value;
-            mac_value >>= 8;
-        }
-        ipv4_init(0, mac, 0, 0);
-        arp_init(0, mac);
-    }
-    icmp_init();
-    icmp_set_echo_reply_handler(ping_reply);
-    udp_init();
-    startscreen_show("Requesting DHCP Lease...", 50);
-    {
-        dhcp_lease_t lease;
-        if (!dhcp_request(&lease, 100000)) {
-            ipv4_set_configuration(0x0A0000E3, 0x0a000002, 0xFFFFFF00);
-        }
-    }
-
-    debug_print("[INIT] FS init...\n");
-    startscreen_show("Mounting SFS Filesystem...", 65);
-    fs_init();
-
-    startscreen_show("Initializing Tasking...", 75);
-    debug_print("[INIT] Tasking init...\n");
-    tasking_init();
-
-    debug_print("[INIT] Windows+Apps init...\n");
-    startscreen_show("Loading Built-in Applications...", 85);
-    shell_initialize(&kernel_api);
-    terminal_init(&kernel_api);
-    notepad_init();
-    viewer_init();
-    dialog_init(&kernel_api);
-
-    // fuckass line was breaking shit
-    //outb(0x21, inb(0x21) & ~0x01);
-
-    windows[0] = &notepad_window;
-    windows[1] = &viewer_window;
-    windows[2] = &terminal_window;
-
-    desktop_init(&terminal_window, &notepad_window);
-
-    debug_print("[INIT] PS/2 Mouse init...\n");
-    startscreen_show("Initializing PS/2 Mouse...", 95);
-    init_mouse();
-
-    startscreen_stop();
-
-    debug_print("[INIT] Drawing to display...\n");
-    render_screen();
-    needs_redraw = 0;
-
-    debug_print("[INIT] Enable interrupt...\n");
-    __asm__ volatile ("sti");
-
+    nixinit_services_t init_services = {
+        .show_status = nixinit_show_status,
+        .initialize_interrupts = kernel_init_interrupts,
+        .initialize_timer = kernel_init_timer,
+        .initialize_network_device = kernel_init_network_device,
+        .initialize_network_stack = kernel_init_network_stack,
+        .configure_network = kernel_configure_network,
+        .mount_filesystem = kernel_mount_filesystem,
+        .initialize_tasking = kernel_initialize_tasking,
+        .initialize_system_apps = kernel_initialize_system_apps,
+        .initialize_input = kernel_initialize_input,
+        .finish_boot = kernel_finish_boot
+    };
+    nixinit_start(&init_services);
 
     debug_print("[INIT] Exec Main Loop.\n");
     while (1) {
@@ -1004,7 +939,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                          mouse_y >= TASKBAR_Y + 4 && mouse_y <= TASKBAR_Y + 28) 
                                 {
                                     terminal_window.visible = !terminal_window.visible;
-                                    if (terminal_window.visible) bring_to_front(&terminal_window);
+                                    if (terminal_window.visible) wm_bring_to_front(&terminal_window);
                                     start_menu_open = 0;
                                     handled = 1;
                                     needs_redraw = 1;
@@ -1013,7 +948,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                          mouse_y >= TASKBAR_Y + 4 && mouse_y <= TASKBAR_Y + 28) 
                                 {
                                     notepad_window.visible = !notepad_window.visible;
-                                    if (notepad_window.visible) bring_to_front(&notepad_window);
+                                    if (notepad_window.visible) wm_bring_to_front(&notepad_window);
                                     start_menu_open = 0;
                                     handled = 1;
                                     needs_redraw = 1;
@@ -1022,16 +957,16 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                          mouse_y >= TASKBAR_Y + 4 && mouse_y <= TASKBAR_Y + 28) 
                                 {
                                     viewer_window.visible = !viewer_window.visible;
-                                    if (viewer_window.visible) bring_to_front(&viewer_window);
+                                    if (viewer_window.visible) wm_bring_to_front(&viewer_window);
                                     start_menu_open = 0;
                                     handled = 1;
                                     needs_redraw = 1;
                                 }
-                                else if (windows[3] && mouse_x >= 320 && mouse_x <= 400 &&
+                                else if (wm_get_window(3) && mouse_x >= 320 && mouse_x <= 400 &&
                                          mouse_y >= TASKBAR_Y + 4 && mouse_y <= TASKBAR_Y + 28)
                                 {
-                                    windows[3]->visible = !windows[3]->visible;
-                                    if (windows[3]->visible) bring_to_front(windows[3]);
+                                    wm_get_window(3)->visible = !wm_get_window(3)->visible;
+                                    if (wm_get_window(3)->visible) wm_bring_to_front(wm_get_window(3));
                                     start_menu_open = 0;
                                     handled = 1;
                                     needs_redraw = 1;
@@ -1041,13 +976,13 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                 {
                                     if (mouse_y < TASKBAR_Y - 64) {
                                         terminal_window.visible = 1;
-                                        bring_to_front(&terminal_window);
+                                        wm_bring_to_front(&terminal_window);
                                     } else if (mouse_y < TASKBAR_Y - 32) {
                                         notepad_window.visible = 1;
-                                        bring_to_front(&notepad_window);
+                                        wm_bring_to_front(&notepad_window);
                                     } else {
                                         viewer_window.visible = 1;
-                                        bring_to_front(&viewer_window);
+                                        wm_bring_to_front(&viewer_window);
                                     }
                                     start_menu_open = 0;
                                     handled = 1;
@@ -1056,8 +991,8 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
                                 if (!handled) {
                                     start_menu_open = 0;
-                                    for (int i = NUM_WINDOWS - 1; i >= 0; i--) {
-                                        Window* w = windows[i];
+                                    for (int i = WM_MAX_WINDOWS - 1; i >= 0; i--) {
+                                        Window* w = wm_get_window(i);
                                         if (!w || !w->visible) continue;
 
                                         int32_t btn_x = w->x + w->w - 16;
@@ -1074,7 +1009,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                         if (mouse_x >= w->x && mouse_x <= (w->x + w->w) &&
                                             mouse_y >= w->y && mouse_y <= (w->y + 18)) 
                                         {
-                                            bring_to_front(w);
+                                            wm_bring_to_front(w);
                                             dragging_window = w;
                                             handled = 1;
                                             needs_redraw = 1;
@@ -1084,7 +1019,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                                         if (mouse_x >= w->x && mouse_x <= (w->x + w->w) &&
                                             mouse_y >= w->y && mouse_y <= (w->y + w->h)) 
                                         {
-                                            bring_to_front(w);
+                                            wm_bring_to_front(w);
                                             handled = 1;
                                             needs_redraw = 1;
                                             if (w->handle_mouse) {
@@ -1121,9 +1056,10 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                 }
 
                 if (scancode == 0x3C || scancode == 0x3D || scancode == 0x48 || scancode == 0x50 || scancode == 0x01) {
-                    for (int i = 0; i < NUM_WINDOWS; i++) {
-                        if (windows[i] && windows[i]->visible && windows[i]->focused && windows[i]->handle_key) {
-                            windows[i]->handle_key(windows[i], (char)scancode);
+                    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+                        Window* window = wm_get_window(i);
+                        if (window && window->visible && window->focused && window->handle_key) {
+                            window->handle_key(window, (char)scancode);
                             needs_redraw = 1;
                             break;
                         }
@@ -1131,9 +1067,10 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
                 } else {
                     char ascii = kbd_scancode_to_ascii(scancode);
                     if (ascii != 0) {
-                        for (int i = 0; i < NUM_WINDOWS; i++) {
-                            if (windows[i] && windows[i]->visible && windows[i]->focused && windows[i]->handle_key) {
-                                windows[i]->handle_key(windows[i], ascii);
+                        for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+                            Window* window = wm_get_window(i);
+                            if (window && window->visible && window->focused && window->handle_key) {
+                                window->handle_key(window, ascii);
                                 needs_redraw = 1;
                                 break;
                             }

@@ -3,12 +3,13 @@ pmo
 # Architecture
 
 Boot sector and stage-two loader sources live in `src/boot/`. The terminal emulator
-lives in `src/system/graphics/terminal/`, and shell command policy lives in
-`src/system/shell/`. Both use the kernel interface in `src/kernel/os_api.h`.
+lives in `src/system/graphics/terminal/`, shell command policy lives in
+`src/system/shell/`, and boot sequencing lives in `src/system/init/`. Window
+registration and focus stacking live in `src/system/graphics/wm/`. These system
+components use interfaces from `src/kernel/`.
 
-Boot orchestration and most window-manager/input code still live in the kernel
-and are the next boundaries to extract. Kernel services stay behind
-`src/kernel/os_api.h` as those modules move out.
+Hardware setup remains in the kernel. Window drawing and the input event loop
+also remain in `src/kernel/main.c` and are the next boundaries to extract.
 
 # Building
 compile on windows with build.bat

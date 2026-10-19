@@ -1,6 +1,7 @@
 #include "desktop.h"
 #include "font.h"
 #include "drivers/display.h"
+#include "../system/graphics/wm/wm.h"
 
 #define NUM_ICONS 2
 static DesktopIcon icons[NUM_ICONS];
@@ -8,8 +9,6 @@ static DesktopIcon icons[NUM_ICONS];
 static uint32_t last_click_time = 0;
 static int last_clicked_icon = -1;
 #define DOUBLE_CLICK_THRESHOLD 5000
-
-extern void bring_to_front(Window* target);
 
 static const uint8_t icon_terminal[16][16] = {
     {0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
@@ -136,7 +135,7 @@ uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {
         Window* target = icons[clicked_index].target_window;
         if (target) {
             target->visible = 1;
-            bring_to_front(target);
+            wm_bring_to_front(target);
         }
         icons[clicked_index].selected = 0;
         last_clicked_icon = -1;

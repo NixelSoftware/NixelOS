@@ -13,6 +13,8 @@ nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
 kernel_sources=(
     src/kernel/main.c
     src/system/shell/commands.c
+    src/system/init/main.c
+    src/system/graphics/wm/wm.c
     src/kernel/idt.c
     src/kernel/startscreen.c
     src/kernel/screenshot.c
@@ -78,6 +80,8 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/task_switch.o \
     src/kernel/main.o \
     src/system/shell/commands.o \
+    src/system/init/main.o \
+    src/system/graphics/wm/wm.o \
     src/kernel/idt.o \
     src/kernel/task.o \
     src/kernel/dialog.o \
@@ -141,6 +145,8 @@ rm -f src/boot.bin
 rm -f src/boot_stage2.bin
 rm -f src/kernel/*.o
 rm -f src/system/shell/*.o
+rm -f src/system/init/*.o
+rm -f src/system/graphics/wm/*.o
 rm -f src/kernel/drivers/*.o
 rm -f src/kernel/net/*.o
 rm -f src/kernel/dialog.o
