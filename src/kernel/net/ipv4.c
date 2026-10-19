@@ -86,7 +86,8 @@ void ipv4_set_configuration(uint32_t address, uint32_t gateway,
     local_ip = address;
     gateway_ip = gateway;
     subnet_mask = mask;
-    net_set_ip_address(address);
+    //net_set_ip_address(address);
+    sys_net_set_ip_address(address);
     arp_set_local_ip(address);
 }
 
