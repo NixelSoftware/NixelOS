@@ -5,6 +5,14 @@
 
 #define NET_MAX_FRAME_SIZE 1518
 
+/* Shared init_failure meanings for every network driver. */
+typedef enum {
+    NET_INIT_FAILURE_NONE = 0,
+    NET_INIT_FAILURE_DISCOVERY = 1,
+    NET_INIT_FAILURE_REGISTER_ACCESS = 2,
+    NET_INIT_FAILURE_TIMEOUT = 3
+} net_init_failure_t;
+
 typedef uint8_t (*net_receive_handler_t)(const uint8_t* data, uint32_t length);
 
 typedef struct {

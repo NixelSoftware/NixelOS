@@ -56,6 +56,9 @@
 #define TX_CMD_IFCS   (1 << 1)
 #define TX_CMD_RS     (1 << 3)
 #define TX_STATUS_DD  (1 << 0)
+#define TX_STATUS_EC  (1 << 2)
+#define TX_STATUS_LC  (1 << 3)
+#define TX_STATUS_TU  (1 << 4)
 
 typedef struct {
     uint64_t buffer_addr;
@@ -87,6 +90,7 @@ static net_diagnostics_t diag;
 
 static uint16_t rx_cur = 0;
 static uint16_t tx_cur = 0;
+static uint8_t tx_pending[E1000_NUM_TX_DESC];
 
 static e1000_rx_desc_t rx_descs[E1000_NUM_RX_DESC] __attribute__((aligned(16)));
 static e1000_tx_desc_t tx_descs[E1000_NUM_TX_DESC] __attribute__((aligned(16)));
@@ -171,6 +175,11 @@ static int e1000_pci_find(void) {
                     uint32_t bar0 = pci_read((uint8_t)bus, slot, func, 0x10);
                     uint32_t bar1 = pci_read((uint8_t)bus, slot, func, 0x14);
 
+                    if ((bar0 & ~0xFU) == 0 && (bar1 & ~0x3U) == 0) {
+                        diag.init_failure = NET_INIT_FAILURE_DISCOVERY;
+                        return 0;
+                    }
+
                     e1000_mmio_base = bar0 & ~0xF;
                     e1000_io_base = (uint16_t)(bar1 & ~0x3);
 
@@ -190,6 +199,13 @@ static int e1000_pci_find(void) {
                     debug_hex(test_val);
                     debug_print("\n");
 
+                    if (test_val == 0xFFFFFFFFU) {
+                        diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
+                        diag.last_error_status = 0xFFFF;
+                        diag.dw_csr0 = test_val;
+                        return 0;
+                    }
+
                     return 1;
                 }
             }
@@ -200,14 +216,25 @@ static int e1000_pci_find(void) {
 
 uint8_t e1000_init(void) {
     ready = 0;
+    for (uint32_t i = 0; i < sizeof(diag); i++) ((uint8_t*)&diag)[i] = 0;
+    rx_cur = 0;
+    tx_cur = 0;
+    for (uint8_t i = 0; i < E1000_NUM_TX_DESC; i++) tx_pending[i] = 0;
     if (!e1000_pci_find()) {
         debug_print("[E1000] PCI device search failed.\n");
+        if (diag.init_failure == NET_INIT_FAILURE_NONE) diag.init_failure = NET_INIT_FAILURE_DISCOVERY;
         return 0;
     }
 
     
     e1000_write(REG_CTRL, e1000_read(REG_CTRL) | CTRL_RST);
     for (volatile int i = 0; i < 50000; i++) __asm__ volatile ("pause");
+    if (e1000_read(REG_CTRL) & CTRL_RST) {
+        diag.init_failure = NET_INIT_FAILURE_TIMEOUT;
+        diag.last_error_status = (uint16_t)e1000_read(REG_STATUS);
+        diag.dw_csr0 = e1000_read(REG_STATUS);
+        return 0;
+    }
 
     
     e1000_write(REG_CTRL, CTRL_SLU | (1 << 5));
@@ -296,11 +323,19 @@ uint8_t e1000_init(void) {
     e1000_write(REG_TCTL, TCTL_EN | TCTL_PSP | (15 << TCTL_CT_SHIFT) | (64 << TCTL_COLD_SHIFT));
 
     uint32_t final_status = e1000_read(REG_STATUS);
+    diag.dw_csr0 = final_status;
+    diag.csr0 = (uint16_t)final_status;
     debug_print("[E1000] Final STATUS: ");
     debug_hex(final_status);
     debug_print("\n");
 
+    if (final_status == 0xFFFFFFFFU) {
+        diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
+        diag.last_error_status = 0xFFFF;
+        return 0;
+    }
     ready = 1;
+    diag.initialized = 1;
     return 1;
 }
 
@@ -320,10 +355,12 @@ void e1000_shutdown(void) {
 }
 
 uint8_t e1000_send(const uint8_t* data, uint32_t length) {
-    if (!ready || !data || length > E1000_BUF_SIZE) return 0;
+    diag.tx_attempts++;
+    if (!ready || !data || length == 0 || length > NET_MAX_FRAME_SIZE || length > E1000_BUF_SIZE) return 0;
 
     e1000_tx_desc_t* desc = &tx_descs[tx_cur];
     if (!(desc->status & TX_STATUS_DD)) {
+        diag.tx_busy++;
         return 0;
     }
 
@@ -333,25 +370,42 @@ uint8_t e1000_send(const uint8_t* data, uint32_t length) {
     desc->length = (uint16_t)length;
     desc->cmd = TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS;
     desc->status = 0;
+    tx_pending[tx_cur] = 1;
+    diag.tx_submitted++;
 
     tx_cur = (tx_cur + 1) % E1000_NUM_TX_DESC;
     e1000_write(REG_TDT, tx_cur);
 
-    diag.tx_attempts++;
-    diag.tx_submitted++;
     return 1;
 }
 
 void e1000_poll(void) {
     if (!ready) return;
 
+    for (uint8_t i = 0; i < E1000_NUM_TX_DESC; i++) {
+        if (tx_pending[i] && (tx_descs[i].status & TX_STATUS_DD)) {
+            tx_pending[i] = 0;
+            diag.tx_completed++;
+            diag.last_tx_status = tx_descs[i].status;
+            if (tx_descs[i].status & (TX_STATUS_EC | TX_STATUS_LC | TX_STATUS_TU))
+                diag.tx_errors++;
+        }
+    }
+
     while (rx_descs[rx_cur].status & RX_STATUS_DD) {
         e1000_rx_desc_t* desc = &rx_descs[rx_cur];
         uint16_t length = desc->length;
+        diag.last_rx_length = length;
+        diag.rx_descriptor_status = desc->status;
+        diag.rx_message_length = length;
 
-        if ((desc->status & RX_STATUS_EOP) && rx_handler && length > 0) {
-            rx_handler((const uint8_t*)(uint32_t)desc->buffer_addr, length);
+        if (desc->errors) {
+            diag.rx_errors++;
+        } else if ((desc->status & RX_STATUS_EOP) && length > 0 && length <= E1000_BUF_SIZE) {
             diag.rx_frames++;
+            if (rx_handler) rx_handler((const uint8_t*)(uint32_t)desc->buffer_addr, length);
+        } else {
+            diag.rx_invalid++;
         }
 
         desc->status = 0;
@@ -384,4 +438,7 @@ void e1000_get_diagnostics(net_diagnostics_t* output) {
     output->io_base = e1000_io_base;
     output->tx_index = (uint8_t)tx_cur;
     output->rx_index = (uint8_t)rx_cur;
+    output->tx_descriptor_address = (uint32_t)tx_descs[tx_cur].buffer_addr;
+    output->tx_descriptor_length = (int16_t)tx_descs[tx_cur].length;
+    output->tx_descriptor_status = tx_descs[tx_cur].status;
 }
