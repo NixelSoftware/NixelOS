@@ -1,8 +1,10 @@
 #include "arp.h"
 #include "etherframe.h"
 #include "ipv4.h"
+#include "../kernel_net.h"
 
 #define ARP_PACKET_SIZE 28
+#define ARP_RESOLVE_TIMEOUT 10000
 
 typedef struct {
     uint32_t ip;
@@ -145,5 +147,19 @@ uint8_t arp_resolve(uint32_t ip_address, uint8_t mac[6]) {
         }
     }
     arp_request(ip_address);
+
+    /* ARP replies arrive asynchronously, so poll while waiting for the cache
+       entry instead of making the first IPv4 send fail immediately. */
+    for (uint32_t i = 0; i < ARP_RESOLVE_TIMEOUT; i++) {
+        sys_net_poll();
+        for (uint32_t j = 0; j < ARP_CACHE_SIZE; j++) {
+            if (cache[j].valid && cache[j].ip == ip_address) {
+                for (uint8_t k = 0; k < 6; k++) mac[k] = cache[j].mac[k];
+                return 1;
+            }
+        }
+        for (volatile int delay = 0; delay < 20; delay++)
+            __asm__ volatile ("pause");
+    }
     return 0;
 }

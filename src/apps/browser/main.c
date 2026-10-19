@@ -25,6 +25,7 @@
 #define LINE_MAX_CHARS    64
 #define MAX_PAGE_IMAGES   4
 #define MAX_PNG_SIZE      32768
+#define MAX_REDIRECTS     5
 
 typedef enum {
     TCP_ST_CLOSED,
@@ -589,28 +590,132 @@ static void browser_draw(Window* win) {
     os->draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
 }
 
-static void browser_fetch(void) {
-    set_status("Connecting...");
-    browser_draw(&browser_win);
-    os->blit_all();
-
-    {
-        char host[128];
-        int host_len = 0;
-        while (url_input[host_len] && url_input[host_len] != '/' && host_len < 127) {
-            host[host_len] = url_input[host_len];
-            host_len++;
-        }
-        host[host_len] = '\0';
-        if (!os->dns_resolve(host, &target_ip)) {
-            set_status("DNS lookup failed");
-            browser_draw(&browser_win);
-            os->blit_all();
-            return;
-        }
+static int copy_string(char* dst, int max_len, const char* src) {
+    int len = 0;
+    while (src[len] && len < max_len - 1) {
+        dst[len] = src[len];
+        len++;
     }
+    dst[len] = '\0';
+    return src[len] == '\0';
+}
 
-    
+static int starts_with(const char* text, const char* prefix) {
+    int i = 0;
+    while (prefix[i]) {
+        if (text[i] != prefix[i]) return 0;
+        i++;
+    }
+    return 1;
+}
+
+static int parse_url(const char* url, char* host, int host_max, char* path, int path_max) {
+    const char* p = url;
+    if (starts_with(p, "http://")) p += 7;
+    if (*p == '\0' || *p == '/') return 0;
+
+    int host_len = 0;
+    while (p[host_len] && p[host_len] != '/' && p[host_len] != '#' &&
+           host_len < host_max - 1) {
+        host[host_len] = p[host_len];
+        host_len++;
+    }
+    if (p[host_len] && p[host_len] != '/' && p[host_len] != '#') return 0;
+    host[host_len] = '\0';
+
+    const char* path_start = p + host_len;
+    if (*path_start == '#') path_start = "/";
+    if (*path_start == '\0') path_start = "/";
+    if (*path_start != '/') return 0;
+
+    int path_len = 0;
+    while (path_start[path_len] && path_start[path_len] != '#' &&
+           path_len < path_max - 1) {
+        path[path_len] = path_start[path_len];
+        path_len++;
+    }
+    path[path_len] = '\0';
+    return host_len > 0 && path_len > 0;
+}
+
+static int header_name_equals(const char* name, int name_len, const char* expected) {
+    int i = 0;
+    while (expected[i]) {
+        if (i >= name_len) return 0;
+        char a = name[i];
+        char b = expected[i];
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (b >= 'A' && b <= 'Z') b += 32;
+        if (a != b) return 0;
+        i++;
+    }
+    return i == name_len;
+}
+
+static int parse_http_status(const char* response, uint32_t len) {
+    if (len < 12 || !starts_with(response, "HTTP/")) return 0;
+    int i = 0;
+    while (i < 12 && response[i] != ' ') i++;
+    while (i < 12 && response[i] == ' ') i++;
+    if (i + 2 >= (int)len || response[i] < '0' || response[i] > '9' ||
+        response[i + 1] < '0' || response[i + 1] > '9' ||
+        response[i + 2] < '0' || response[i + 2] > '9') return 0;
+    return (response[i] - '0') * 100 + (response[i + 1] - '0') * 10 + response[i + 2] - '0';
+}
+
+static int get_redirect_location(const char* response, uint32_t len, char* location, int max_len) {
+    uint32_t i = 0;
+    while (i + 1 < len && !(response[i] == '\r' && response[i + 1] == '\n')) i++;
+    if (i + 1 >= len) return 0;
+    i += 2;
+
+    while (i + 1 < len && !(response[i] == '\r' && response[i + 1] == '\n')) {
+        uint32_t line_start = i;
+        while (i + 1 < len && !(response[i] == '\r' && response[i + 1] == '\n')) i++;
+        uint32_t colon = line_start;
+        while (colon < i && response[colon] != ':') colon++;
+        if (colon < i && header_name_equals(response + line_start, (int)(colon - line_start), "location")) {
+            uint32_t value = colon + 1;
+            while (value < i && (response[value] == ' ' || response[value] == '\t')) value++;
+            int copied = 0;
+            while (value < i && copied < max_len - 1) location[copied++] = response[value++];
+            location[copied] = '\0';
+            return copied > 0;
+        }
+        i += 2;
+    }
+    return 0;
+}
+
+static int resolve_redirect(const char* location, const char* current_host,
+                            const char* current_path, char* next_url, int max_len) {
+    if (starts_with(location, "http://")) return copy_string(next_url, max_len, location);
+    if (starts_with(location, "https://")) return 0;
+
+    int p = 0;
+    if (starts_with(location, "//")) {
+        if (p + 7 >= max_len) return 0;
+        next_url[p++] = 'h'; next_url[p++] = 't'; next_url[p++] = 't';
+        next_url[p++] = 'p'; next_url[p++] = ':'; next_url[p++] = '/'; next_url[p++] = '/';
+        return copy_string(next_url + p, max_len - p, location + 2);
+    }
+    if (!copy_string(next_url, max_len, "http://")) return 0;
+    while (next_url[p]) p++;
+    if (!copy_string(next_url + p, max_len - p, current_host)) return 0;
+    while (next_url[p]) p++;
+    if (location[0] == '/') return copy_string(next_url + p, max_len - p, location);
+
+    int base_len = 0;
+    while (current_path[base_len]) base_len++;
+    while (base_len > 0 && current_path[base_len - 1] != '/') base_len--;
+    if (p + base_len >= max_len) return 0;
+    for (int i = 0; i < base_len; i++) next_url[p++] = current_path[i];
+    return copy_string(next_url + p, max_len - p, location);
+}
+
+static int fetch_http_document(const char* host, const char* path) {
+    if (!os->dns_resolve(host, &target_ip)) return -1;
+
     uint32_t gw = (10U << 24) | (0U << 16) | (1U << 8) | 2U;
     os->icmp_request_echo(gw, 0x9999, 1, (const uint8_t*)"probe", 5);
     for (int p = 0; p < 20000; p++) {
@@ -642,7 +747,7 @@ static void browser_fetch(void) {
         set_status("Connection failed");
         browser_draw(&browser_win);
         os->blit_all();
-        return;
+        return -2;
     }
 
     set_status("Requesting document...");
@@ -651,12 +756,16 @@ static void browser_fetch(void) {
 
     char req[384];
     int p = 0;
-    const char* r1 = "GET / HTTP/1.1\r\nHost: ";
+    const char* r1 = "GET ";
     while (*r1) req[p++] = *r1++;
     int u = 0;
-    while (url_input[u] && p < 200) req[p++] = url_input[u++];
-    const char* r2 = "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, text/plain;q=0.9, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
+    while (path[u] && p < (int)sizeof(req) - 1) req[p++] = path[u++];
+    const char* r2 = " HTTP/1.1\r\nHost: ";
     while (*r2) req[p++] = *r2++;
+    u = 0;
+    while (host[u] && p < (int)sizeof(req) - 1) req[p++] = host[u++];
+    const char* r3 = "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, text/plain;q=0.9, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
+    while (*r3 && p < (int)sizeof(req) - 1) req[p++] = *r3++;
     req[p] = '\0';
 
     send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
@@ -669,12 +778,69 @@ static void browser_fetch(void) {
         for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
     }
 
-    if (http_raw_len > 0) {
-        http_raw_buf[http_raw_len] = '\0';
+    if (http_raw_len == 0) return 0;
+    http_raw_buf[http_raw_len] = '\0';
+    return parse_http_status((const char*)http_raw_buf, http_raw_len);
+}
+
+static void browser_fetch(void) {
+    char current_url[MAX_URL_LEN];
+    char host[128];
+    char path[MAX_URL_LEN];
+    char location[MAX_URL_LEN];
+
+    if (!copy_string(current_url, sizeof(current_url), url_input) ||
+        !parse_url(current_url, host, sizeof(host), path, sizeof(path))) {
+        set_status("Invalid URL");
+        browser_draw(&browser_win);
+        os->blit_all();
+        return;
+    }
+
+    for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+        set_status(redirect == 0 ? "Connecting..." : "Following redirect...");
+        browser_draw(&browser_win);
+        os->blit_all();
+
+        int status = fetch_http_document(host, path);
+        if (status < 0) {
+            set_status(status == -1 ? "DNS lookup failed" : "Connection failed");
+            browser_draw(&browser_win);
+            os->blit_all();
+            return;
+        }
+        if (status == 0) {
+            set_status("Invalid HTTP response");
+            browser_draw(&browser_win);
+            os->blit_all();
+            return;
+        }
+        if (status >= 300 && status < 400) {
+            if (redirect == MAX_REDIRECTS ||
+                !get_redirect_location((const char*)http_raw_buf, http_raw_len, location, sizeof(location)) ||
+                !resolve_redirect(location, host, path, current_url, sizeof(current_url)) ||
+                !parse_url(current_url, host, sizeof(host), path, sizeof(path))) {
+                set_status("Redirect failed");
+                browser_draw(&browser_win);
+                os->blit_all();
+                return;
+            }
+            copy_string(url_input, sizeof(url_input), current_url);
+            url_cursor = 0;
+            while (url_input[url_cursor]) url_cursor++;
+            continue;
+        }
+        if (status < 200 || status >= 300) {
+            set_status("HTTP error");
+            browser_draw(&browser_win);
+            os->blit_all();
+            return;
+        }
         parse_and_layout_html((const char*)http_raw_buf, http_raw_len);
         set_status("Document Loaded");
-    } else {
-        set_status("Empty response");
+        browser_draw(&browser_win);
+        os->blit_all();
+        return;
     }
 
     browser_draw(&browser_win);
