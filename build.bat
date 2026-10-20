@@ -22,6 +22,7 @@ for %%S in (
     src\system\loader\app_loader.c
     src\kernel\idt.c
     src\system\init\splash\startscreen.c
+    src\system\init\splash\logo_data.c
     src\system\graphics\screenshot\screenshot.c
     src\system\graphics\image\png.c
     src\kernel\drivers\display.c
@@ -95,7 +96,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\system\graphics\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
     src\system\init\splash\startscreen.o src\system\graphics\screenshot\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
-    src\system\graphics\image\png.o src\kernel\net\dns.o^
+    src\system\graphics\image\png.o src\kernel\net\dns.o src\system\init\splash\logo_data.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
