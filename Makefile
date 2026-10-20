@@ -56,7 +56,7 @@ KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin
-.PHONY: all run clean
+.PHONY: all run clean clean-build
 all: os.img
 
 src/boot.bin: Makefile src/boot/boot.asm
@@ -90,9 +90,13 @@ src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
 os.img: Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
 	$(PYTHON) mkfat32.py os.img
 	$(PYTHON) -c "from pathlib import Path; p=Path('os.img'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d)"
+	$(MAKE) clean-build
 
 run: os.img
 	$(QEMU) -m 32M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -serial stdio
 
-clean:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin'),Path('os.img')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown browser'.split()]]"
+clean-build:
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown browser'.split()]]"
+
+clean: clean-build
+	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
