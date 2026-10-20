@@ -20,11 +20,19 @@ stage2_entry:
 .a20_ok:
     mov si, msg_a20
     call print_string
-    mov di, 7
     mov dword [k_lba], 5
     mov word [k_seg], 0x1000
+    mov word [kernel_sectors_remaining], KERNEL_SECTORS
 
 .load_kernel_loop:
+    mov ax, [kernel_sectors_remaining]
+    cmp ax, 32
+    jbe .chunk_size_ready
+    mov ax, 32
+.chunk_size_ready:
+    mov [chunk_sectors], ax
+    mov [dap_chunk + 2], ax
+
     mov si, dap_chunk
     mov ah, 0x42
     mov dl, [boot_drive]
@@ -52,16 +60,21 @@ stage2_entry:
     mov es, ax
     xor bx, bx                  
     mov ah, 0x02  
-    mov al, 32
+    mov al, [chunk_sectors]
     mov dl, [boot_drive]
     int 0x13
     jc .kernel_fail
 
 .chunk_ok:
-    add dword [k_lba], 32      
-    add word [k_seg], 0x0400  
-    dec di
-    jnz .load_kernel_loop
+    movzx eax, word [chunk_sectors]
+    add dword [k_lba], eax
+    mov ax, [chunk_sectors]
+    mov cx, ax
+    shl ax, 5
+    add word [k_seg], ax
+    sub word [kernel_sectors_remaining], cx
+    cmp word [kernel_sectors_remaining], 0
+    jne .load_kernel_loop
     jmp .kernel_loaded
 
 .kernel_fail:
@@ -187,12 +200,16 @@ align 4
 dap_chunk:
     db 0x10
     db 0x00
-    dw 32
+    dw 0
     dw 0x0000
 k_seg:
     dw 0x1000
 k_lba:
     dq 5
+chunk_sectors:
+    dw 0
+kernel_sectors_remaining:
+    dw 0
 
 align 8
 gdt_start:
@@ -216,9 +233,17 @@ init_pm:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x90000
+    ; Keep the boot stack above the kernel's static buffers and scratch areas.
+    mov esp, 0x00F00000
     mov ebp, esp
 
-    jmp 0x10000
+    ; Relocate the flat kernel image above legacy VGA/BIOS memory.
+    cld
+    mov esi, 0x00010000
+    mov edi, 0x00100000
+    mov ecx, KERNEL_SIZE_BYTES
+    rep movsb
+
+    jmp 0x08:0x00100000
 
 times 2048 - ($ - $$) db 0

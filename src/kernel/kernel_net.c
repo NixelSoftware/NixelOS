@@ -204,6 +204,7 @@ void sys_net_get_diagnostics(net_diagnostics_t* d) {
 }
 
 void sys_net_initialize_stack(void) {
+    debug_subsystem_print("[NET TRACE] reading adapter MAC\n");
     uint64_t mac_value = sys_net_get_mac_address();
     uint8_t mac[6];
     for (int i = 5; i >= 0; i--) {
@@ -211,10 +212,18 @@ void sys_net_initialize_stack(void) {
         mac_value >>= 8;
     }
 
+    debug_subsystem_print("[NET TRACE] before ipv4_init\n");
     ipv4_init(0, mac, 0, 0);
+    debug_subsystem_print("[NET TRACE] after ipv4_init\n");
+    debug_subsystem_print("[NET TRACE] before arp_init\n");
     arp_init(0, mac);
+    debug_subsystem_print("[NET TRACE] after arp_init\n");
+    debug_subsystem_print("[NET TRACE] before icmp_init\n");
     icmp_init();
+    debug_subsystem_print("[NET TRACE] after icmp_init\n");
+    debug_subsystem_print("[NET TRACE] before udp_init\n");
     udp_init();
+    debug_subsystem_print("[NET TRACE] after udp_init\n");
 }
 
 void sys_net_configure_address(void) {

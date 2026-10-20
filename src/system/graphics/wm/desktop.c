@@ -1,4 +1,5 @@
 #include "desktop.h"
+#include "../../../kernel/drivers/serial.h"
 #include "wm.h"
 
 #define NUM_ICONS 2
@@ -60,6 +61,13 @@ static uint32_t resolve_color(uint8_t c) {
 
 void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
     desktop_api = api;
+    debug_subsystem_print("[RENDER TRACE] desktop_init API pointer: ");
+    debug_subsystem_hex((uint32_t)api);
+    debug_subsystem_print(" storage: ");
+    debug_subsystem_hex((uint32_t)&desktop_api);
+    debug_subsystem_print(" callback: ");
+    debug_subsystem_hex((uint32_t)api->graphics.put_pixel);
+    debug_subsystem_print("\n");
     icons[0].x = 24;
     icons[0].y = 20;
     icons[0].label = "Term";
@@ -76,13 +84,26 @@ void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
 }
 
 void desktop_draw(void) {
+    desktop_trace_api("desktop_draw entry");
     if (!desktop_api) return;
+    debug_subsystem_print("[RENDER TRACE] desktop_draw API pointer: ");
+    debug_subsystem_hex((uint32_t)desktop_api);
+    debug_subsystem_print("\n");
 
     for (int i = 0; i < NUM_ICONS; i++) {
+        debug_subsystem_print("[RENDER TRACE] desktop icon start: ");
+        debug_subsystem_hex((uint32_t)i);
+        debug_subsystem_print("\n");
         DesktopIcon* icon = &icons[i];
         const uint8_t (*sprite)[16] = (icon->icon_type == 0) ? icon_terminal : icon_notepad;
+        debug_subsystem_print("[RENDER TRACE] put_pixel callback: ");
+        debug_subsystem_hex((uint32_t)desktop_api->graphics.put_pixel);
+        debug_subsystem_print("\n");
 
         for (int r = 0; r < 16; r++) {
+            debug_subsystem_print("[RENDER TRACE] desktop icon row: ");
+            debug_subsystem_hex((uint32_t)r);
+            debug_subsystem_print("\n");
             int py = icon->y + r;
             if (py < 0 || py >= SCREEN_HEIGHT) continue;
             for (int c = 0; c < 16; c++) {
@@ -90,11 +111,18 @@ void desktop_draw(void) {
                 if (px < 0 || px >= SCREEN_WIDTH) continue;
                 uint8_t val = sprite[r][c];
                 if (val != 0) {
+                    if (r == 0 && c == 0)
+                        debug_subsystem_print("[RENDER TRACE] before first icon pixel\n");
                     desktop_api->graphics.put_pixel(px, py, resolve_color(val));
+                    if (r == 0 && c == 0)
+                        debug_subsystem_print("[RENDER TRACE] after first icon pixel\n");
                 }
             }
         }
 
+        debug_subsystem_print("[RENDER TRACE] desktop icon pixels done: ");
+        debug_subsystem_hex((uint32_t)i);
+        debug_subsystem_print("\n");
         int text_x = icon->x - 8;
         int text_y = icon->y + 20;
 
@@ -105,7 +133,24 @@ void desktop_draw(void) {
             desktop_api->graphics.draw_string(text_x + 1, text_y + 1, icon->label, COLOR_BLACK);
             desktop_api->graphics.draw_string(text_x, text_y, icon->label, COLOR_WHITE);
         }
+        debug_subsystem_print("[RENDER TRACE] desktop icon label done: ");
+        debug_subsystem_hex((uint32_t)i);
+        debug_subsystem_print("\n");
     }
+}
+
+void desktop_trace_api(const char* label) {
+    debug_subsystem_print("[RENDER TRACE] ");
+    debug_subsystem_print(label);
+    debug_subsystem_print(" desktop_api storage: ");
+    debug_subsystem_hex((uint32_t)&desktop_api);
+    debug_subsystem_print(" value: ");
+    debug_subsystem_hex((uint32_t)desktop_api);
+    if (desktop_api && (uint32_t)desktop_api != 0xFFFFFFFFU) {
+        debug_subsystem_print(" callback: ");
+        debug_subsystem_hex((uint32_t)desktop_api->graphics.put_pixel);
+    }
+    debug_subsystem_print("\n");
 }
 
 uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {

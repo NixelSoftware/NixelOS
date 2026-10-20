@@ -2,6 +2,7 @@
 #include "../../../kernel/drivers/display/font.h"
 #include "../../../kernel/drivers/display.h"
 #include "logo_data.h"
+#include "../../graphics/wm/desktop.h"
 
 extern const uint8_t font_8x8[128][8];
 static uint8_t splash_active = 0;
@@ -39,9 +40,11 @@ static void draw_string_scaled(int32_t x, int32_t y, const char* str, uint32_t c
 
 void startscreen_show(const char* status_text, int percent) {
     splash_active = 1;
+    if (percent == 95) desktop_trace_api("95% splash entered");
 
     
     display_fill_rect(0, 0, SCREEN_WIDTH, 495, COLOR_WHITE);
+    if (percent == 95) desktop_trace_api("95% splash background drawn");
 
     
     
@@ -87,6 +90,7 @@ void startscreen_show(const char* status_text, int percent) {
             }
         }
     }
+    if (percent == 95) desktop_trace_api("95% splash logo drawn");
 
     
     display_fill_rect(0, 492, SCREEN_WIDTH, 2, 0x004A8BFF); 
@@ -126,6 +130,7 @@ void startscreen_show(const char* status_text, int percent) {
             display_fill_rect(bar_x + 2, bar_y + 2 + py, fill_w, 1, col);
         }
     }
+    if (percent == 95) desktop_trace_api("95% splash progress drawn");
 
     
     if (status_text) {
@@ -135,8 +140,10 @@ void startscreen_show(const char* status_text, int percent) {
 
         draw_string(status_x, status_y, status_text, 0x00101010);
     }
+    if (percent == 95) desktop_trace_api("95% splash text drawn");
 
     display_blit();
+    if (percent == 95) desktop_trace_api("95% splash blit done");
 }
 
 void startscreen_stop(void) {

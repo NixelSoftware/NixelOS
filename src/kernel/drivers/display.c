@@ -1,6 +1,6 @@
 #include "display.h"
 
-static uint32_t* const backbuffer = (uint32_t*)0x400000;
+static uint32_t* const backbuffer = (uint32_t*)0x00A00000;
 static uint8_t* lfb_vram = 0;
 static uint32_t screen_bpp = 32;
 static uint32_t screen_pitch = 3200;

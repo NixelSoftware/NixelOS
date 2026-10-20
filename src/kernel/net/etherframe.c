@@ -1,5 +1,6 @@
 #include "etherframe.h"
 #include "../drivers/net.h"
+#include "../drivers/serial.h"
 #include "../kernel_net.h"
 
 static uint8_t local_mac[6];
@@ -29,9 +30,20 @@ void etherframe_mac_to_bytes(uint64_t mac, uint8_t output[6]) {
 }
 
 void etherframe_init(const uint8_t address[6]) {
+    uint32_t return_address = (uint32_t)__builtin_return_address(0);
+    debug_subsystem_print("[NET TRACE] etherframe_init return address: ");
+    debug_subsystem_hex(return_address);
+    debug_subsystem_print("\n");
+    debug_subsystem_print("[NET TRACE] etherframe_init clearing handlers\n");
     for (uint32_t i = 0; i < 65536; i++) handlers[i] = 0;
+    debug_subsystem_print("[NET TRACE] etherframe_init handlers cleared\n");
     for (uint8_t i = 0; i < 6; i++) local_mac[i] = address[i];
+    debug_subsystem_print("[NET TRACE] etherframe_init registering receive handler\n");
     sys_net_set_receive_handler(etherframe_receive);
+    debug_subsystem_print("[NET TRACE] etherframe_init receive handler registered\n");
+    debug_subsystem_print("[NET TRACE] etherframe_init return address before return: ");
+    debug_subsystem_hex((uint32_t)__builtin_return_address(0));
+    debug_subsystem_print("\n");
 }
 
 void etherframe_set_handler(uint16_t ether_type,

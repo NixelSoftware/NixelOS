@@ -2,6 +2,7 @@
 #include "etherframe.h"
 #include "arp.h"
 #include "../kernel_net.h"
+#include "../drivers/serial.h"
 
 #define IPV4_ETHERNET_HEADER_SIZE 14
 #define IPV4_MAX_FRAME_SIZE (IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + IPV4_MAX_PAYLOAD)
@@ -65,6 +66,7 @@ uint16_t ipv4_checksum(const void* data, uint32_t length) {
 
 void ipv4_init(uint32_t address, const uint8_t address_mac[6],
                uint32_t gateway, uint32_t mask) {
+    debug_subsystem_print("[NET TRACE] ipv4_init entered\n");
     local_ip = address;
     gateway_ip = gateway;
     subnet_mask = mask;
@@ -73,8 +75,11 @@ void ipv4_init(uint32_t address, const uint8_t address_mac[6],
     for (uint16_t i = 0; i < 256; i++) protocol_handlers[i] = 0;
     for (uint8_t i = 0; i < 6; i++) local_mac[i] = address_mac[i];
 
+    debug_subsystem_print("[NET TRACE] ipv4_init before etherframe_init\n");
     etherframe_init(address_mac);
+    debug_subsystem_print("[NET TRACE] ipv4_init after etherframe_init\n");
     etherframe_set_handler(IPV4_ETHERTYPE, ipv4_receive_etherframe);
+    debug_subsystem_print("[NET TRACE] ipv4_init returned\n");
 }
 
 void ipv4_set_mac_resolver(ipv4_mac_resolver_t resolver) {

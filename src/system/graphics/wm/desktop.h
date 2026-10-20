@@ -14,6 +14,7 @@ typedef struct {
 
 void desktop_init(os_api_t* api, Window* term_win, Window* note_win);
 void desktop_draw(void);
+void desktop_trace_api(const char* label);
 
 uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time);
 

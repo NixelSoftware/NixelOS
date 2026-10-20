@@ -8,10 +8,16 @@ if [[ "${1:-}" == "run" ]]; then
         -device e1000,netdev=net0 -serial stdio
 fi
 
-cc=(gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe)
+debug_subsystems="${DEBUG_SUBSYSTEMS:-0}"
+if [[ "$debug_subsystems" != "0" && "$debug_subsystems" != "1" ]]; then
+    echo "DEBUG_SUBSYSTEMS must be 0 or 1" >&2
+    exit 1
+fi
+
+cc=(gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe
+    -DDEBUG_SUBSYSTEMS="$debug_subsystems")
 
 nasm -f bin src/boot/boot.asm -o src/boot.bin
-nasm -f bin src/boot/boot_stage2.asm -o src/boot_stage2.bin
 
 nasm -f elf32 src/kernel/kernel_entry.asm -o src/kernel/kernel_entry.o
 nasm -f elf32 src/kernel/idt_asm.asm -o src/kernel/idt_asm.o
@@ -93,7 +99,7 @@ objcopy -O binary src/apps/browser/browser.tmp browser.bin
 rm -f src/apps/browser/browser.tmp src/apps/browser/main.o \
     src/apps/browser/entry.o src/apps/browser/png.o
 
-ld -m elf_i386 -Ttext 0x10000 \
+ld -m elf_i386 -Ttext 0x100000 \
     src/kernel/kernel_entry.o \
     src/kernel/idt_asm.o \
     src/kernel/task_switch.o \
@@ -145,6 +151,17 @@ ld -m elf_i386 -Ttext 0x10000 \
     -o src/kernel/kernel.tmp
 
 objcopy -O binary src/kernel/kernel.tmp src/kernel/kernel.bin
+
+kernel_size_bytes=$(wc -c < src/kernel/kernel.bin)
+kernel_sector_count=$(((kernel_size_bytes + 511) / 512))
+max_kernel_sectors=$((500 - 5))
+if (( kernel_sector_count == 0 || kernel_sector_count > max_kernel_sectors )); then
+    echo "Kernel image requires ${kernel_sector_count} sectors; raw boot area supports at most ${max_kernel_sectors}." >&2
+    exit 1
+fi
+nasm -f bin -D KERNEL_SECTORS="$kernel_sector_count" \
+    -D KERNEL_SIZE_BYTES="$kernel_size_bytes" \
+    src/boot/boot_stage2.asm -o src/boot_stage2.bin
 
 rm -f src/kernel/kernel.tmp
 

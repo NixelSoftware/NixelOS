@@ -200,11 +200,16 @@ static void kernel_init_acpi(void) {
 
 static void kernel_init_network_device(void) {
     debug_print("[INIT] Net init...\n");
-    sys_net_init(0);
+    uint8_t initialized = sys_net_init(0);
+    debug_print("[INIT] Net init returned: ");
+    debug_hex(initialized);
+    debug_print("\n");
 }
 
 static void kernel_init_network_stack(void) {
+    debug_print("[INIT] Net stack init entered.\n");
     sys_net_initialize_stack();
+    debug_print("[INIT] Net stack init returned.\n");
 }
 
 static void kernel_configure_network(void) {
@@ -227,18 +232,37 @@ static void kernel_mark_redraw(void) {
 
 static void kernel_initialize_system_apps(void) {
     debug_print("[INIT] Windows+Apps init...\n");
+    debug_subsystem_print("[INIT] api_put_pixel code address: ");
+    debug_subsystem_hex((uint32_t)api_put_pixel);
+    debug_subsystem_print("\n[INIT] kernel API put_pixel field: ");
+    debug_subsystem_hex((uint32_t)kernel_api.graphics.put_pixel);
+    debug_subsystem_print("\n");
     system_graphics_initialize(&kernel_api, kernel_mark_redraw);
 }
 
 static void kernel_initialize_input(void) {
     debug_print("[INIT] PS/2 Mouse init...\n");
+    desktop_trace_api("before input init");
+    debug_subsystem_print("[INIT] put_pixel before input init: ");
+    debug_subsystem_hex((uint32_t)kernel_api.graphics.put_pixel);
+    debug_subsystem_print("\n");
     input_initialize(&kernel_api);
+    desktop_trace_api("after input init");
+    debug_subsystem_print("[INIT] put_pixel after input init: ");
+    debug_subsystem_hex((uint32_t)kernel_api.graphics.put_pixel);
+    debug_subsystem_print("\n");
 }
 
 static void kernel_finish_boot(void) {
+    desktop_trace_api("before startscreen_stop");
     startscreen_stop();
+    desktop_trace_api("after startscreen_stop");
+    debug_subsystem_print("[INIT] Display backbuffer address: ");
+    debug_subsystem_hex((uint32_t)display_get_backbuffer());
+    debug_subsystem_print("\n");
     debug_print("[INIT] Drawing to display...\n");
     wm_render_screen();
+    debug_subsystem_print("[INIT] Display drawing returned.\n");
     needs_redraw = 0;
     debug_print("[INIT] Enable interrupt...\n");
     __asm__ volatile ("sti");
