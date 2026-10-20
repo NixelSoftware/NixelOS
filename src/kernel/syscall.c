@@ -8,6 +8,7 @@
 #include "kernel_net.h"
 #include "net/dns.h"
 #include "net/icmp.h"
+#include "../system/graphics/wm/wm.h"
 
 #define SYS_WRITE_MAX 256u
 #define USER_PING_REQUEST_MAX 16u
@@ -135,6 +136,11 @@ void syscall_dispatch(registers_t* regs) {
         case SYS_GET_TICKS:
             regs->eax = frame_timer;
             return;
+        case SYS_YIELD:
+            sys_net_poll();
+            wm_poll();
+            regs->eax = 0;
+            return;
         case SYS_EXIT:
             arch_user_exit_requested = 1;
             return;
@@ -253,7 +259,6 @@ void syscall_dispatch(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 return;
             }
-            sys_net_poll();
             if (!request->completed &&
                 (uint32_t)(frame_timer - request->started_tick) >=
                     USER_PING_TIMEOUT_TICKS) {

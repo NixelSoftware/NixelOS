@@ -87,8 +87,7 @@ void user_main(const char* argument) {
         uint32_t milliseconds = 0;
         while (status == 0) {
             status = sys_ping_poll((uint32_t)handle, &milliseconds);
-            for (volatile uint32_t delay = 0; delay < 100; delay++)
-                __asm__ volatile ("pause");
+            if (status == 0) sys_yield();
         }
         if (status == 1) {
             print("reply ");

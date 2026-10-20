@@ -18,6 +18,7 @@ result in EAX:
 | 6 | `sys_dns_resolve` | EBX = hostname, ECX = writable IPv4 output | `1` resolved, `0` lookup failed, `-1` invalid pointer |
 | 7 | `sys_ping_start` | EBX = destination IPv4, ECX = sequence | request handle, or `-1` if it could not be submitted |
 | 8 | `sys_ping_poll` | EBX = request handle, ECX = writable milliseconds output | `0` pending, `1` reply received, `2` timed out, `-1` invalid handle or pointer |
+| 9 | `sys_yield` | none | services kernel network and window/input polling before returning |
 
 `sys_write` accepts only readable user pages in the current app address space.
 `sys_shutdown` is a privileged service exposed through the syscall dispatcher;
@@ -30,8 +31,11 @@ app; it deliberately faults outside its mapped address range to demonstrate
 that a user page fault terminates the app and returns control to the shell.
 `ping` is the fifth ring-3 app and uses kernel-mediated DNS and asynchronous
 ICMP request handles. Requests are owned by the calling address space and can
-be polled independently; the current runner still executes one user app at a
-time, so simultaneous user processes need the scheduler/process work to follow.
+be polled independently. While waiting, ping calls `sys_yield` so the kernel
+continues network and window/input polling. The runner still executes one user
+app at a time, so this cooperative yield keeps the system event loop responsive
+but does not provide simultaneous user processes; that needs scheduler/process
+work to follow.
 The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT
 vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.

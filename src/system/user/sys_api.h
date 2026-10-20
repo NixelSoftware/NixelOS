@@ -13,7 +13,8 @@ enum {
     SYS_NET_DIAGNOSTICS = 5, /* EBX: output snapshot; returns ready state */
     SYS_DNS_RESOLVE = 6,     /* EBX: hostname, ECX: writable IPv4 output */
     SYS_PING_START = 7,      /* EBX: destination IPv4, ECX: sequence; returns request handle */
-    SYS_PING_POLL = 8        /* EBX: handle, ECX: writable ms output; 0 pending, 1 reply, 2 timeout */
+    SYS_PING_POLL = 8,       /* EBX: handle, ECX: writable ms output; 0 pending, 1 reply, 2 timeout */
+    SYS_YIELD = 9            /* services kernel event loops, then returns to the app */
 };
 
 static inline int32_t sys_write(const char* buffer, uint32_t length) {
@@ -85,6 +86,13 @@ static inline int32_t sys_ping_poll(uint32_t handle, uint32_t* milliseconds) {
                       : "0"((uint32_t)SYS_PING_POLL), "b"(handle), "c"(milliseconds)
                       : "edx", "memory", "cc");
     return result;
+}
+
+static inline void sys_yield(void) {
+    __asm__ volatile ("int $0x80"
+                      :
+                      : "a"((uint32_t)SYS_YIELD)
+                      : "ebx", "ecx", "edx", "memory", "cc");
 }
 
 #endif
