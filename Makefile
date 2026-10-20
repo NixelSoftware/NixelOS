@@ -34,7 +34,7 @@ KERNEL_C := \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/loader/app_loader.c \
-  src/kernel/idt.c src/kernel/paging.c src/system/init/splash/startscreen.c \
+  src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \
   src/kernel/drivers/ata.c src/kernel/drivers/net.c \
@@ -52,7 +52,7 @@ KERNEL_C := \
   src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
-              src/kernel/task_switch.asm
+              src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown

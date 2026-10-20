@@ -15,6 +15,8 @@
 #include "os_api.h"
 #include "task.h"
 #include "paging.h"
+#include "arch_i386.h"
+#include "syscall.h"
 #include "kernel_net.h"
 #include "drivers/net.h"
 #include "net/arp.h"
@@ -221,6 +223,8 @@ static void nixinit_show_status(const char* text, int percent) {
 }
 
 static void kernel_init_interrupts(void) {
+    debug_print("[INIT] GDT/TSS init...\n");
+    arch_i386_init();
     debug_print("[INIT] IDT init...\n");
     idt_init();
 }

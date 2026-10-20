@@ -22,6 +22,7 @@ nasm -f bin src/boot/boot.asm -o src/boot.bin
 nasm -f elf32 src/kernel/kernel_entry.asm -o src/kernel/kernel_entry.o
 nasm -f elf32 src/kernel/idt_asm.asm -o src/kernel/idt_asm.o
 nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
+nasm -f elf32 src/kernel/gdt_asm.asm -o src/kernel/gdt_asm.o
 
 kernel_sources=(
     src/kernel/main.c
@@ -36,6 +37,8 @@ kernel_sources=(
     src/system/services/input/input.c
     src/system/loader/app_loader.c
     src/kernel/idt.c
+    src/kernel/arch_i386.c
+    src/kernel/syscall.c
     src/system/init/splash/startscreen.c
     src/system/init/splash/logo_data.c
     src/system/graphics/screenshot/screenshot.c
@@ -115,6 +118,8 @@ ld -m elf_i386 -Ttext 0x100000 \
     src/system/services/input/input.o \
     src/system/loader/app_loader.o \
     src/kernel/idt.o \
+    src/kernel/gdt_asm.o \
+    src/kernel/syscall.o \
     src/kernel/paging.o \
     src/kernel/task.o \
     src/system/graphics/dialog/dialog.o \

@@ -2,6 +2,7 @@
 #include "drivers/display/font.h"
 #include "drivers/display.h"
 #include "drivers/serial.h"
+#include "syscall.h"
 
 static idt_entry_t idt_entries[256];
 static idt_ptr_t   idt_ptr;
@@ -10,6 +11,7 @@ extern void idt_flush(uint32_t);
 
 
 extern void irq0_timer_handler(void);
+extern void syscall_entry(void);
 extern void isr0();  extern void isr1();  extern void isr2();  extern void isr3();
 extern void isr4();  extern void isr5();  extern void isr6();  extern void isr7();
 extern void isr8();  extern void isr9();  extern void isr10(); extern void isr11();
@@ -254,6 +256,9 @@ void idt_init(void) {
     idt_set_gate(45, (uint32_t)isr45, 0x08, 0x8E);
     idt_set_gate(46, (uint32_t)isr46, 0x08, 0x8E);
     idt_set_gate(47, (uint32_t)isr47, 0x08, 0x8E);
+
+    /* User-callable interrupt gate. DPL=3, present, 32-bit interrupt gate. */
+    idt_set_gate(0x80, (uint32_t)syscall_entry, 0x08, 0xEE);
 
     idt_flush((uint32_t)&idt_ptr);
 }
