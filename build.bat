@@ -6,10 +6,16 @@ if /i "%~1"=="run" goto runvm
 set "CC=gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe"
 
 call :run nasm -f bin src\boot\boot.asm -o src\boot.bin
-call :run nasm -f bin src\boot\boot_stage2.asm -o src\boot_stage2.bin
-call :run nasm -f elf32 src\kernel\kernel_entry.asm -o src\kernel\kernel_entry.o
-call :run nasm -f elf32 src\kernel\idt_asm.asm -o src\kernel\idt_asm.o
-call :run nasm -f elf32 src\kernel\task_switch.asm -o src\kernel\task_switch.o
+if not defined DEBUG_SUBSYSTEMS set "DEBUG_SUBSYSTEMS=0"
+if not "%DEBUG_SUBSYSTEMS%"=="0" if not "%DEBUG_SUBSYSTEMS%"=="1" (
+    echo DEBUG_SUBSYSTEMS must be 0 or 1 1>&2
+    exit /b 1
+)
+set "CC=%CC% -DDEBUG_SUBSYSTEMS=%DEBUG_SUBSYSTEMS%"
+
+call :run nasm -f win32 src\kernel\kernel_entry.asm -o src\kernel\kernel_entry.o
+call :run nasm -f win32 src\kernel\idt_asm.asm -o src\kernel\idt_asm.o
+call :run nasm -f win32 src\kernel\task_switch.asm -o src\kernel\task_switch.o
 
 for %%S in (
     src\kernel\main.c
@@ -65,7 +71,7 @@ for %%S in (
 
 for %%A in (files mines calc hexview floppy_debug ping netdiag http_test crash_debug shutdown curl) do (
     if not exist src\apps\%%A mkdir src\apps\%%A
-    call :run nasm -f elf32 src\apps\%%A\entry.asm -o src\apps\%%A\entry.o
+    call :run nasm -f win32 src\apps\%%A\entry.asm -o src\apps\%%A\entry.o
     call :run %CC% -c src\apps\%%A\main.c -o src\apps\%%A\main.o
     call :run ld -mi386pe -Ttext 0x200000 -e _start src\apps\%%A\entry.o src\apps\%%A\main.o -o src\apps\%%A\%%A.tmp
     call :run objcopy -O binary src\apps\%%A\%%A.tmp %%A.bin
@@ -73,7 +79,7 @@ for %%A in (files mines calc hexview floppy_debug ping netdiag http_test crash_d
 )
 
 if not exist src\apps\browser mkdir src\apps\browser
-call :run nasm -f elf32 src\apps\browser\entry.asm -o src\apps\browser\entry.o
+call :run nasm -f win32 src\apps\browser\entry.asm -o src\apps\browser\entry.o
 call :run %CC% -c src\apps\browser\main.c -o src\apps\browser\main.o
 call :run %CC% -c src\apps\browser\png.c -o src\apps\browser\png.o
 ::call :run ld -mi386pe -Ttext 0x200000 -e _start src\apps\browser\entry.o src\apps\browser\main.o src\apps\browser\png.o -o src\apps\browser\browser.tmp
@@ -108,8 +114,15 @@ call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
 
 if not exist "src\boot.bin" ( echo [ERROR] Missing src\boot.bin & exit /b 1 )
-if not exist "src\boot_stage2.bin" ( echo [ERROR] Missing src\boot_stage2.bin & exit /b 1 )
 if not exist "src\kernel\kernel.bin" ( echo [ERROR] Missing src\kernel\kernel.bin & exit /b 1 )
+
+for /f %%S in ('powershell -NoProfile -Command "[IO.File]::ReadAllBytes('src/kernel/kernel.bin').Length"') do set "KERNEL_SIZE_BYTES=%%S"
+set /a KERNEL_SECTORS=(KERNEL_SIZE_BYTES+511)/512
+if %KERNEL_SECTORS% LEQ 0 ( echo [ERROR] Kernel image is empty & exit /b 1 )
+if %KERNEL_SECTORS% GTR 495 ( echo [ERROR] Kernel image exceeds the 495-sector boot limit & exit /b 1 )
+call :run nasm -f bin -D KERNEL_SECTORS=%KERNEL_SECTORS% -D KERNEL_SIZE_BYTES=%KERNEL_SIZE_BYTES% src\boot\boot_stage2.asm -o src\boot_stage2.bin
+if errorlevel 1 exit /b %errorlevel%
+if not exist "src\boot_stage2.bin" ( echo [ERROR] Missing src\boot_stage2.bin & exit /b 1 )
 
 call :run python mkfat32.py ..\hdd.img
 powershell -NoProfile -Command "$d='..\hdd.img';$b='src\boot.bin';$db=[IO.File]::ReadAllBytes($d);$bb=[IO.File]::ReadAllBytes($b);[Array]::Copy($bb,0,$db,0,3);[Array]::Copy($bb,90,$db,90,422);[IO.File]::WriteAllBytes($d,$db)"
