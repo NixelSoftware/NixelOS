@@ -31,6 +31,7 @@ for %%S in (
     src\kernel\drivers\ata.c
     src\kernel\drivers\net.c
     src\kernel\drivers\net_e1000.c
+    src\kernel\drivers\net_tg3.c
     src\kernel\drivers\serial.c
     src\kernel\drivers\floppy.c
     src\kernel\drivers\power.c
@@ -101,7 +102,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
     src\system\init\splash\startscreen.o src\system\graphics\screenshot\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
     src\system\graphics\image\png.o src\kernel\net\dns.o src\system\init\splash\logo_data.o src\kernel\drivers\acpi.o ^
-    src\system\graphics\fonts\univers85ebo_16.o ^
+    src\system\graphics\fonts\univers85ebo_16.o src\kernel\drivers\net_tg3.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
