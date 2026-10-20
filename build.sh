@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == "run" ]]; then
+    exec qemu-system-i386 -m 32M \
+        -drive file=os.img,format=raw,index=0,media=disk \
+        -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 \
+        -device e1000,netdev=net0 -serial stdio
+fi
+
 cc=(gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe)
 
 nasm -f bin src/boot/boot.asm -o src/boot.bin
@@ -23,6 +30,7 @@ kernel_sources=(
     src/system/loader/app_loader.c
     src/kernel/idt.c
     src/system/init/splash/startscreen.c
+    src/system/init/splash/logo_data.c
     src/system/graphics/screenshot/screenshot.c
     src/system/graphics/image/png.c
     src/kernel/drivers/display.c
@@ -32,6 +40,7 @@ kernel_sources=(
     src/kernel/drivers/serial.c
     src/kernel/drivers/floppy.c
     src/kernel/drivers/power.c
+    src/kernel/drivers/acpi.c
     src/kernel/drivers/ps2.c
     src/kernel/kernel_net.c
     src/kernel/net/ipv4.c
@@ -46,6 +55,7 @@ kernel_sources=(
     src/system/graphics/wm/cursor.c
     src/kernel/drivers/display/font.c
     src/kernel/keyboard.c
+    src/system/graphics/fonts/univers85ebo_16.c
     src/system/graphics/wm/desktop.c
     src/kernel/task.c
     src/system/graphics/dialog/dialog.c
@@ -74,12 +84,13 @@ done
 mkdir -p src/apps/browser
 nasm -f elf32 src/apps/browser/entry.asm -o src/apps/browser/entry.o
 "${cc[@]}" -c src/apps/browser/main.c -o src/apps/browser/main.o
+"${cc[@]}" -c src/apps/browser/png.c -o src/apps/browser/png.o
 ld -m elf_i386 --omagic -Ttext 0x200000 -e _start \
-    src/apps/browser/entry.o src/apps/browser/main.o \
+    src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o \
     -o src/apps/browser/browser.tmp
 objcopy -O binary src/apps/browser/browser.tmp browser.bin
 rm -f src/apps/browser/browser.tmp src/apps/browser/main.o \
-    src/apps/browser/entry.o
+    src/apps/browser/entry.o src/apps/browser/png.o
 
 ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/kernel_entry.o \
@@ -125,7 +136,10 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/system/graphics/screenshot/screenshot.o \
     src/system/graphics/image/png.o \
     src/kernel/drivers/power.o \
+    src/kernel/drivers/acpi.o \
     src/kernel/drivers/ps2.o \
+    src/system/init/splash/logo_data.o \
+    src/system/graphics/fonts/univers85ebo_16.o \
     -o src/kernel/kernel.tmp
 
 objcopy -O binary src/kernel/kernel.tmp src/kernel/kernel.bin
@@ -136,22 +150,7 @@ rm -f src/kernel/kernel.tmp
 [[ -f src/boot_stage2.bin ]]
 [[ -f src/kernel/kernel.bin ]]
 
-python3 - <<'PY'
-from pathlib import Path
-
-path = Path("src/kernel/kernel.bin")
-data = path.read_bytes()
-
-if len(data) < 98304:
-    data += bytes(98304 - len(data))
-    path.write_bytes(data)
-PY
-
-cat src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin > ../hdd.img
-
-truncate -s 33554432 ../hdd.img
-
-python3 inject_sfs.py ../hdd.img
+python3 mkfat32.py ../hdd.img
 
 cp -f ../hdd.img os.img
 
@@ -172,6 +171,7 @@ rm -f src/system/graphics/dialog/*.o
 rm -f src/system/graphics/screenshot/*.o
 rm -f src/system/graphics/image/*.o
 rm -f src/system/init/splash/*.o
+rm -f src/system/graphics/fonts/*.o
 rm -f src/apps/notepad/*.o
 rm -f src/apps/viewer/*.o
 rm -f src/system/graphics/terminal/*.o
@@ -194,5 +194,4 @@ rm -f shutdown.bin
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
     -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 \
-    -device pcnet,netdev=net0 \
-    -serial stdio
+    -device e1000,netdev=net0 -serial stdio

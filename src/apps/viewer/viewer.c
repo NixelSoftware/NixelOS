@@ -2,6 +2,7 @@
 #include "../../kernel/drivers/display/font.h"
 #include "../../kernel/drivers/display.h"
 #include "../../kernel/fs.h"
+#include "../../kernel/drivers/serial.h"
 
 Window viewer_window;
 
@@ -18,6 +19,9 @@ static uint8_t  bmp_raw_buffer[BMP_MAX_FILE_SIZE];
 
 int viewer_load_bmp(const char* filename) {
     int bytes = fs_read_file(filename, bmp_raw_buffer, sizeof(bmp_raw_buffer));
+    debug_print("[VIEWER] filesystem read returned ");
+    debug_hex((uint32_t)bytes);
+    debug_print(" bytes\n");
     if (bytes < 54) {
         
         return 0;
@@ -149,5 +153,7 @@ void viewer_init(void) {
     loaded_filename[0] = '\0';
 
     
+    debug_print("[APPS] viewer loading image.bmp...\n");
     viewer_load_bmp("image.bmp");
+    debug_print("[APPS] viewer image.bmp load done\n");
 }
