@@ -16,7 +16,8 @@ typedef signed int     int32_t;
 #define COLOR_DESKTOP     0x00008080   
 #define COLOR_WIN_BG      0x00C0C0C0   
 #define COLOR_WHITE       0x00FFFFFF   
-#define COLOR_BLACK       0x00000000   
+#define COLOR_BLACK       0x00000000 
+#define COLOR_RED         0x00FF0000  
 #define COLOR_DARK_GRAY   0x00808080   
 #define COLOR_TITLE_BAR   0x00000080   
 #define COLOR_TITLE_INACT 0x00808080   

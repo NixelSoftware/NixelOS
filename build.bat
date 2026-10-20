@@ -55,6 +55,7 @@ for %%S in (
     src\apps\notepad\notepad.c
     src\apps\viewer\viewer.c
     src\system\graphics\terminal\terminal.c
+    src\system\graphics\fonts\univers85ebo_16.c
     src\apps\ping\main.c
     src\apps\netdiag\main.c
 ) do (
@@ -100,6 +101,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
     src\system\init\splash\startscreen.o src\system\graphics\screenshot\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
     src\system\graphics\image\png.o src\kernel\net\dns.o src\system\init\splash\logo_data.o src\kernel\drivers\acpi.o ^
+    src\system\graphics\fonts\univers85ebo_16.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp
@@ -118,6 +120,7 @@ copy /y ..\hdd.img os.img >nul
 
 del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\drivers\display\*.o src\kernel\net\*.o src\system\shell\*.o src\system\init\*.o src\system\init\splash\*.o src\system\graphics\*.o src\system\graphics\wm\*.o src\system\graphics\dialog\*.o src\system\graphics\screenshot\*.o src\system\graphics\image\*.o src\system\graphics\session.o src\system\services\input\*.o src\system\loader\*.o
 del /q src\apps\notepad\*.o src\apps\viewer\*.o src\system\graphics\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
+del /q src\system\graphics\fonts\*.o
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin crash_debug.bin shutdown.bin curl.bin
 
 goto runvm
