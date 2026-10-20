@@ -26,6 +26,11 @@ static void print_u32(uint32_t value) {
     }
 }
 
+static void print_ping_time(uint32_t milliseconds) {
+    if (milliseconds == 0) os->shell.term_print("<10");
+    else print_u32(milliseconds);
+}
+
 static int parse_ipv4(const char* text, uint32_t* address) {
     uint32_t result = 0;
     int parts = 0;
@@ -64,7 +69,7 @@ static void ping_reply(uint32_t source_ip, uint16_t identifier,
 
 int main_app(os_api_t* api) {
     const char* argument;
-    char host[32];
+    char host[128];
     int host_length = 0;
     uint32_t received = 0, total = 0, minimum = 0xFFFFFFFF, maximum = 0;
     const uint8_t payload[] = "operating-system";
@@ -73,6 +78,10 @@ int main_app(os_api_t* api) {
     os = api;
     argument = os->shell.command_args();
     while (*argument == ' ') argument++;
+    if (*argument == '\0') {
+        os->shell.term_print("Usage: ping <host or IPv4 address>\n");
+        return -1;
+    }
     if (argument[0] == 'h' && argument[1] == 't' && argument[2] == 't' &&
         argument[3] == 'p' && argument[4] == ':' && argument[5] == '/' &&
         argument[6] == '/') argument += 7;
@@ -82,8 +91,10 @@ int main_app(os_api_t* api) {
     }
     host[host_length] = '\0';
     if (!parse_ipv4(host, &target_ip)) {
-        os->shell.term_print("Usage: ping <IPv4 address>\n");
-        return -1;
+        if (!os->network.dns_resolve || !os->network.dns_resolve(host, &target_ip)) {
+            os->shell.term_print("ping: DNS lookup failed\n");
+            return -1;
+        }
     }
 
     os->network.icmp_set_echo_reply_handler(ping_reply);
@@ -113,7 +124,7 @@ int main_app(os_api_t* api) {
             os->shell.term_print("reply ");
             print_u32(target_sequence);
             os->shell.term_print(": ");
-            print_u32(milliseconds);
+            print_ping_time(milliseconds);
             os->shell.term_print(" ms\n");
             received++;
             total += milliseconds;
@@ -132,11 +143,11 @@ int main_app(os_api_t* api) {
     os->shell.term_print("%)\n");
     if (received) {
         os->shell.term_print("min/avg/max = ");
-        print_u32(minimum);
+        print_ping_time(minimum);
         os->shell.term_print("/");
-        print_u32(total / received);
+        print_ping_time(total / received);
         os->shell.term_print("/");
-        print_u32(maximum);
+        print_ping_time(maximum);
         os->shell.term_print(" ms\n");
     }
     return 0;

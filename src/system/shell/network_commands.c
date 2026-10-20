@@ -29,6 +29,11 @@ static void print_u32(uint32_t value) {
     }
 }
 
+static void print_ping_time(uint32_t milliseconds) {
+    if (milliseconds == 0) print("<10");
+    else print_u32(milliseconds);
+}
+
 static void print_ip(uint32_t address) {
     for (int shift = 24; shift >= 0; shift -= 8) {
         print_u32((address >> shift) & 0xFF);
@@ -186,13 +191,18 @@ void shell_network_netdiag(shell_output_fn output) {
 void shell_network_ping(const char* argument, shell_output_fn output) {
     if (!network_api || !argument) return;
     command_output = output;
+    while (*argument == ' ') argument++;
+    if (*argument == '\0') {
+        print("Usage: ping <host or IPv4 address>\n");
+        return;
+    }
 
     uint32_t address;
     uint32_t received = 0;
     uint32_t total = 0;
     uint32_t minimum = 0xFFFFFFFF;
     uint32_t maximum = 0;
-    char host[32];
+    char host[128];
     int host_length = 0;
     const uint8_t payload[] = "operating-system";
 
@@ -206,9 +216,11 @@ void shell_network_ping(const char* argument, shell_output_fn output) {
     host[host_length] = '\0';
 
     if (!parse_ipv4(host, &address)) {
-        print("Usage: ping <IPv4 address>\n");
-        print("URL paths are accepted for IPv4 URLs; DNS is not supported.\n");
-        return;
+        if (!network_api->network.dns_resolve ||
+            !network_api->network.dns_resolve(host, &address)) {
+            print("ping: DNS lookup failed\n");
+            return;
+        }
     }
 
     print("PING "); print(host); print(" (4 packets)\n");
@@ -245,7 +257,7 @@ void shell_network_ping(const char* argument, shell_output_fn output) {
         if (ping_reply_received) {
             uint32_t milliseconds = ping_reply_time * 10;
             print("reply "); print_u32(ping_sequence); print(": ");
-            print_u32(milliseconds); print(" ms\n");
+            print_ping_time(milliseconds); print(" ms\n");
             received++; total += milliseconds;
             if (milliseconds < minimum) minimum = milliseconds;
             if (milliseconds > maximum) maximum = milliseconds;
@@ -258,7 +270,8 @@ void shell_network_ping(const char* argument, shell_output_fn output) {
     print_u32(4 - received); print(" packets lost (");
     print_u32((4 - received) * 25); print("%)\n");
     if (received) {
-        print("min/avg/max = "); print_u32(minimum); print("/");
-        print_u32(total / received); print("/"); print_u32(maximum); print(" ms\n");
+        print("min/avg/max = "); print_ping_time(minimum); print("/");
+        print_ping_time(total / received); print("/");
+        print_ping_time(maximum); print(" ms\n");
     }
 }

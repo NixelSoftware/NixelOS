@@ -66,7 +66,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " cat <file>      Read file\n"
                     " echo <t>><file> Write file\n"
                     " view <file>     Open in Viewer\n"
-                    " ping <IPv4>     Ping four times\n"
+                    " ping <host>     Ping an IPv4 address or DNS hostname\n"
                     " ifconfig        Show network configuration\n"
                     " netdiag         Inspect network driver state\n"
                     " netdev          Show detected network hardware\n"
@@ -125,8 +125,11 @@ void shell_execute_command(const char* command, shell_output_fn output,
             print_hex_u16(device);
             print("\n");
         }
-    } else if (has_prefix(command, "ping ")) {
-        shell_network_ping(command + 5, shell_output);
+    } else if (has_prefix(command, "ping") &&
+               (command[4] == '\0' || command[4] == ' ')) {
+        const char* argument = command + 4;
+        while (*argument == ' ') argument++;
+        shell_network_ping(argument, shell_output);
     } else if (has_prefix(command, "echo ")) {
         const char* text = command + 5;
         const char* redirect = 0;
