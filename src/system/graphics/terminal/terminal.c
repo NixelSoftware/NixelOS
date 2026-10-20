@@ -138,6 +138,7 @@ void terminal_init(os_api_t* api) {
     terminal_window.focused = 1;
     terminal_window.draw_content = terminal_draw;
     terminal_window.handle_key = terminal_handle_key;
+    terminal_window.handle_mouse = 0;
 
     terminal_clear_output();
     terminal_prompt();

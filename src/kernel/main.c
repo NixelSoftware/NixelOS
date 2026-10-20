@@ -97,6 +97,7 @@ static os_api_t kernel_api = {
         .launch_app = api_launch_app
     },
     .network = {
+        .get_device_info = sys_net_get_device_info,
         .net_poll = sys_net_poll,
         .get_ticks = api_get_ticks,
         .icmp_request_echo = icmp_request_echo,
@@ -272,9 +273,10 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     };
     nixinit_start(&init_services);
 
+    // This fucking cursor shit is pissing me off
     debug_print("[INIT] Entering system event loop.\n");
     for (;;) {
-        sys_net_poll();
+        //sys_net_poll(); - zainabm: readd function if causing any weird problems
         wm_poll();
     }
 }

@@ -17,6 +17,15 @@ static int has_prefix(const char* text, const char* prefix) {
     return 1;
 }
 
+static void print_hex_u16(uint16_t val) {
+    const char hex_chars[] = "0123456789ABCDEF";
+    char out[7] = "0x0000";
+    for (int i = 3; i >= 0; i--) {
+        out[2 + (3 - i)] = hex_chars[(val >> (i * 4)) & 0x0F];
+    }
+    print(out);
+}
+
 static void print_u32(uint32_t value) {
     char digits[11];
     int count = 0;
@@ -51,7 +60,17 @@ void shell_execute_command(const char* command, shell_output_fn output,
     if (*command == '\0') return;
 
     if (has_prefix(command, "help")) {
-        print("Commands:\n ls              List files\n rm              Remove files\n cat <file>      Read file\n echo <t>><file> Write file\n view <file>     Open in Viewer\n ping <IPv4>     Ping four times\n ifconfig        Show network configuration\n netdiag         Inspect network driver state\n clear           Clear screen\n");
+        print("Commands:\n"
+                    " ls              List files\n"
+                    " rm              Remove files\n"
+                    " cat <file>      Read file\n"
+                    " echo <t>><file> Write file\n"
+                    " view <file>     Open in Viewer\n"
+                    " ping <IPv4>     Ping four times\n"
+                    " ifconfig        Show network configuration\n"
+                    " netdiag         Inspect network driver state\n"
+                    " netdev          Show detected network hardware\n"
+                    " clear           Clear screen\n");
     } else if (has_prefix(command, "clear")) {
         if (shell_clear) shell_clear();
     } else if (has_prefix(command, "rm ")) {
@@ -84,6 +103,28 @@ void shell_execute_command(const char* command, shell_output_fn output,
         shell_network_ifconfig(shell_output);
     } else if (has_prefix(command, "netdiag")) {
         shell_network_netdiag(shell_output);
+    } else if (has_prefix(command, "netdev")) {
+        if (!shell_api || !shell_api->network.get_device_info) {
+            print("Network API unavailable.\n");
+            return;
+        }
+
+        uint16_t vendor = 0;
+        uint16_t device = 0;
+        const char* name = 0;
+        shell_api->network.get_device_info(&vendor, &device, &name);
+
+        if (vendor == 0 && device == 0) {
+            print("No supported PCI network adapter found.\n");
+        } else {
+            print("PCI Network Device:\n  Name:   ");
+            print(name ? name : "Unknown");
+            print("\n  Vendor: ");
+            print_hex_u16(vendor);
+            print("\n  Device: ");
+            print_hex_u16(device);
+            print("\n");
+        }
     } else if (has_prefix(command, "ping ")) {
         shell_network_ping(command + 5, shell_output);
     } else if (has_prefix(command, "echo ")) {

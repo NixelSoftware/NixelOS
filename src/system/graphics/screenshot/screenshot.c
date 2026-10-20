@@ -1,196 +1,97 @@
 #include "screenshot.h"
 #include "../../../kernel/fs.h"
 #include "../../../kernel/drivers/display.h"
-#include "../../../kernel/drivers/ata.h"
 #include "../../../kernel/drivers/serial.h"
 
 #pragma pack(push, 1)
 typedef struct {
-    uint16_t bfType;
-    uint32_t bfSize;
-    uint16_t bfReserved1;
-    uint16_t bfReserved2;
-    uint32_t bfOffBits;
-} bmp_file_header_t;
-
-typedef struct {
-    uint32_t biSize;
-    int32_t  biWidth;
-    int32_t  biHeight;
-    uint16_t biPlanes;
-    uint16_t biBitCount;
-    uint32_t biCompression;
-    uint32_t biSizeImage;
-    int32_t  biXPelsPerMeter;
-    int32_t  biYPelsPerMeter;
-    uint32_t biClrUsed;
-    uint32_t biClrImportant;
-} bmp_info_header_t;
+    uint16_t type;
+    uint32_t size;
+    uint16_t reserved1;
+    uint16_t reserved2;
+    uint32_t offset;
+    uint32_t header_size;
+    int32_t  width;
+    int32_t  height;
+    uint16_t planes;
+    uint16_t bpp;
+    uint32_t compression;
+    uint32_t image_size;
+    int32_t  x_pixels_per_meter;
+    int32_t  y_pixels_per_meter;
+    uint32_t colors_used;
+    uint32_t colors_important;
+} bmp_header_t;
 #pragma pack(pop)
 
-#define BMP_TOTAL_SIZE   (54 + (SCREEN_WIDTH * 3 * SCREEN_HEIGHT)) 
-#define SECTORS_NEEDED   ((BMP_TOTAL_SIZE + 511) / 512)            
+#define SCREENSHOT_SCRATCH_ADDR 0x00500000
+#define SCREENSHOT_MAX_SIZE     (3 * 1024 * 1024)
 
-static uint8_t sector_buf[512];
-static uint8_t block_bitmap[FS_BITMAP_SECTORS * 512];
-static fs_inode_t inodes[FS_MAX_INODES];
-
-static void str_copy(char* dest, const char* src, int max) {
-    int i = 0;
-    while (src && src[i] && i < max - 1) {
-        dest[i] = src[i];
-        i++;
-    }
-    dest[i] = '\0';
-}
-
-static uint32_t stream_lba = 0;
-static uint32_t stream_pos = 0;
-
-static inline void stream_byte(uint8_t b) {
-    sector_buf[stream_pos++] = b;
-    if (stream_pos >= 512) {
-        ata_write_sectors(stream_lba++, 1, sector_buf);
-        stream_pos = 0;
-    }
-}
+static uint8_t screenshot_buffer[SCREENSHOT_MAX_SIZE];
 
 int screenshot_capture(void) {
-    debug_print("\n[SCREENSHOT] Starting backbuffer capture...\n");
-    const char* filename = "shot.bmp";
+    const char* filename = "SHOT.BMP";
 
-    
-    fs_delete_file(filename);
+    uint32_t w = SCREEN_WIDTH;
+    uint32_t h = SCREEN_HEIGHT;
+    uint32_t* fb = (uint32_t*)display_get_backbuffer();
 
-    
-    if (!ata_read_sectors(FS_BITMAP_LBA, FS_BITMAP_SECTORS, block_bitmap)) {
-        debug_print("[SCREENSHOT] ERROR: Could not read bitmap\n");
-        return 0;
-    }
-    if (!ata_read_sectors(FS_INODES_LBA, FS_INODE_SECTORS, (uint8_t*)inodes)) {
-        debug_print("[SCREENSHOT] ERROR: Could not read inodes\n");
+    if (!fb || w == 0 || h == 0) {
+        debug_print("[SCREENSHOT] Framebuffer unavailable.\n");
         return 0;
     }
 
-    
-    int inode_idx = -1;
-    for (int i = 0; i < FS_MAX_INODES; i++) {
-        if (!inodes[i].used) {
-            inode_idx = i;
-            break;
-        }
-    }
-    if (inode_idx == -1) {
-        debug_print("[SCREENSHOT] ERROR: Inode table full\n");
+    uint32_t row_size = ((w * 3) + 3) & ~3;
+    uint32_t image_size = row_size * h;
+    uint32_t file_size = sizeof(bmp_header_t) + image_size;
+
+    if (file_size > SCREENSHOT_MAX_SIZE) {
+        debug_print("[SCREENSHOT] Resolution exceeds supported screenshot limits.\n");
         return 0;
     }
 
-    
-    uint32_t consecutive = 0;
-    uint32_t start_idx = 0;
-    int found_extent = 0;
+    uint8_t* screenshot_buffer = (uint8_t*)SCREENSHOT_SCRATCH_ADDR;
 
-    for (uint32_t i = 0; i < SFS_TOTAL_SECTORS; i++) {
-        int bit_val = (block_bitmap[i / 8] & (1 << (i % 8))) != 0;
-        if (!bit_val) {
-            if (consecutive == 0) start_idx = i;
-            consecutive++;
-            if (consecutive == SECTORS_NEEDED) {
-                found_extent = 1;
-                break;
-            }
-        } else {
-            consecutive = 0;
+    
+    bmp_header_t* header = (bmp_header_t*)screenshot_buffer;
+    header->type = 0x4D42; 
+    header->size = file_size;
+    header->reserved1 = 0;
+    header->reserved2 = 0;
+    header->offset = sizeof(bmp_header_t);
+    header->header_size = 40;
+    header->width = (int32_t)w;
+    header->height = (int32_t)h;
+    header->planes = 1;
+    header->bpp = 24;
+    header->compression = 0;
+    header->image_size = image_size;
+    header->x_pixels_per_meter = 2835;
+    header->y_pixels_per_meter = 2835;
+    header->colors_used = 0;
+    header->colors_important = 0;
+
+    
+    uint8_t* pixel_dest = screenshot_buffer + sizeof(bmp_header_t);
+    for (int32_t y = (int32_t)h - 1; y >= 0; y--) {
+        uint8_t* row = pixel_dest + ((h - 1 - y) * row_size);
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t color = fb[y * w + x];
+            row[x * 3 + 0] = (uint8_t)(color & 0xFF);         
+            row[x * 3 + 1] = (uint8_t)((color >> 8) & 0xFF);  
+            row[x * 3 + 2] = (uint8_t)((color >> 16) & 0xFF); 
+        }
+        for (uint32_t pad = w * 3; pad < row_size; pad++) {
+            row[pad] = 0;
         }
     }
 
-    if (!found_extent) {
-        debug_print("[SCREENSHOT] ERROR: Insufficient contiguous disk space\n");
-        return 0;
+    int res = fs_write_file(filename, screenshot_buffer, file_size);
+    if (res >= 0) {
+        debug_print("[SCREENSHOT] Saved successfully: SHOT.BMP\n");
+        return 1;
     }
 
-    
-    for (uint32_t b = 0; b < SECTORS_NEEDED; b++) {
-        uint32_t bit = start_idx + b;
-        block_bitmap[bit / 8] |= (1 << (bit % 8));
-    }
-    ata_write_sectors(FS_BITMAP_LBA, FS_BITMAP_SECTORS, block_bitmap);
-
-    uint32_t start_lba = FS_DATA_LBA + start_idx;
-
-    
-    str_copy(inodes[inode_idx].name, filename, FS_MAX_FILENAME);
-    inodes[inode_idx].size_bytes = BMP_TOTAL_SIZE;
-    inodes[inode_idx].used = 1;
-    inodes[inode_idx].flags = 4;
-    inodes[inode_idx].extent_count = 1;
-    inodes[inode_idx].extents[0].start_lba = start_lba;
-    inodes[inode_idx].extents[0].sector_count = SECTORS_NEEDED;
-
-    ata_write_sectors(FS_INODES_LBA, FS_INODE_SECTORS, (const uint8_t*)inodes);
-
-    
-    bmp_file_header_t bfh;
-    bfh.bfType = 0x4D42; 
-    bfh.bfSize = BMP_TOTAL_SIZE;
-    bfh.bfReserved1 = 0;
-    bfh.bfReserved2 = 0;
-    bfh.bfOffBits = 54;
-
-    bmp_info_header_t bih;
-    bih.biSize = 40;
-    bih.biWidth = SCREEN_WIDTH;
-    bih.biHeight = SCREEN_HEIGHT; 
-    bih.biPlanes = 1;
-    bih.biBitCount = 24;
-    bih.biCompression = 0;
-    bih.biSizeImage = SCREEN_WIDTH * 3 * SCREEN_HEIGHT;
-    bih.biXPelsPerMeter = 2835;
-    bih.biYPelsPerMeter = 2835;
-    bih.biClrUsed = 0;
-    bih.biClrImportant = 0;
-
-    stream_lba = start_lba;
-    stream_pos = 0;
-
-    
-    uint8_t* p_fh = (uint8_t*)&bfh;
-    for (int i = 0; i < 14; i++) {
-        stream_byte(p_fh[i]);
-    }
-
-    
-    uint8_t* p_ih = (uint8_t*)&bih;
-    for (int i = 0; i < 40; i++) {
-        stream_byte(p_ih[i]);
-    }
-
-    uint32_t* backbuf = display_get_backbuffer();
-
-    
-    for (int y = SCREEN_HEIGHT - 1; y >= 0; y--) {
-        uint32_t row_start = y * SCREEN_WIDTH;
-        for (int x = 0; x < SCREEN_WIDTH; x++) {
-            uint32_t pixel = backbuf[row_start + x];
-
-            
-            stream_byte((uint8_t)(pixel & 0xFF));         
-            stream_byte((uint8_t)((pixel >> 8) & 0xFF));  
-            stream_byte((uint8_t)((pixel >> 16) & 0xFF)); 
-        }
-    }
-
-    
-    if (stream_pos > 0) {
-        while (stream_pos < 512) {
-            sector_buf[stream_pos++] = 0;
-        }
-        ata_write_sectors(stream_lba++, 1, sector_buf);
-    }
-
-    
-    fs_init();
-
-    debug_print("[SCREENSHOT] Capture finished: 1,440,054 bytes streamed cleanly.\n");
-    return 1;
+    debug_print("[SCREENSHOT] Failed to write screenshot.\n");
+    return 0;
 }

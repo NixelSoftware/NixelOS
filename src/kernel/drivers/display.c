@@ -48,7 +48,6 @@ void display_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t colo
 
 void display_blit_rect(int32_t x, int32_t y, int32_t w, int32_t h) {
     if (!lfb_vram) return;
-
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > SCREEN_WIDTH)  w = SCREEN_WIDTH - x;
@@ -62,9 +61,9 @@ void display_blit_rect(int32_t x, int32_t y, int32_t w, int32_t h) {
             const uint32_t* src = &backbuffer[py * SCREEN_WIDTH + x];
             __asm__ volatile (
                 "cld\n\t"
-                "rep movsl\n\t"
+                "rep movsl"
+                : "+S"(src), "+D"(dst), "+c"(w)
                 :
-                : "S"(src), "D"(dst), "c"(w)
                 : "memory"
             );
         }
@@ -73,12 +72,62 @@ void display_blit_rect(int32_t x, int32_t y, int32_t w, int32_t h) {
             int py = y + row;
             uint8_t* dst = lfb_vram + (py * screen_pitch) + (x * 3);
             const uint32_t* src = &backbuffer[py * SCREEN_WIDTH + x];
-            int b = 0;
             for (int col = 0; col < w; col++) {
                 uint32_t p = src[col];
-                dst[b++] = (uint8_t)(p);
-                dst[b++] = (uint8_t)(p >> 8);
-                dst[b++] = (uint8_t)(p >> 16);
+                *dst++ = (uint8_t)(p);
+                *dst++ = (uint8_t)(p >> 8);
+                *dst++ = (uint8_t)(p >> 16);
+            }
+        }
+    }
+}
+
+void display_blit_cursor_region(int32_t bx, int32_t by, int32_t bw, int32_t bh,
+                               int32_t cur_x, int32_t cur_y,
+                               const uint8_t sprite[19][12]) {
+    if (!lfb_vram) return;
+
+    
+    if (bx < 0) { bw += bx; bx = 0; }
+    if (by < 0) { bh += by; by = 0; }
+    if (bx + bw > SCREEN_WIDTH)  bw = SCREEN_WIDTH - bx;
+    if (by + bh > SCREEN_HEIGHT) bh = SCREEN_HEIGHT - by;
+    if (bw <= 0 || bh <= 0) return;
+
+    for (int r = 0; r < bh; r++) {
+        int py = by + r;
+        int sy = py - cur_y;
+
+        for (int c = 0; c < bw; c++) {
+            int px = bx + c;
+            int sx = px - cur_x;
+
+            uint32_t color;
+
+            
+            if (sx >= 0 && sx < 12 && sy >= 0 && sy < 19) {
+                uint8_t sp = sprite[sy][sx];
+                if (sp == 1) {
+                    color = COLOR_BLACK;
+                } else if (sp == 2) {
+                    color = COLOR_WHITE;
+                } else {
+                    color = backbuffer[py * SCREEN_WIDTH + px];
+                }
+            } else {
+                
+                color = backbuffer[py * SCREEN_WIDTH + px];
+            }
+
+            
+            if (screen_bpp == 32) {
+                volatile uint32_t* dst = (volatile uint32_t*)(lfb_vram + (py * screen_pitch) + (px * 4));
+                *dst = color;
+            } else if (screen_bpp == 24) {
+                volatile uint8_t* dst = lfb_vram + (py * screen_pitch) + (px * 3);
+                dst[0] = (uint8_t)(color);
+                dst[1] = (uint8_t)(color >> 8);
+                dst[2] = (uint8_t)(color >> 16);
             }
         }
     }

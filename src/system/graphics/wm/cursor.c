@@ -6,61 +6,10 @@
 
 static int32_t cursor_x = 400;
 static int32_t cursor_y = 300;
-static int32_t previous_x = 400;
-static int32_t previous_y = 300;
-static uint32_t saved_background[CURSOR_WIDTH * CURSOR_HEIGHT];
-static uint8_t saved_background_valid;
+static int32_t last_rendered_x = 400;
+static int32_t last_rendered_y = 300;
 
-static void cursor_save(int32_t x, int32_t y) {
-    uint32_t* buffer = display_get_backbuffer();
-    for (int row = 0; row < CURSOR_HEIGHT; row++) {
-        int py = y + row;
-        if (py < 0 || py >= SCREEN_HEIGHT) continue;
-        for (int col = 0; col < CURSOR_WIDTH; col++) {
-            int px = x + col;
-            if (px < 0 || px >= SCREEN_WIDTH) continue;
-            saved_background[row * CURSOR_WIDTH + col] = buffer[py * SCREEN_WIDTH + px];
-        }
-    }
-    saved_background_valid = 1;
-}
-
-static void cursor_restore(int32_t x, int32_t y) {
-    if (!saved_background_valid) return;
-    uint32_t* buffer = display_get_backbuffer();
-    for (int row = 0; row < CURSOR_HEIGHT; row++) {
-        int py = y + row;
-        if (py < 0 || py >= SCREEN_HEIGHT) continue;
-        for (int col = 0; col < CURSOR_WIDTH; col++) {
-            int px = x + col;
-            if (px < 0 || px >= SCREEN_WIDTH) continue;
-            buffer[py * SCREEN_WIDTH + px] = saved_background[row * CURSOR_WIDTH + col];
-        }
-    }
-    display_blit_rect(x, y, CURSOR_WIDTH, CURSOR_HEIGHT);
-}
-
-void wm_cursor_move(int32_t x, int32_t y, uint8_t fast_update) {
-    cursor_x = x;
-    cursor_y = y;
-    if (!fast_update || (x == previous_x && y == previous_y)) return;
-    cursor_restore(previous_x, previous_y);
-    cursor_save(x, y);
-    draw_cursor(x, y);
-    display_blit_rect(x, y, CURSOR_WIDTH, CURSOR_HEIGHT);
-    previous_x = x;
-    previous_y = y;
-}
-
-void wm_cursor_draw(void) {
-    cursor_save(cursor_x, cursor_y);
-    draw_cursor(cursor_x, cursor_y);
-    previous_x = cursor_x;
-    previous_y = cursor_y;
-}
-
-
-static const uint8_t cursor_sprite[19][12] = {
+static const uint8_t cursor_sprite[CURSOR_HEIGHT][CURSOR_WIDTH] = {
     {1,0,0,0,0,0,0,0,0,0,0,0},
     {1,1,0,0,0,0,0,0,0,0,0,0},
     {1,2,1,0,0,0,0,0,0,0,0,0},
@@ -82,13 +31,18 @@ static const uint8_t cursor_sprite[19][12] = {
     {0,0,0,0,0,0,0,1,1,0,0,0}
 };
 
+extern void display_blit_cursor_region(int32_t bx, int32_t by, int32_t bw, int32_t bh,
+                                       int32_t cur_x, int32_t cur_y,
+                                       const uint8_t sprite[19][12]);
+
 void draw_cursor(int32_t x, int32_t y) {
     uint32_t* buf = display_get_backbuffer();
+    if (!buf) return;
 
-    for (int r = 0; r < 19; r++) {
+    for (int r = 0; r < CURSOR_HEIGHT; r++) {
         int py = y + r;
         if (py < 0 || py >= SCREEN_HEIGHT) continue;
-        for (int c = 0; c < 12; c++) {
+        for (int c = 0; c < CURSOR_WIDTH; c++) {
             int px = x + c;
             if (px < 0 || px >= SCREEN_WIDTH) continue;
 
@@ -100,4 +54,34 @@ void draw_cursor(int32_t x, int32_t y) {
             }
         }
     }
+}
+
+void wm_cursor_move(int32_t x, int32_t y, uint8_t fast_update) {
+    if (x == last_rendered_x && y == last_rendered_y) return;
+
+    cursor_x = x;
+    cursor_y = y;
+
+    if (fast_update) {
+        int32_t min_x = (last_rendered_x < cursor_x) ? last_rendered_x : cursor_x;
+        int32_t min_y = (last_rendered_y < cursor_y) ? last_rendered_y : cursor_y;
+        int32_t max_x = ((last_rendered_x > cursor_x) ? last_rendered_x : cursor_x) + CURSOR_WIDTH;
+        int32_t max_y = ((last_rendered_y > cursor_y) ? last_rendered_y : cursor_y) + CURSOR_HEIGHT;
+
+        int32_t bw = max_x - min_x;
+        int32_t bh = max_y - min_y;
+
+        display_blit_cursor_region(min_x, min_y, bw, bh, cursor_x, cursor_y, cursor_sprite);
+
+        last_rendered_x = cursor_x;
+        last_rendered_y = cursor_y;
+    }
+}
+
+void wm_cursor_draw(void) {
+    
+    display_blit_cursor_region(cursor_x, cursor_y, CURSOR_WIDTH, CURSOR_HEIGHT,
+                               cursor_x, cursor_y, cursor_sprite);
+    last_rendered_x = cursor_x;
+    last_rendered_y = cursor_y;
 }

@@ -7,6 +7,7 @@
 // 0 = PCNet32 (default), 1 = Intel E1000
 extern uint32_t net_driver_type;
 
+void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out);
 uint8_t  sys_net_init(uint16_t io);
 uint8_t  sys_net_is_ready(void);
 void     sys_net_shutdown(void);

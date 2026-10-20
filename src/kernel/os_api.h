@@ -79,6 +79,7 @@ typedef struct {
 } os_shell_api_t;
 
 typedef struct {
+    void (*get_device_info)(uint16_t* vendor_out, uint16_t* device_out, const char** name_out);
     void (*net_poll)(void);
     uint32_t (*get_ticks)(void);
     uint8_t (*icmp_request_echo)(uint32_t destination_ip, uint16_t identifier,
