@@ -190,7 +190,7 @@ Callback and packet types are declared in `src/kernel/net/icmp.h`, `src/kernel/n
 
 ## Headers and building
 
-At minimum, include `os_api.h`. GUI apps should also include `window.h`; filesystem and network structures are available through headers included by `os_api.h`, or can be included directly when their constants/types are needed. Build the project with `build.sh` on Linux or `build.bat` on Windows. Follow the existing app directory and build-script patterns when adding a new app.
+At minimum, include `os_api.h`. GUI apps should also include `window.h`; filesystem and network structures are available through headers included by `os_api.h`, or can be included directly when their constants/types are needed. Build the project with `make` on Linux or Windows. Follow the existing app directory and Makefile patterns when adding a new app.
 
 ## Unincluded apps
 

@@ -1,8 +1,10 @@
 pmo
 
 # Building
-compile on windows with build.bat
-compile on linux with build.sh
+Install GNU Make, GCC, NASM, binutils, Python, and QEMU, then run `make` to build
+`os.img` or `make run` to build and start it in QEMU. Set
+`DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
+remove generated build artifacts.
 # Todo
 - [ ] **zainabm** - Implement ACPI for reboots
 - [x] **zainabm** - Implement proper ACPI
