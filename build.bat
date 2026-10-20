@@ -110,12 +110,8 @@ if not exist "src\boot.bin" ( echo [ERROR] Missing src\boot.bin & exit /b 1 )
 if not exist "src\boot_stage2.bin" ( echo [ERROR] Missing src\boot_stage2.bin & exit /b 1 )
 if not exist "src\kernel\kernel.bin" ( echo [ERROR] Missing src\kernel\kernel.bin & exit /b 1 )
 
-powershell -NoProfile -Command "$p='src\kernel\kernel.bin';$b=[IO.File]::ReadAllBytes($p);if($b.Length -lt 98304){[IO.File]::WriteAllBytes($p,$b+(New-Object byte[](98304-$b.Length)))}"
-::copy /b src\boot.bin+src\boot_stage2.bin+src\kernel\kernel.bin ..\hdd.img >nul
-copy /b "src\boot.bin" + "src\boot_stage2.bin" + "src\kernel\kernel.bin" "..\hdd.img" 1>nul
-powershell -NoProfile -Command "$p='..\hdd.img';$f=[IO.File]::Open($p,'Open','ReadWrite');$f.SetLength(33554432);$f.Close()"
-::call :run powershell -NoProfile -ExecutionPolicy Bypass -File inject_sfs.ps1
-call :run python inject_sfs.py ..\hdd.img
+call :run python mkfat32.py ..\hdd.img
+powershell -NoProfile -Command "$d='..\hdd.img';$b='src\boot.bin';$db=[IO.File]::ReadAllBytes($d);$bb=[IO.File]::ReadAllBytes($b);[Array]::Copy($bb,0,$db,0,3);[Array]::Copy($bb,90,$db,90,422);[IO.File]::WriteAllBytes($d,$db)"
 copy /y ..\hdd.img os.img >nul
 
 del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o src\kernel\drivers\display\*.o src\kernel\net\*.o src\system\shell\*.o src\system\init\*.o src\system\init\splash\*.o src\system\graphics\*.o src\system\graphics\wm\*.o src\system\graphics\dialog\*.o src\system\graphics\screenshot\*.o src\system\graphics\image\*.o src\system\graphics\session.o src\system\services\input\*.o src\system\loader\*.o
