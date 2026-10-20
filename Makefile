@@ -9,10 +9,12 @@ QEMU ?= qemu-system-i386
 ifeq ($(OS),Windows_NT)
   NASM_FORMAT := win32
   LD_FORMAT := i386pe
+  LDFLAGS := -m $(LD_FORMAT) --image-base 0 --disable-reloc-section
   PYTHON := python
 else
   NASM_FORMAT := elf32
   LD_FORMAT := elf_i386
+  LDFLAGS := -m $(LD_FORMAT)
 endif
 
 DEBUG_SUBSYSTEMS ?= 0
@@ -24,7 +26,6 @@ endif
 
 CFLAGS := -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
           -mno-stack-arg-probe -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS)
-LDFLAGS := -m $(LD_FORMAT)
 NASMFLAGS := -f $(NASM_FORMAT)
 
 KERNEL_C := \
@@ -70,17 +71,17 @@ src/boot.bin: Makefile src/boot/boot.asm
 
 $(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(LD) $(LDFLAGS) -Ttext 0x200000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
-	$(OBJCOPY) -O binary src/apps/$*/$*.tmp $@
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True); Path('src/apps/$*/entry.o').unlink(missing_ok=True); Path('src/apps/$*/main.o').unlink(missing_ok=True)"
 
 browser.bin: Makefile src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o
 	$(LD) $(LDFLAGS) --omagic -Ttext 0x200000 -e _start $(filter %.o,$^) -o src/apps/browser/browser.tmp
-	$(OBJCOPY) -O binary src/apps/browser/browser.tmp $@
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('src/apps/browser/browser.tmp','src/apps/browser/entry.o','src/apps/browser/main.o','src/apps/browser/png.o')]"
 
-src/kernel/kernel.bin: Makefile $(KERNEL_OBJ)
-	$(LD) $(LDFLAGS) -Ttext 0x100000 -e _start $(filter %.o,$^) -o src/kernel/kernel.tmp
-	$(OBJCOPY) -O binary src/kernel/kernel.tmp $@
+src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
+	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/kernel/kernel.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.tmp').unlink(missing_ok=True)"
 
 src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
