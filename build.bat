@@ -1,6 +1,8 @@
 @echo off
 setlocal EnableExtensions
 
+if /i "%~1"=="run" goto runvm
+
 set "CC=gcc -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie -mno-stack-arg-probe"
 
 call :run nasm -f bin src\boot\boot.asm -o src\boot.bin
@@ -117,6 +119,9 @@ del /q src\boot.bin src\boot_stage2.bin src\kernel\*.o src\kernel\drivers\*.o sr
 del /q src\apps\notepad\*.o src\apps\viewer\*.o src\system\graphics\terminal\*.o src\apps\ping\*.o src\apps\netdiag\*.o src\kernel\kernel.bin
 del /q files.bin mines.bin calc.bin hexview.bin floppy_debug.bin ping.bin netdiag.bin http_test.bin browser.bin crash_debug.bin shutdown.bin curl.bin
 
+goto runvm
+
+:runvm
 start qemu-system-i386 -m 32M -drive file=os.img,format=raw,index=0,media=disk ^
     -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 ^
     -device e1000,netdev=net0 -serial stdio
