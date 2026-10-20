@@ -142,6 +142,7 @@ void viewer_init(void) {
     viewer_window.focused = 0;
     viewer_window.draw_content = viewer_draw;
     viewer_window.handle_key = 0;
+    viewer_window.handle_mouse = 0;
 
     image_w = 0;
     image_h = 0;

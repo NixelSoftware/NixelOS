@@ -89,6 +89,7 @@ void notepad_init(void) {
     notepad_window.focused = 1;
     notepad_window.draw_content = notepad_draw;
     notepad_window.handle_key = notepad_handle_key;
+    notepad_window.handle_mouse = 0;
 
     for (int i = 0; i < NOTEPAD_MAX_CHARS; i++) {
         notepad_buffer[i] = 0;

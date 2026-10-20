@@ -272,9 +272,10 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     };
     nixinit_start(&init_services);
 
+    // This fucking cursor shit is pissing me off
     debug_print("[INIT] Entering system event loop.\n");
     for (;;) {
-        sys_net_poll();
+        //sys_net_poll(); - zainabm: readd function if causing any weird problems
         wm_poll();
     }
 }
