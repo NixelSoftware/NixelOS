@@ -3,9 +3,11 @@
 #include "../../kernel/net/ipv4.h"
 #include "../../kernel/drivers/serial.h"
 #include "../../kernel/arch_i386.h"
+#include "../../kernel/syscall.h"
 
 #define APP_LOAD_LIMIT   1048576u
 #define APP_BSS_LIMIT    0x005F0000u
+#define APP_ARGUMENT_MAX 256u
 #define APP_INSTANCE_MAX 8
 #define APP_MAPPED_PAGES ((APP_BSS_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE)
 
@@ -49,6 +51,7 @@ void app_loader_collect(void) {
             continue;
         if (paging_current_directory() == (uint32_t)instance->address_space.directory)
             continue;
+        syscall_forget_address_space((uint32_t)instance->address_space.directory);
         ipv4_clear_handlers_for_directory((uint32_t)instance->address_space.directory);
         paging_address_space_destroy(&instance->address_space);
         instance->active = 0;
@@ -90,7 +93,6 @@ static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
 }
 
 int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
-    (void)arguments;
     if (!api || !api->fs.read || !name || !*name) return -1;
 
     app_loader_collect();
@@ -140,7 +142,25 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
     app_entry_fn entry = (app_entry_fn)(APP_VIRTUAL_BASE + sizeof(app_header_t));
     debug_print("[APP] entering executable\n");
     if (header->type == APP_TYPE_USER) {
-        arch_i386_enter_user((uint32_t)entry, APP_BSS_LIMIT - 16u);
+        uint32_t argument_length = 0;
+        const char* source = arguments ? arguments : "";
+        while (source[argument_length] && argument_length < APP_ARGUMENT_MAX - 1u)
+            argument_length++;
+        if (source[argument_length]) {
+            paging_activate_directory(kernel_directory);
+            instance->pending_release = 1;
+            app_loader_collect();
+            return -1;
+        }
+
+        uint32_t user_arguments = APP_BSS_LIMIT - 512u;
+        for (uint32_t i = 0; i < argument_length; i++)
+            ((char*)user_arguments)[i] = source[i];
+        ((char*)user_arguments)[argument_length] = '\0';
+
+        uint32_t user_stack = APP_BSS_LIMIT - 32u;
+        *(uint32_t*)user_stack = user_arguments;
+        arch_i386_enter_user((uint32_t)entry, user_stack);
     } else {
         entry(api);
     }

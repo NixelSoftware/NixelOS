@@ -1,12 +1,10 @@
-#include "../../kernel/types.h"
-#include "../../kernel/os_api.h"
+#include "../../system/user/sys_api.h"
 
-int main_app(os_api_t* os) {
-    if (os) {
-        os->shell.term_print("Triggering kernel panic...\n");
-    }
+void user_main(void) {
+    static const char message[] = "Triggering user-mode page fault; the app should terminate safely.\n";
+    (void)sys_write(message, sizeof(message) - 1u);
 
-    __asm__ volatile ("ud2");
-
-    return 0;
+    volatile uint32_t value = *(volatile uint32_t*)0x00600000u;
+    (void)value;
+    sys_exit(0);
 }

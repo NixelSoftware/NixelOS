@@ -267,8 +267,8 @@ void idt_init(void) {
     idt_set_gate(46, (uint32_t)isr46, 0x08, 0x8E);
     idt_set_gate(47, (uint32_t)isr47, 0x08, 0x8E);
 
-    /* User-callable interrupt gate. DPL=3, present, 32-bit interrupt gate. */
-    idt_set_gate(0x80, (uint32_t)syscall_entry, 0x08, 0xEE);
+    /* User-callable trap gate keeps timer interrupts enabled during syscalls. */
+    idt_set_gate(0x80, (uint32_t)syscall_entry, 0x08, 0xEF);
 
     idt_flush((uint32_t)&idt_ptr);
 }

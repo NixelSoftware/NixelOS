@@ -122,11 +122,6 @@ void shell_execute_command(const char* command, shell_output_fn output,
             print_hex_u16(device);
             print("\n");
         }
-    } else if (has_prefix(command, "ping") &&
-               (command[4] == '\0' || command[4] == ' ')) {
-        const char* argument = command + 4;
-        while (*argument == ' ') argument++;
-        shell_network_ping(argument, shell_output);
     } else if (has_prefix(command, "echo ")) {
         const char* text = command + 5;
         const char* redirect = 0;

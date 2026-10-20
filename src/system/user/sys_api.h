@@ -10,7 +10,10 @@ enum {
     SYS_GET_TICKS = 2, /* returns the timer tick count */
     SYS_EXIT = 3,      /* EBX: process status; does not return */
     SYS_SHUTDOWN = 4,  /* requests a kernel-managed system shutdown */
-    SYS_NET_DIAGNOSTICS = 5 /* EBX: output snapshot; returns ready state */
+    SYS_NET_DIAGNOSTICS = 5, /* EBX: output snapshot; returns ready state */
+    SYS_DNS_RESOLVE = 6,     /* EBX: hostname, ECX: writable IPv4 output */
+    SYS_PING_START = 7,      /* EBX: destination IPv4, ECX: sequence; returns request handle */
+    SYS_PING_POLL = 8        /* EBX: handle, ECX: writable ms output; 0 pending, 1 reply, 2 timeout */
 };
 
 static inline int32_t sys_write(const char* buffer, uint32_t length) {
@@ -53,6 +56,34 @@ static inline int32_t sys_net_diagnostics(net_diagnostics_t* diagnostics) {
                       : "=a"(result)
                       : "0"((uint32_t)SYS_NET_DIAGNOSTICS), "b"(diagnostics)
                       : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_dns_resolve(const char* hostname, uint32_t* address) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_DNS_RESOLVE), "b"(hostname), "c"(address)
+                      : "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_ping_start(uint32_t destination, uint16_t sequence) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_PING_START), "b"(destination),
+                        "c"((uint32_t)sequence)
+                      : "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_ping_poll(uint32_t handle, uint32_t* milliseconds) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_PING_POLL), "b"(handle), "c"(milliseconds)
+                      : "edx", "memory", "cc");
     return result;
 }
 
