@@ -41,6 +41,10 @@ typedef struct {
     uint32_t dw_csr0;
     uint16_t rx_descriptor_status;
     uint32_t rx_message_length;
+
+    // phy shit
+    uint8_t  phy_addr;
+    uint16_t phy_id;
 } net_diagnostics_t;
 
 uint8_t net_init(uint16_t io_base);

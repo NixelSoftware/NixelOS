@@ -186,6 +186,12 @@ void shell_network_netdiag(shell_output_fn output) {
     print_hex_byte((uint8_t)diagnostics.last_error_status);
     print("\n  Ring indexes TX/RX: "); print_u32(diagnostics.tx_index);
     print("/"); print_u32(diagnostics.rx_index); print("\n");
+    print("  PHY Addr/ID:  ");
+    print_u32((uint32_t)diagnostics.phy_addr);
+    print(" / ");
+    print_hex_byte((uint8_t)(diagnostics.phy_id >> 8));
+    print_hex_byte((uint8_t)(diagnostics.phy_id & 0xFF));
+    print("\n");
 }
 
 void shell_network_ping(const char* argument, shell_output_fn output) {

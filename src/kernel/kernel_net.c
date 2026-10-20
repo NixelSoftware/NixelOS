@@ -34,8 +34,9 @@ static const pci_net_match_t supported_cards[] = {
     { 0x8086, 0x10D3, "Intel 82574L Gigabit Ethernet",   1 },
 
     // zainabm: the tigon3 driver is broken, plz fix
-    /*
+    // zainabm: im actually so fucking done with this, fuck you and your nics broadcom
     // Broadcom Tigon3 / NetXtreme Family
+    /*
     { 0x14E4, 0x1659, "Broadcom BCM5721 NetXtreme Gigabit", 2 },
     { 0x14E4, 0x165A, "Broadcom BCM5722 NetXtreme Gigabit", 2 },
     { 0x14E4, 0x1673, "Broadcom BCM57780 Gigabit Ethernet", 2 },
