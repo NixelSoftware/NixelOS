@@ -38,6 +38,7 @@ void ipv4_init(uint32_t local_ip, const uint8_t local_mac[6],
 void ipv4_set_mac_resolver(ipv4_mac_resolver_t resolver);
 void ipv4_set_protocol_handler(uint8_t protocol,
                                ipv4_protocol_handler_t handler);
+void ipv4_clear_handlers_for_directory(uint32_t directory_address);
 void ipv4_set_configuration(uint32_t local_ip, uint32_t gateway_ip,
                             uint32_t subnet_mask);
 

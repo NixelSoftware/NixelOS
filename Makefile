@@ -34,7 +34,7 @@ KERNEL_C := \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/loader/app_loader.c \
-  src/kernel/idt.c src/system/init/splash/startscreen.c \
+  src/kernel/idt.c src/kernel/paging.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \
   src/kernel/drivers/ata.c src/kernel/drivers/net.c \
@@ -70,12 +70,12 @@ src/boot.bin: Makefile src/boot/boot.asm
 	$(NASM) $(NASMFLAGS) $< -o $@
 
 $(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
-	$(LD) $(LDFLAGS) -Ttext 0x200000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
+	$(LD) $(LDFLAGS) -Ttext 0x400000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True); Path('src/apps/$*/entry.o').unlink(missing_ok=True); Path('src/apps/$*/main.o').unlink(missing_ok=True)"
 
 browser.bin: Makefile src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o
-	$(LD) $(LDFLAGS) --omagic -Ttext 0x200000 -e _start $(filter %.o,$^) -o src/apps/browser/browser.tmp
+	$(LD) $(LDFLAGS) --omagic -Ttext 0x400000 -e _start $(filter %.o,$^) -o src/apps/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('src/apps/browser/browser.tmp','src/apps/browser/entry.o','src/apps/browser/main.o','src/apps/browser/png.o')]"
 

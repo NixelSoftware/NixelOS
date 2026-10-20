@@ -3,6 +3,7 @@
 #include "arp.h"
 #include "../kernel_net.h"
 #include "../drivers/serial.h"
+#include "../paging.h"
 
 #define IPV4_ETHERNET_HEADER_SIZE 14
 #define IPV4_MAX_FRAME_SIZE (IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + IPV4_MAX_PAYLOAD)
@@ -13,6 +14,9 @@ static uint32_t gateway_ip;
 static uint32_t subnet_mask;
 static uint8_t local_mac[6];
 static ipv4_protocol_handler_t protocol_handlers[256];
+static uint32_t protocol_handler_directories[256];
+static ipv4_protocol_handler_t kernel_fallback_handlers[256];
+static uint8_t kernel_fallback_valid[256];
 static ipv4_mac_resolver_t mac_resolver;
 static uint8_t transmit_frame[IPV4_MAX_FRAME_SIZE];
 
@@ -72,7 +76,12 @@ void ipv4_init(uint32_t address, const uint8_t address_mac[6],
     subnet_mask = mask;
     mac_resolver = 0;
 
-    for (uint16_t i = 0; i < 256; i++) protocol_handlers[i] = 0;
+    for (uint16_t i = 0; i < 256; i++) {
+        protocol_handlers[i] = 0;
+        protocol_handler_directories[i] = 0;
+        kernel_fallback_handlers[i] = 0;
+        kernel_fallback_valid[i] = 0;
+    }
     for (uint8_t i = 0; i < 6; i++) local_mac[i] = address_mac[i];
 
     debug_subsystem_print("[NET TRACE] ipv4_init before etherframe_init\n");
@@ -98,7 +107,52 @@ void ipv4_set_configuration(uint32_t address, uint32_t gateway,
 
 void ipv4_set_protocol_handler(uint8_t protocol,
                                ipv4_protocol_handler_t handler) {
+    uint32_t current_directory = paging_current_directory();
+    uint32_t kernel_directory = paging_kernel_directory();
+
+    if (current_directory != kernel_directory) {
+        if (protocol_handler_directories[protocol] != 0 &&
+            protocol_handler_directories[protocol] != kernel_directory &&
+            protocol_handler_directories[protocol] != current_directory)
+            return;
+
+        if (protocol_handler_directories[protocol] == kernel_directory &&
+            protocol_handlers[protocol]) {
+            kernel_fallback_handlers[protocol] = protocol_handlers[protocol];
+            kernel_fallback_valid[protocol] = 1;
+        }
+
+        protocol_handlers[protocol] = handler;
+        protocol_handler_directories[protocol] = handler ? current_directory : 0;
+        if (!handler && kernel_fallback_valid[protocol]) {
+            protocol_handlers[protocol] = kernel_fallback_handlers[protocol];
+            protocol_handler_directories[protocol] = kernel_directory;
+            kernel_fallback_handlers[protocol] = 0;
+            kernel_fallback_valid[protocol] = 0;
+        }
+        return;
+    }
+
     protocol_handlers[protocol] = handler;
+    protocol_handler_directories[protocol] = handler ? kernel_directory : 0;
+    kernel_fallback_handlers[protocol] = 0;
+    kernel_fallback_valid[protocol] = 0;
+}
+
+void ipv4_clear_handlers_for_directory(uint32_t directory_address) {
+    if (!directory_address || directory_address == paging_kernel_directory()) return;
+    for (uint16_t protocol = 0; protocol < 256; protocol++) {
+        if (protocol_handler_directories[protocol] != directory_address) continue;
+        if (kernel_fallback_valid[protocol]) {
+            protocol_handlers[protocol] = kernel_fallback_handlers[protocol];
+            protocol_handler_directories[protocol] = paging_kernel_directory();
+        } else {
+            protocol_handlers[protocol] = 0;
+            protocol_handler_directories[protocol] = 0;
+        }
+        kernel_fallback_handlers[protocol] = 0;
+        kernel_fallback_valid[protocol] = 0;
+    }
 }
 
 uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
@@ -136,6 +190,16 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
         return 0;
     }
 
+    if (header->protocol == 6) {
+        debug_print("[NET RX] TCP packet src/dst/local: ");
+        debug_hex(read_be32((const uint8_t*)&header->source_ip));
+        debug_print("/");
+        debug_hex(read_be32((const uint8_t*)&header->destination_ip));
+        debug_print("/");
+        debug_hex(local_ip);
+        debug_print("\n");
+    }
+
     if (ipv4_checksum(header, header_length) != 0) return 0;
     {
         uint32_t destination_ip =
@@ -148,12 +212,27 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
     }
 
     payload_length = total_length - header_length;
-    if (protocol_handlers[header->protocol]) {
-        protocol_handlers[header->protocol](
+    ipv4_protocol_handler_t handler = protocol_handlers[header->protocol];
+    if (handler) {
+        uint32_t previous_directory = paging_current_directory();
+        uint32_t handler_directory = protocol_handler_directories[header->protocol];
+        uint8_t app_handler = handler_directory &&
+                              handler_directory != paging_kernel_directory();
+        if (app_handler) {
+            debug_print("[APP NET] dispatching IPv4 protocol ");
+            debug_hex(header->protocol);
+            debug_print(" to app\n");
+        }
+        if (handler_directory && handler_directory != previous_directory)
+            paging_activate_directory(handler_directory);
+        handler(
             read_be32((const uint8_t*)&header->source_ip),
             read_be32((const uint8_t*)&header->destination_ip),
             frame + header_length,
             payload_length);
+        if (paging_current_directory() != previous_directory)
+            paging_activate_directory(previous_directory);
+        if (app_handler) debug_print("[APP NET] app packet handler returned\n");
     }
     return 0;
 }

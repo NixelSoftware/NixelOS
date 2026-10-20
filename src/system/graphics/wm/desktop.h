@@ -7,6 +7,7 @@ typedef struct {
     int32_t x;
     int32_t y;
     const char* label;
+    const char* executable;
     Window* target_window;
     uint8_t icon_type; 
     uint8_t selected;

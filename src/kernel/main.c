@@ -14,6 +14,7 @@
 #include "fs.h" 
 #include "os_api.h"
 #include "task.h"
+#include "paging.h"
 #include "kernel_net.h"
 #include "drivers/net.h"
 #include "net/arp.h"
@@ -45,6 +46,9 @@ static void api_shell_set_output(shell_output_fn output);
 static int api_shell_open_viewer(const char* filename);
 static int api_launch_app(const char* name, const char* arguments);
 static uint32_t api_get_ticks(void);
+static uint8_t api_ipv4_send(uint32_t destination_ip, uint8_t protocol,
+                             const uint8_t* payload, uint32_t length);
+static uint8_t api_dns_resolve(const char* hostname, uint32_t* address);
 extern void irq0_timer_handler(void);
 
 volatile uint32_t frame_timer = 0;
@@ -106,10 +110,10 @@ static os_api_t kernel_api = {
         .net_get_diagnostics = sys_net_get_diagnostics,
         .get_mac_address = sys_net_get_mac_address,
         .get_configuration = sys_net_get_configuration,
-        .ipv4_send = ipv4_send,
+        .ipv4_send = api_ipv4_send,
         .ipv4_set_handler = ipv4_set_protocol_handler,
         .ipv4_get_local_ip = ipv4_get_local_ip,
-        .dns_resolve = dns_resolve
+        .dns_resolve = api_dns_resolve
     },
     .windows = {
         .register_window = wm_register_window,
@@ -177,6 +181,39 @@ static void term_print(const char* text) {
 
 static uint32_t api_get_ticks(void) {
     return frame_timer;
+}
+
+static uint8_t api_ipv4_send(uint32_t destination_ip, uint8_t protocol,
+                             const uint8_t* payload, uint32_t length) {
+    uint8_t sent = ipv4_send(destination_ip, protocol, payload, length);
+    if (paging_current_directory() != paging_kernel_directory()) {
+        debug_print("[APP NET] IPv4 send result: ");
+        debug_hex(sent);
+        debug_print(" destination: ");
+        debug_hex(destination_ip);
+        debug_print(" local: ");
+        debug_hex(ipv4_get_local_ip());
+        debug_print(" protocol: ");
+        debug_hex(protocol);
+        debug_print("\n");
+    }
+    return sent;
+}
+
+static uint8_t api_dns_resolve(const char* hostname, uint32_t* address) {
+    uint8_t resolved = dns_resolve(hostname, address);
+    if (paging_current_directory() != paging_kernel_directory()) {
+        debug_print("[APP NET] DNS result for ");
+        debug_print(hostname);
+        debug_print(": ");
+        debug_hex(resolved);
+        if (resolved && address) {
+            debug_print(" address: ");
+            debug_hex(*address);
+        }
+        debug_print("\n");
+    }
+    return resolved;
 }
 
 static void nixinit_show_status(const char* text, int percent) {
@@ -270,6 +307,8 @@ static void kernel_finish_boot(void) {
 
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     __asm__ volatile ("cli");
+
+    paging_init();
     
     serial_init();
     debug_print("\n=== SYSTEM BOOTING ===\n");

@@ -70,14 +70,16 @@ void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
     debug_subsystem_print("\n");
     icons[0].x = 24;
     icons[0].y = 20;
-    icons[0].label = "Term";
+    icons[0].label = "TERM";
+    icons[0].executable = 0;
     icons[0].target_window = term_win;
     icons[0].icon_type = 0;
     icons[0].selected = 0;
 
     icons[1].x = 24;
     icons[1].y = 80;
-    icons[1].label = "Note";
+    icons[1].label = "NOTES";
+    icons[1].executable = 0;
     icons[1].target_window = note_win;
     icons[1].icon_type = 1;
     icons[1].selected = 0;
@@ -177,10 +179,12 @@ uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {
     }
 
     if (clicked_index == last_clicked_icon && (current_time - last_click_time) <= DOUBLE_CLICK_THRESHOLD) {
-        Window* target = icons[clicked_index].target_window;
-        if (target) {
-            target->visible = 1;
-            wm_bring_to_front(target);
+        DesktopIcon* icon = &icons[clicked_index];
+        if (desktop_api && icon->executable && desktop_api->shell.launch_app)
+            desktop_api->shell.launch_app(icon->executable, "");
+        else if (icon->target_window) {
+            icon->target_window->visible = 1;
+            wm_bring_to_front(icon->target_window);
         }
         icons[clicked_index].selected = 0;
         last_clicked_icon = -1;

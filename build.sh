@@ -25,6 +25,7 @@ nasm -f elf32 src/kernel/task_switch.asm -o src/kernel/task_switch.o
 
 kernel_sources=(
     src/kernel/main.c
+    src/kernel/paging.c
     src/system/shell/commands.c
     src/system/shell/network_commands.c
     src/system/init/main.c
@@ -81,7 +82,7 @@ for app in files mines calc hexview floppy_debug ping netdiag http_test curl cra
     mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
     "${cc[@]}" -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
-    ld -m elf_i386 -Ttext 0x200000 -e _start \
+    ld -m elf_i386 -Ttext 0x400000 -e _start \
         "src/apps/$app/entry.o" "src/apps/$app/main.o" \
         -o "src/apps/$app/$app.tmp"
     objcopy -O binary "src/apps/$app/$app.tmp" "$app.bin"
@@ -92,7 +93,7 @@ mkdir -p src/apps/browser
 nasm -f elf32 src/apps/browser/entry.asm -o src/apps/browser/entry.o
 "${cc[@]}" -c src/apps/browser/main.c -o src/apps/browser/main.o
 "${cc[@]}" -c src/apps/browser/png.c -o src/apps/browser/png.o
-ld -m elf_i386 --omagic -Ttext 0x200000 -e _start \
+ld -m elf_i386 --omagic -Ttext 0x400000 -e _start \
     src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o \
     -o src/apps/browser/browser.tmp
 objcopy -O binary src/apps/browser/browser.tmp browser.bin
@@ -114,6 +115,7 @@ ld -m elf_i386 -Ttext 0x100000 \
     src/system/services/input/input.o \
     src/system/loader/app_loader.o \
     src/kernel/idt.o \
+    src/kernel/paging.o \
     src/kernel/task.o \
     src/system/graphics/dialog/dialog.o \
     src/kernel/drivers/display.o \
