@@ -19,6 +19,11 @@ result in EAX:
 | 7 | `sys_ping_start` | EBX = destination IPv4, ECX = sequence | request handle, or `-1` if it could not be submitted |
 | 8 | `sys_ping_poll` | EBX = request handle, ECX = writable milliseconds output | `0` pending, `1` reply received, `2` timed out, `-1` invalid handle or pointer |
 | 9 | `sys_yield` | none | services kernel network and window/input polling before returning |
+| 10 | `sys_window_create` | EBX = readable `user_window_desc_t*` | window handle, or `-1` |
+| 11 | `sys_window_draw` | EBX = handle, ECX = readable `user_window_draw_t*` | `0` success, `-1` invalid request |
+| 12 | `sys_window_poll` | EBX = handle, ECX = writable `user_window_event_t*` | `1` event, `0` no event, `-1` invalid handle or pointer |
+| 13 | `sys_window_present` | EBX = handle | `0` success, `-1` invalid handle |
+| 14 | `sys_window_close` | EBX = handle | `0` success, `-1` invalid handle |
 
 `sys_write` accepts only readable user pages in the current app address space.
 `sys_shutdown` is a privileged service exposed through the syscall dispatcher;
@@ -36,6 +41,12 @@ continues network and window/input polling. The runner still executes one user
 app at a time, so this cooperative yield keeps the system event loop responsive
 but does not provide simultaneous user processes; that needs scheduler/process
 work to follow.
+`calc` is the sixth ring-3 app and retains its calculator window. Ring-3 window
+apps create kernel-managed frames, draw into a private window surface through
+validated fill, text, and button syscalls, and receive queued key, mouse, redraw,
+and close events. The WM composites those surfaces in window z-order. Apps call
+`sys_yield` to let the window manager process input, then poll their event queue.
+The window manager never invokes a user callback while running in ring 0.
 The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT
 vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.

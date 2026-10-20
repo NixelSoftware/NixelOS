@@ -1,6 +1,6 @@
 # Writing an App
 
-This page describes the current C app interface. The kernel passes an `os_api_t*` to an app's `main_app` function. Include the public headers from `src/kernel` and use that table for system services.
+This page describes both app interfaces. Legacy apps run in ring 0 and receive an `os_api_t*` in `main_app`; ring-3 apps export `user_main` and use `src/system/user/sys_api.h`. Include the public headers for the interface the app uses.
 
 ```c
 #include "../../kernel/os_api.h"
@@ -19,7 +19,16 @@ dd 0x31505041 ; APP_HEADER_MAGIC
 db 1, 0, 0, 0 ; APP_TYPE_GUI (use 2 for APP_TYPE_CONSOLE)
 ```
 
-Keep the header and entry stub consistent with the app type and the build setup. See `src/apps/calc` for a GUI example and `src/apps/ping` or `src/apps/curl` for console examples.
+Keep the header and entry stub consistent with the app type and the build setup. See `src/apps/mines` or `src/apps/files` for legacy GUI examples, `src/apps/curl` for a legacy console example, and `src/apps/ping` or `src/apps/calc` for ring-3 examples. Ring-3 apps do not receive `os_api_t`.
+
+## Ring-3 windows
+
+Ring-3 windows are registered with `sys_window_create`, which takes a
+`user_window_desc_t`. Apps draw using `sys_window_draw` and present using
+`sys_window_present`. `sys_window_poll` returns queued key, mouse, redraw, and
+close events; call `sys_yield` between polls so the kernel can run the window
+manager. The window manager does not invoke user callbacks from ring 0. See
+`src/apps/calc` for a complete example using this interface.
 
 ## Console apps
 

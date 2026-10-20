@@ -141,6 +141,77 @@ void syscall_dispatch(registers_t* regs) {
             wm_poll();
             regs->eax = 0;
             return;
+        case SYS_WINDOW_CREATE: {
+            user_window_desc_t description;
+            uint32_t address = regs->ebx;
+            if (!user_readable(address, sizeof(description))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            description = *(const user_window_desc_t*)address;
+            uint32_t title_length = 0;
+            while (title_length < USER_WINDOW_TITLE_MAX && description.title[title_length])
+                title_length++;
+            if (title_length == USER_WINDOW_TITLE_MAX) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            regs->eax = (uint32_t)wm_user_window_create(
+                &description, paging_current_directory());
+            return;
+        }
+        case SYS_WINDOW_DRAW: {
+            user_window_draw_t drawing;
+            char text[64];
+            const char* text_pointer = 0;
+            uint32_t address = regs->ecx;
+            if (!user_readable(address, sizeof(drawing))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            drawing = *(const user_window_draw_t*)address;
+            if (drawing.operation == USER_WINDOW_DRAW_TEXT ||
+                drawing.operation == USER_WINDOW_DRAW_BUTTON) {
+                uint32_t length = 0;
+                while (length < sizeof(text)) {
+                    uint32_t current = (uint32_t)drawing.text + length;
+                    if (current < (uint32_t)drawing.text || !user_readable(current, 1)) {
+                        regs->eax = (uint32_t)-1;
+                        return;
+                    }
+                    text[length] = drawing.text[length];
+                    if (!text[length]) break;
+                    length++;
+                }
+                if (length == sizeof(text)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                text_pointer = text;
+            }
+            regs->eax = (uint32_t)wm_user_window_draw(
+                regs->ebx, paging_current_directory(), &drawing, text_pointer);
+            return;
+        }
+        case SYS_WINDOW_POLL: {
+            uint32_t output_address = regs->ecx;
+            if (!user_writable(output_address, sizeof(user_window_event_t))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            regs->eax = (uint32_t)wm_user_window_poll(
+                regs->ebx, paging_current_directory(),
+                (user_window_event_t*)output_address);
+            return;
+        }
+        case SYS_WINDOW_PRESENT:
+            regs->eax = (uint32_t)wm_user_window_present(
+                regs->ebx, paging_current_directory());
+            return;
+        case SYS_WINDOW_CLOSE:
+            regs->eax = (uint32_t)wm_user_window_close(
+                regs->ebx, paging_current_directory());
+            return;
         case SYS_EXIT:
             arch_user_exit_requested = 1;
             return;

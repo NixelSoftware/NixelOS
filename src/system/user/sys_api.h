@@ -3,6 +3,7 @@
 
 #include "../../kernel/types.h"
 #include "../../kernel/drivers/net.h"
+#include "window_api.h"
 
 /* i386 ABI: call number in EAX, arguments in EBX/ECX/EDX, result in EAX. */
 enum {
@@ -14,7 +15,12 @@ enum {
     SYS_DNS_RESOLVE = 6,     /* EBX: hostname, ECX: writable IPv4 output */
     SYS_PING_START = 7,      /* EBX: destination IPv4, ECX: sequence; returns request handle */
     SYS_PING_POLL = 8,       /* EBX: handle, ECX: writable ms output; 0 pending, 1 reply, 2 timeout */
-    SYS_YIELD = 9            /* services kernel event loops, then returns to the app */
+    SYS_YIELD = 9,           /* services kernel event loops, then returns to the app */
+    SYS_WINDOW_CREATE = 10,  /* EBX: readable user_window_desc_t*; returns window handle */
+    SYS_WINDOW_DRAW = 11,    /* EBX: handle, ECX: readable user_window_draw_t* */
+    SYS_WINDOW_POLL = 12,    /* EBX: handle, ECX: writable user_window_event_t* */
+    SYS_WINDOW_PRESENT = 13, /* EBX: handle; blits the window area */
+    SYS_WINDOW_CLOSE = 14    /* EBX: handle */
 };
 
 static inline int32_t sys_write(const char* buffer, uint32_t length) {
@@ -93,6 +99,53 @@ static inline void sys_yield(void) {
                       :
                       : "a"((uint32_t)SYS_YIELD)
                       : "ebx", "ecx", "edx", "memory", "cc");
+}
+
+static inline int32_t sys_window_create(const user_window_desc_t* description) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_WINDOW_CREATE), "b"(description)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_window_draw(uint32_t handle,
+                                      const user_window_draw_t* drawing) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_WINDOW_DRAW), "b"(handle), "c"(drawing)
+                      : "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_window_poll(uint32_t handle,
+                                      user_window_event_t* event) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_WINDOW_POLL), "b"(handle), "c"(event)
+                      : "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_window_present(uint32_t handle) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_WINDOW_PRESENT), "b"(handle)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_window_close(uint32_t handle) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_WINDOW_CLOSE), "b"(handle)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
 }
 
 #endif

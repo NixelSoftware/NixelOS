@@ -1,7 +1,10 @@
 #include "wm.h"
 #include "desktop.h"
 #include "../../../kernel/paging.h"
+#include "../../../kernel/drivers/display.h"
 #include "../../loader/app_loader.h"
+#include "../widgets.h"
+#include "../../../kernel/drivers/display/font.h"
 
 static Window* windows[WM_MAX_WINDOWS];
 static uint32_t window_directories[WM_MAX_WINDOWS];
@@ -14,6 +17,143 @@ static uint32_t dragging_directory;
 static uint8_t previous_left_button;
 static uint8_t start_menu_open;
 static uint8_t redraw_pending;
+
+#define USER_WINDOW_EVENT_CAPACITY 16u
+#define USER_WINDOW_TEXT_MAX 64u
+#define USER_WINDOW_MAX_SURFACE_PAGES \
+    ((SCREEN_WIDTH * WM_TASKBAR_Y * sizeof(uint32_t) + PAGE_SIZE - 1u) / PAGE_SIZE)
+
+extern const uint8_t font_8x8[128][8];
+
+typedef struct {
+    Window window;
+    char title[USER_WINDOW_TITLE_MAX];
+    uint32_t owner_directory;
+    uint32_t handle;
+    user_window_event_t events[USER_WINDOW_EVENT_CAPACITY];
+    uint32_t surface_frames[USER_WINDOW_MAX_SURFACE_PAGES];
+    uint16_t surface_page_count;
+    uint8_t event_read;
+    uint8_t event_write;
+    uint8_t active;
+} user_window_slot_t;
+
+static user_window_slot_t user_window_slots[WM_MAX_WINDOWS];
+static uint32_t next_user_window_handle = 1;
+
+static user_window_slot_t* user_slot_for_window(Window* window) {
+    for (int i = 0; i < WM_MAX_WINDOWS; i++)
+        if (user_window_slots[i].active && &user_window_slots[i].window == window)
+            return &user_window_slots[i];
+    return 0;
+}
+
+static user_window_slot_t* user_slot_by_handle(uint32_t handle,
+                                                uint32_t owner_directory) {
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        user_window_slot_t* slot = &user_window_slots[i];
+        if (slot->active && slot->handle == handle &&
+            slot->owner_directory == owner_directory) return slot;
+    }
+    return 0;
+}
+
+static void user_window_enqueue(user_window_slot_t* slot,
+                                const user_window_event_t* event) {
+    if (!slot || !event) return;
+    uint8_t next = (uint8_t)((slot->event_write + 1u) % USER_WINDOW_EVENT_CAPACITY);
+    if (next == slot->event_read)
+        slot->event_read = (uint8_t)((slot->event_read + 1u) % USER_WINDOW_EVENT_CAPACITY);
+    slot->events[slot->event_write] = *event;
+    slot->event_write = next;
+}
+
+static void user_window_enqueue_simple(user_window_slot_t* slot, uint32_t type) {
+    user_window_event_t event = {0};
+    event.type = type;
+    if (slot && type == USER_WINDOW_EVENT_REDRAW) {
+        event.x = slot->window.x;
+        event.y = slot->window.y;
+    }
+    user_window_enqueue(slot, &event);
+}
+
+static uint32_t* user_surface_pixel(user_window_slot_t* slot, uint32_t x,
+                                    uint32_t y) {
+    if (!slot) return 0;
+    uint32_t pixel_index = y * (uint32_t)slot->window.w + x;
+    uint32_t byte_offset = pixel_index * sizeof(uint32_t);
+    uint32_t page = byte_offset / PAGE_SIZE;
+    uint32_t offset = byte_offset & (PAGE_SIZE - 1u);
+    if (page >= slot->surface_page_count) return 0;
+    return (uint32_t*)(slot->surface_frames[page] + offset);
+}
+
+static void user_surface_set_pixel(user_window_slot_t* slot, int32_t x,
+                                   int32_t y, uint32_t color) {
+    if (!slot || x < 0 || y < 0 || x >= slot->window.w || y >= slot->window.h)
+        return;
+    uint32_t* pixel = user_surface_pixel(slot, (uint32_t)x, (uint32_t)y);
+    if (pixel) *pixel = color;
+}
+
+static void user_surface_fill(user_window_slot_t* slot, int32_t x, int32_t y,
+                              int32_t width, int32_t height, uint32_t color) {
+    if (!slot || width <= 0 || height <= 0) return;
+    if (x < 0) {
+        if (x <= -width) return;
+        width += x;
+        x = 0;
+    }
+    if (y < 18) {
+        if (y <= 18 - height) return;
+        height -= 18 - y;
+        y = 18;
+    }
+    if (x >= slot->window.w || y >= slot->window.h) return;
+    if (width > slot->window.w - x) width = slot->window.w - x;
+    if (height > slot->window.h - y) height = slot->window.h - y;
+    for (int32_t py = 0; py < height; py++)
+        for (int32_t px = 0; px < width; px++)
+            user_surface_set_pixel(slot, x + px, y + py, color);
+}
+
+static void user_surface_text(user_window_slot_t* slot, int32_t x, int32_t y,
+                              const char* text, uint32_t color,
+                              uint32_t max_chars) {
+    if (!slot || !text || x < 0 || y < 18 || x >= slot->window.w ||
+        y > slot->window.h - 8) return;
+    for (uint32_t i = 0; i < max_chars && text[i]; i++) {
+        uint8_t ch = (uint8_t)text[i];
+        if (ch >= 128) ch = '?';
+        for (int32_t row = 0; row < 8; row++) {
+            uint8_t bits = font_8x8[ch][row];
+            for (int32_t col = 0; col < 8; col++) {
+                if (bits & (0x80u >> col))
+                    user_surface_set_pixel(slot, x + (int32_t)i * 8 + col,
+                                           y + row, color);
+            }
+        }
+    }
+}
+
+static void user_surface_composite(user_window_slot_t* slot) {
+    if (!slot) return;
+    Window* window = &slot->window;
+    for (int32_t y = 18; y < window->h; y++) {
+        for (int32_t x = 0; x < window->w; x++) {
+            uint32_t* pixel = user_surface_pixel(slot, (uint32_t)x, (uint32_t)y);
+            if (pixel) display_put_pixel(window->x + x, window->y + y, *pixel);
+        }
+    }
+}
+
+static void user_surface_release(user_window_slot_t* slot) {
+    if (!slot) return;
+    for (uint32_t i = 0; i < slot->surface_page_count; i++)
+        paging_frame_free(slot->surface_frames[i]);
+    slot->surface_page_count = 0;
+}
 
 static void request_redraw(void) {
     redraw_pending = 1;
@@ -84,7 +224,7 @@ void wm_initialize(os_api_t* api, void (*invalidate_callback)(void)) {
     invalidate = invalidate_callback;
 }
 
-static void draw_window_frame(Window* window) {
+static void draw_window_frame(Window* window, uint8_t queue_redraw) {
     if (!wm_api || !window || !window->visible) return;
     wm_api->graphics.fill_rect(window->x, window->y, window->w, window->h, COLOR_WIN_BG);
     wm_api->graphics.fill_rect(window->x + 2, window->y + 2, window->w - 4, 15,
@@ -100,14 +240,19 @@ static void draw_window_frame(Window* window) {
     wm_api->graphics.fill_rect(window->x, window->y, 1, window->h, COLOR_WHITE);
     wm_api->graphics.fill_rect(window->x, window->y + window->h - 1, window->w, 1, COLOR_DARK_GRAY);
     wm_api->graphics.fill_rect(window->x + window->w - 1, window->y, 1, window->h, COLOR_DARK_GRAY);
-    if (window->draw_content) window->draw_content(window);
+    user_window_slot_t* user_slot = user_slot_for_window(window);
+    if (user_slot) {
+        user_surface_composite(user_slot);
+        if (queue_redraw)
+            user_window_enqueue_simple(user_slot, USER_WINDOW_EVENT_REDRAW);
+    } else if (window->draw_content) window->draw_content(window);
 }
 
 void wm_draw_windows(void) {
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (!windows[i]) continue;
         uint32_t previous = window_context_enter(i);
-        draw_window_frame(windows[i]);
+        draw_window_frame(windows[i], 1);
         window_context_leave(previous);
     }
 }
@@ -214,6 +359,207 @@ int wm_register_window(Window* window) {
     return -1;
 }
 
+int32_t wm_user_window_create(const user_window_desc_t* description,
+                              uint32_t owner_directory) {
+    if (!description || !owner_directory || !description->title[0] ||
+        description->width < 80 || description->height < 50 ||
+        description->width > SCREEN_WIDTH || description->height > WM_TASKBAR_Y ||
+        description->x < 0 || description->y < 0 ||
+        description->x > SCREEN_WIDTH - description->width ||
+        description->y > WM_TASKBAR_Y - description->height)
+        return -1;
+
+    int window_index = -1;
+    int slot_index = -1;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (!windows[i] && window_index < 0) window_index = i;
+        if (!user_window_slots[i].active && slot_index < 0) slot_index = i;
+    }
+    if (window_index < 0 || slot_index < 0) return -1;
+
+    user_window_slot_t* slot = &user_window_slots[slot_index];
+    slot->active = 1;
+    slot->owner_directory = owner_directory;
+    slot->handle = next_user_window_handle++;
+    if (!slot->handle || slot->handle > 0x7FFFFFFFu) {
+        next_user_window_handle = 2;
+        slot->handle = 1;
+    }
+    uint32_t title_index = 0;
+    while (title_index < USER_WINDOW_TITLE_MAX - 1u && description->title[title_index]) {
+        slot->title[title_index] = description->title[title_index];
+        title_index++;
+    }
+    slot->title[title_index] = '\0';
+    slot->event_read = 0;
+    slot->event_write = 0;
+    slot->window.x = description->x;
+    slot->window.y = description->y;
+    slot->window.w = description->width;
+    slot->window.h = description->height;
+    slot->window.title = slot->title;
+    slot->window.visible = 1;
+    slot->window.focused = 1;
+    slot->window.draw_content = 0;
+    slot->window.handle_key = 0;
+    slot->window.handle_mouse = 0;
+    uint32_t surface_bytes = (uint32_t)slot->window.w *
+                             (uint32_t)slot->window.h * sizeof(uint32_t);
+    uint32_t page_count = (surface_bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (!page_count || page_count > USER_WINDOW_MAX_SURFACE_PAGES) {
+        slot->active = 0;
+        return -1;
+    }
+    slot->surface_page_count = 0;
+    for (uint32_t i = 0; i < page_count; i++) {
+        uint32_t frame = paging_frame_alloc();
+        if (!frame) {
+            user_surface_release(slot);
+            slot->active = 0;
+            return -1;
+        }
+        slot->surface_frames[slot->surface_page_count++] = frame;
+    }
+    user_surface_fill(slot, 0, 18, slot->window.w, slot->window.h - 18,
+                      COLOR_WIN_BG);
+
+    windows[window_index] = &slot->window;
+    window_directories[window_index] = owner_directory;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (i == window_index || !windows[i]) continue;
+        uint32_t previous = window_context_enter(i);
+        windows[i]->focused = 0;
+        window_context_leave(previous);
+    }
+    app_loader_window_attached(owner_directory);
+    wm_bring_to_front_index(window_index);
+    user_window_enqueue_simple(slot, USER_WINDOW_EVENT_REDRAW);
+    request_redraw();
+    return (int32_t)slot->handle;
+}
+
+int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
+                            const user_window_draw_t* drawing,
+                            const char* text) {
+    user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
+    if (!slot || !drawing || !wm_api) return -1;
+    Window* window = &slot->window;
+
+    if (drawing->operation == USER_WINDOW_DRAW_FILL) {
+        user_surface_fill(slot, drawing->x, drawing->y, drawing->width,
+                          drawing->height, drawing->color);
+        return 0;
+    }
+
+    if (drawing->operation == USER_WINDOW_DRAW_BUTTON) {
+        if (drawing->x < 0 || drawing->y < 18 || drawing->width <= 0 ||
+            drawing->height <= 0 || drawing->x > window->w - drawing->width ||
+            drawing->y > window->h - drawing->height) return -1;
+        uint32_t max_chars = drawing->width > 12
+            ? (uint32_t)(drawing->width - 12) / 8u : 0;
+        if (max_chars > USER_WINDOW_TEXT_MAX - 1u)
+            max_chars = USER_WINDOW_TEXT_MAX - 1u;
+        uint32_t background = drawing->color;
+        uint32_t top_left = drawing->pressed ? COLOR_DARK_GRAY : COLOR_WHITE;
+        uint32_t bottom_right = drawing->pressed ? COLOR_WHITE : COLOR_DARK_GRAY;
+        user_surface_fill(slot, drawing->x, drawing->y, drawing->width,
+                          drawing->height, background);
+        user_surface_fill(slot, drawing->x, drawing->y, drawing->width, 1, top_left);
+        user_surface_fill(slot, drawing->x, drawing->y, 1, drawing->height, top_left);
+        user_surface_fill(slot, drawing->x, drawing->y + drawing->height - 1,
+                          drawing->width, 1, bottom_right);
+        user_surface_fill(slot, drawing->x + drawing->width - 1, drawing->y,
+                          1, drawing->height, bottom_right);
+        user_surface_text(slot, drawing->x + 6, drawing->y + drawing->height / 2 - 4,
+                          text, COLOR_BLACK, max_chars);
+        return 0;
+    }
+
+    if (drawing->operation == USER_WINDOW_DRAW_TEXT) {
+        if (!text || drawing->x < 0 || drawing->y < 18 ||
+            drawing->x >= window->w || drawing->y > window->h - 8) return -1;
+        uint32_t max_chars = (uint32_t)(window->w - drawing->x) / 8u;
+        if (max_chars > USER_WINDOW_TEXT_MAX - 1u)
+            max_chars = USER_WINDOW_TEXT_MAX - 1u;
+        uint32_t length = 0;
+        while (length < max_chars && text[length]) {
+            length++;
+        }
+        user_surface_text(slot, drawing->x, drawing->y, text, drawing->color,
+                          length);
+        return 0;
+    }
+    return -1;
+}
+
+int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
+                            user_window_event_t* event) {
+    user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
+    if (!slot || !event) return -1;
+    if (slot->event_read == slot->event_write) {
+        event->type = USER_WINDOW_EVENT_NONE;
+        return 0;
+    }
+    *event = slot->events[slot->event_read];
+    slot->event_read = (uint8_t)((slot->event_read + 1u) % USER_WINDOW_EVENT_CAPACITY);
+    return 1;
+}
+
+int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory) {
+    user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
+    if (!slot || !wm_api || !wm_api->graphics.blit_rect) return -1;
+    int target_index = -1;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++)
+        if (windows[i] == &slot->window) target_index = i;
+    if (target_index < 0) return -1;
+    for (int i = target_index; i < WM_MAX_WINDOWS; i++) {
+        if (!windows[i] || !windows[i]->visible) continue;
+        uint32_t previous = window_context_enter(i);
+        draw_window_frame(windows[i], 0);
+        window_context_leave(previous);
+    }
+    display_blit_rect(slot->window.x, slot->window.y,
+                      slot->window.w, slot->window.h);
+    return 0;
+}
+
+static void user_window_remove_slot(user_window_slot_t* slot) {
+    if (!slot) return;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (windows[i] != &slot->window) continue;
+        for (int j = i; j < WM_MAX_WINDOWS - 1; j++) {
+            windows[j] = windows[j + 1];
+            window_directories[j] = window_directories[j + 1];
+        }
+        windows[WM_MAX_WINDOWS - 1] = 0;
+        window_directories[WM_MAX_WINDOWS - 1] = 0;
+        break;
+    }
+    uint32_t owner_directory = slot->owner_directory;
+    user_surface_release(slot);
+    slot->active = 0;
+    slot->owner_directory = 0;
+    slot->handle = 0;
+    app_loader_window_detached(owner_directory);
+    request_redraw();
+}
+
+int32_t wm_user_window_close(uint32_t handle, uint32_t owner_directory) {
+    user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
+    if (!slot) return -1;
+    user_window_remove_slot(slot);
+    return 0;
+}
+
+void wm_user_close_address_space(uint32_t owner_directory) {
+    if (!owner_directory) return;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (user_window_slots[i].active &&
+            user_window_slots[i].owner_directory == owner_directory)
+            user_window_remove_slot(&user_window_slots[i]);
+    }
+}
+
 void wm_unregister_window(Window* window) {
     if (!window) return;
     uint32_t owner_directory = paging_current_directory();
@@ -276,6 +622,8 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 if (windows[i]->y > WM_TASKBAR_Y - 24)
                     windows[i]->y = WM_TASKBAR_Y - 24;
                 window_context_leave(previous);
+                user_window_slot_t* user_slot = user_slot_for_window(dragging_window);
+                if (user_slot) user_window_enqueue_simple(user_slot, USER_WINDOW_EVENT_REDRAW);
                 request_redraw();
                 break;
             }
@@ -328,7 +676,13 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     mouse_y >= close_y && mouse_y <= close_y + 13) {
                     uint32_t owner_directory = window_directories[i];
                     if (owner_directory) {
-                        wm_unregister_window(window);
+                        user_window_slot_t* user_slot = user_slot_for_window(window);
+                        if (user_slot) {
+                            user_window_enqueue_simple(user_slot, USER_WINDOW_EVENT_CLOSE);
+                            window->visible = 0;
+                        } else {
+                            wm_unregister_window(window);
+                        }
                         dragging_window = 0;
                         dragging_directory = 0;
                     } else {
@@ -342,10 +696,12 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 if (mouse_x >= window->x && mouse_x <= window->x + window->w &&
                     mouse_y >= window->y && mouse_y <= window->y + 18) {
                     uint32_t owner_directory = window_directories[i];
+                    uint32_t caller_directory = previous;
                     window_context_leave(previous);
-                    if (owner_directory) paging_activate_directory(owner_directory);
+                    paging_activate_directory(owner_directory ? owner_directory
+                                                               : paging_kernel_directory());
                     wm_bring_to_front(window);
-                    if (owner_directory) paging_activate_kernel();
+                    paging_activate_directory(caller_directory);
                     dragging_window = window;
                     dragging_directory = owner_directory;
                     request_redraw();
@@ -355,17 +711,29 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 if (mouse_x >= window->x && mouse_x <= window->x + window->w &&
                     mouse_y >= window->y && mouse_y <= window->y + window->h) {
                     uint32_t owner_directory = window_directories[i];
+                    uint32_t caller_directory = previous;
                     window_context_leave(previous);
-                    if (owner_directory) paging_activate_directory(owner_directory);
+                    paging_activate_directory(owner_directory ? owner_directory
+                                                               : paging_kernel_directory());
                     wm_bring_to_front(window);
-                    if (owner_directory) paging_activate_kernel();
+                    paging_activate_directory(caller_directory);
                     request_redraw();
                     handled = 1;
                     previous = paging_current_directory();
-                    if (owner_directory) paging_activate_directory(owner_directory);
-                    if (window->handle_mouse)
+                    paging_activate_directory(owner_directory ? owner_directory
+                                                               : paging_kernel_directory());
+                    user_window_slot_t* user_slot = user_slot_for_window(window);
+                    if (user_slot) {
+                        user_window_event_t queued = {0};
+                        queued.type = USER_WINDOW_EVENT_MOUSE;
+                        queued.x = mouse_x - window->x;
+                        queued.y = mouse_y - window->y;
+                        queued.buttons = left;
+                        user_window_enqueue(user_slot, &queued);
+                    } else if (window->handle_mouse) {
                         window->handle_mouse(window, mouse_x - window->x,
                                              mouse_y - window->y, left);
+                    }
                     window_context_leave(previous);
                     break;
                 }
@@ -394,8 +762,19 @@ static void handle_key_event(const os_input_event_t* event) {
         Window* window = windows[i];
         if (!window) continue;
         uint32_t previous = window_context_enter(i);
-        if (window->visible && window->focused && window->handle_key) {
-            window->handle_key(window, key);
+        if (window->visible && window->focused) {
+            user_window_slot_t* user_slot = user_slot_for_window(window);
+            if (user_slot) {
+                user_window_event_t queued = {0};
+                queued.type = USER_WINDOW_EVENT_KEY;
+                queued.key = (uint8_t)key;
+                user_window_enqueue(user_slot, &queued);
+            } else if (window->handle_key) {
+                window->handle_key(window, key);
+            } else {
+                window_context_leave(previous);
+                continue;
+            }
             window_context_leave(previous);
             request_redraw();
             return;

@@ -1,6 +1,7 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
+#include "../../system/user/sys_api.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -13,8 +14,72 @@
 #define BTN_H 26
 #define BTN_GAP 6
 
-static os_api_t* os = 0;
+static os_api_t user_api;
+static os_api_t* os = &user_api;
 static Window calc_window;
+static uint32_t calc_window_handle;
+static uint8_t calc_close_requested;
+
+static int user_register_window(Window* window) {
+    user_window_desc_t description = {0};
+    description.x = window->x;
+    description.y = window->y;
+    description.width = window->w;
+    description.height = window->h;
+    uint32_t i = 0;
+    while (i < USER_WINDOW_TITLE_MAX - 1u && window->title[i]) {
+        description.title[i] = window->title[i];
+        i++;
+    }
+    description.title[i] = '\0';
+    int32_t handle = sys_window_create(&description);
+    if (handle < 0) return -1;
+    calc_window_handle = (uint32_t)handle;
+    return 0;
+}
+
+static void user_unregister_window(Window* window) {
+    (void)window;
+    if (calc_window_handle) {
+        sys_window_close(calc_window_handle);
+        calc_window_handle = 0;
+    }
+}
+
+static int user_draw(uint32_t operation, int32_t x, int32_t y, int32_t width,
+                     int32_t height, const char* text, uint32_t color,
+                     uint8_t pressed) {
+    user_window_draw_t drawing = {0};
+    drawing.operation = operation;
+    drawing.x = x - calc_window.x;
+    drawing.y = y - calc_window.y;
+    drawing.width = width;
+    drawing.height = height;
+    drawing.text = text;
+    drawing.color = color;
+    drawing.pressed = pressed;
+    return sys_window_draw(calc_window_handle, &drawing);
+}
+
+static void user_fill_rect(int32_t x, int32_t y, int32_t width, int32_t height,
+                           uint32_t color) {
+    (void)user_draw(USER_WINDOW_DRAW_FILL, x, y, width, height, 0, color, 0);
+}
+
+static void user_draw_string(int32_t x, int32_t y, const char* text,
+                             uint32_t color) {
+    (void)user_draw(USER_WINDOW_DRAW_TEXT, x, y, 0, 0, text, color, 0);
+}
+
+static void user_draw_button(int32_t x, int32_t y, int32_t width, int32_t height,
+                             const char* label, uint8_t pressed) {
+    (void)user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height, label,
+                    COLOR_WIN_BG, pressed);
+}
+
+static void user_blit_all(void) {
+    if (calc_window_handle) (void)sys_window_present(calc_window_handle);
+}
 
 static char display_buf[24] = "0";
 static int  display_len = 1;
@@ -186,7 +251,8 @@ void calc_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
 
 void calc_handle_key(Window* win, char c) {
     if ((uint8_t)c == 0x01) {
-        os->windows.unregister_window(win);
+        (void)win;
+        calc_close_requested = 1;
         return;
     }
 
@@ -197,9 +263,16 @@ void calc_handle_key(Window* win, char c) {
     }
 }
 
-int main_app(os_api_t* api) {
-    if (!api) return -1;
-    os = api;
+void user_main(const char* arguments) {
+    (void)arguments;
+    calc_window_handle = 0;
+    calc_close_requested = 0;
+    user_api.graphics.fill_rect = user_fill_rect;
+    user_api.graphics.draw_string = user_draw_string;
+    user_api.graphics.draw_button = user_draw_button;
+    user_api.graphics.blit_all = user_blit_all;
+    user_api.windows.register_window = user_register_window;
+    user_api.windows.unregister_window = user_unregister_window;
 
     display_buf[0] = '0';
     display_buf[1] = '\0';
@@ -219,7 +292,35 @@ int main_app(os_api_t* api) {
     calc_window.handle_key = calc_handle_key;
     calc_window.handle_mouse = calc_handle_mouse;
 
-    os->windows.register_window(&calc_window);
-    os->shell.term_print("Calculator is running.\n");
-    return 0;
+    if (os->windows.register_window(&calc_window) < 0) {
+        static const char error[] = "calc: unable to create window\n";
+        sys_write(error, sizeof(error) - 1u);
+        return;
+    }
+
+    calc_draw_content(&calc_window);
+    os->graphics.blit_all();
+    while (!calc_close_requested) {
+        user_window_event_t event;
+        sys_yield();
+        while (sys_window_poll(calc_window_handle, &event) == 1) {
+            if (event.type == USER_WINDOW_EVENT_CLOSE) {
+                calc_close_requested = 1;
+                break;
+            }
+            if (event.type == USER_WINDOW_EVENT_REDRAW) {
+                calc_window.x = event.x;
+                calc_window.y = event.y;
+                calc_draw_content(&calc_window);
+            } else if (event.type == USER_WINDOW_EVENT_KEY) {
+                calc_handle_key(&calc_window, (char)event.key);
+            } else if (event.type == USER_WINDOW_EVENT_MOUSE) {
+                calc_handle_mouse(&calc_window, event.x, event.y,
+                                  (uint8_t)event.buttons);
+            }
+            if (calc_close_requested) break;
+            os->graphics.blit_all();
+        }
+    }
+    os->windows.unregister_window(&calc_window);
 }

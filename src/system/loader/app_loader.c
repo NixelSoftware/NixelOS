@@ -4,6 +4,7 @@
 #include "../../kernel/drivers/serial.h"
 #include "../../kernel/arch_i386.h"
 #include "../../kernel/syscall.h"
+#include "../graphics/wm/wm.h"
 
 #define APP_LOAD_LIMIT   1048576u
 #define APP_BSS_LIMIT    0x005F0000u
@@ -161,6 +162,7 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
         uint32_t user_stack = APP_BSS_LIMIT - 32u;
         *(uint32_t*)user_stack = user_arguments;
         arch_i386_enter_user((uint32_t)entry, user_stack);
+        wm_user_close_address_space((uint32_t)instance->address_space.directory);
     } else {
         entry(api);
     }

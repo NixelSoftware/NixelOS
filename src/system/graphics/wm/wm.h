@@ -2,6 +2,7 @@
 #define SYSTEM_GRAPHICS_WM_H
 
 #include "../../../kernel/os_api.h"
+#include "../../user/window_api.h"
 
 #define WM_MAX_WINDOWS 6
 #define WM_TASKBAR_Y 568
@@ -17,5 +18,15 @@ void wm_draw_taskbar(uint8_t start_menu_open);
 void wm_poll(void);
 uint8_t wm_start_menu_is_open(void);
 void wm_render_screen(void);
+int32_t wm_user_window_create(const user_window_desc_t* description,
+                              uint32_t owner_directory);
+int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
+                            const user_window_draw_t* drawing,
+                            const char* text);
+int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
+                            user_window_event_t* event);
+int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory);
+int32_t wm_user_window_close(uint32_t handle, uint32_t owner_directory);
+void wm_user_close_address_space(uint32_t owner_directory);
 
 #endif
