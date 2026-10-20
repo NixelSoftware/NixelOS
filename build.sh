@@ -95,13 +95,12 @@ done
 mkdir -p src/apps/browser
 nasm -f elf32 src/apps/browser/entry.asm -o src/apps/browser/entry.o
 "${cc[@]}" -c src/apps/browser/main.c -o src/apps/browser/main.o
-"${cc[@]}" -c src/apps/browser/png.c -o src/apps/browser/png.o
 ld -m elf_i386 --omagic -Ttext 0xC00000 -e _start \
-    src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/png.o \
+    src/apps/browser/entry.o src/apps/browser/main.o \
     -o src/apps/browser/browser.tmp
 objcopy -O binary src/apps/browser/browser.tmp browser.bin
 rm -f src/apps/browser/browser.tmp src/apps/browser/main.o \
-    src/apps/browser/entry.o src/apps/browser/png.o
+    src/apps/browser/entry.o
 
 ld -m elf_i386 -Ttext 0x100000 \
     src/kernel/kernel_entry.o \

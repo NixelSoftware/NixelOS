@@ -13,7 +13,8 @@ typedef struct {
 typedef enum {
     USER_WINDOW_DRAW_FILL = 1,
     USER_WINDOW_DRAW_TEXT = 2,
-    USER_WINDOW_DRAW_BUTTON = 3
+    USER_WINDOW_DRAW_BUTTON = 3,
+    USER_WINDOW_DRAW_IMAGE = 4
 } user_window_draw_op_t;
 
 typedef struct {
@@ -22,6 +23,8 @@ typedef struct {
     uint32_t color;
     uint8_t pressed;
     const char* text;
+    const uint8_t* data;
+    uint32_t data_length;
 } user_window_draw_t;
 
 typedef enum {

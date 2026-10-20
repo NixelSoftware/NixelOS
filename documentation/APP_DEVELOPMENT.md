@@ -24,10 +24,11 @@ Keep the header and entry stub consistent with the app type and the build setup.
 ## Ring-3 windows
 
 Ring-3 windows are registered with `sys_window_create`, which takes a
-`user_window_desc_t`. Apps draw using `sys_window_draw` and present using
-`sys_window_present`. `sys_window_poll` returns queued key, mouse, redraw, and
-close events; call `sys_yield` between polls so the kernel can run the window
-manager. The window manager does not invoke user callbacks from ring 0. See
+`user_window_desc_t`. Apps draw using `sys_window_draw` for fills, text, buttons,
+and PNG images, then present using `sys_window_present`. `sys_window_poll`
+returns queued key, mouse, redraw, and close events. Call `sys_yield` between
+polls so the kernel can run the window manager. It does not invoke user
+callbacks from ring 0. See
 `src/apps/calc` for a complete example using this interface.
 
 ## Console apps

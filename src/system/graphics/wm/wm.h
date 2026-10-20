@@ -22,7 +22,7 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
                               uint32_t owner_directory);
 int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
                             const user_window_draw_t* drawing,
-                            const char* text);
+                            const char* text, const uint8_t* image_data);
 int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
                             user_window_event_t* event);
 int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory);

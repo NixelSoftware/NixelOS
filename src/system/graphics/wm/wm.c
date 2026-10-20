@@ -440,7 +440,7 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
 
 int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
                             const user_window_draw_t* drawing,
-                            const char* text) {
+                            const char* text, const uint8_t* image_data) {
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !drawing || !wm_api) return -1;
     Window* window = &slot->window;
@@ -487,6 +487,25 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
         }
         user_surface_text(slot, drawing->x, drawing->y, text, drawing->color,
                           length);
+        return 0;
+    }
+
+    if (drawing->operation == USER_WINDOW_DRAW_IMAGE) {
+        static uint32_t decoded[PNG_TARGET_W * PNG_TARGET_H];
+        if (!image_data || !drawing->data_length ||
+            drawing->width <= 0 || drawing->height <= 0 ||
+            drawing->width > 512 || drawing->height > 512 ||
+            !wm_api->graphics.png_decode_and_resize ||
+            !wm_api->graphics.png_decode_and_resize(
+                image_data, drawing->data_length, decoded)) return -1;
+        for (int32_t y = 0; y < drawing->height; y++) {
+            int32_t source_y = (y * PNG_TARGET_H) / drawing->height;
+            for (int32_t x = 0; x < drawing->width; x++) {
+                int32_t source_x = (x * PNG_TARGET_W) / drawing->width;
+                user_surface_set_pixel(slot, drawing->x + x, drawing->y + y,
+                    decoded[source_y * PNG_TARGET_W + source_x]);
+            }
+        }
         return 0;
     }
     return -1;

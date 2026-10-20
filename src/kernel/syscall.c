@@ -22,6 +22,7 @@
 #define SYS_FS_WRITE_MAX 65536u
 #define SYS_TCP_SEND_MAX TCP_MAX_PAYLOAD
 #define SYS_TCP_READ_MAX 4096u
+#define SYS_WINDOW_IMAGE_MAX 32768u
 #define USER_PING_REQUEST_MAX 16u
 #define USER_PING_TIMEOUT_TICKS 200u
 #define USER_PING_STALL_POLLS 100000u
@@ -459,6 +460,7 @@ void syscall_dispatch(registers_t* regs) {
             user_window_draw_t drawing;
             char text[64];
             const char* text_pointer = 0;
+            const uint8_t* image_pointer = 0;
             uint32_t address = regs->ecx;
             if (!user_readable(address, sizeof(drawing))) {
                 regs->eax = (uint32_t)-1;
@@ -483,9 +485,18 @@ void syscall_dispatch(registers_t* regs) {
                     return;
                 }
                 text_pointer = text;
+            } else if (drawing.operation == USER_WINDOW_DRAW_IMAGE) {
+                uint32_t image_address = (uint32_t)drawing.data;
+                if (!drawing.data_length || drawing.data_length > SYS_WINDOW_IMAGE_MAX ||
+                    !user_readable(image_address, drawing.data_length)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                image_pointer = (const uint8_t*)image_address;
             }
             regs->eax = (uint32_t)wm_user_window_draw(
-                regs->ebx, paging_current_directory(), &drawing, text_pointer);
+                regs->ebx, paging_current_directory(), &drawing, text_pointer,
+                image_pointer);
             return;
         }
         case SYS_WINDOW_POLL: {

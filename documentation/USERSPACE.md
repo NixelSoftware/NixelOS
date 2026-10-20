@@ -2,7 +2,8 @@
 
 The kernel now has a first i386 ring-3 path. The existing application loader
 still executes legacy applications in ring 0 and passes them `os_api_t`; only
-apps marked as user apps enter ring 3.
+apps marked as user apps enter ring 3. Remaining legacy GUI and console apps
+use the ring-0 `os_api_t` callback interface until they are migrated.
 
 The first system-call ABI lives in `src/system/user/sys_api.h`. Calls use
 `int 0x80`, with the call number in EAX, arguments in EBX/ECX/EDX, and the
@@ -60,8 +61,9 @@ but does not provide simultaneous user processes; that needs scheduler/process
 work to follow.
 `calc` is the sixth ring-3 app and retains its calculator window. Ring-3 window
 apps create kernel-managed frames, draw into a private window surface through
-validated fill, text, and button syscalls, and receive queued key, mouse, redraw,
-and close events. The WM composites those surfaces in window z-order. Apps call
+validated fill, text, button, and PNG image syscalls, and receive queued key,
+mouse, redraw, and close events. The WM composites those surfaces in window
+z-order. Apps call
 `sys_yield` to let the window manager process input, then poll their event queue.
 The window manager never invokes a user callback while running in ring 0.
 `mines` is the seventh ring-3 app and uses the same window and event interface
@@ -77,6 +79,12 @@ address space, queue received bytes for polling, and are closed when the app exi
 `curl` is the twelfth ring-3 app and uses the same socket API for HTTP requests,
 printing responses or saving response bodies through `sys_fs_write`. It uses
 `sys_dns_start` and `sys_dns_poll` to keep DNS waits cooperative.
+`browser` is the thirteenth ring-3 app. It creates its own WM surface, receives
+keyboard and mouse events through the user window API, and fetches HTTP pages
+with the owner-scoped DNS and TCP syscalls. It opens the original
+`home.menifeetech.pp.ua` homepage at startup and retains the original HTML
+layout, links, form controls, and PNG image handling; it supports HTTP on port
+80. PNGs are decoded into the app-owned window surface by the WM.
 The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT
 vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.

@@ -1,6 +1,7 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
+#include "../../system/user/sys_api.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -11,13 +12,7 @@
 #define COLOR_H1          0x00800000
 #define COLOR_H2          0x00000080
 
-#define TCP_PROTOCOL      6
 #define TCP_PORT_HTTP     80
-#define TCP_FIN           0x01
-#define TCP_SYN           0x02
-#define TCP_RST           0x04
-#define TCP_PSH           0x08
-#define TCP_ACK           0x10
 
 #define MAX_URL_LEN       128
 #define MAX_HTML_BUF      16384
@@ -29,13 +24,6 @@
 #define MAX_LINKS         32
 #define MAX_CONTROLS      16
 #define CONTROL_VALUE_LEN 48
-
-typedef enum {
-    TCP_ST_CLOSED,
-    TCP_ST_SYN_SENT,
-    TCP_ST_ESTABLISHED,
-    TCP_ST_FIN_WAIT
-} tcp_state_t;
 
 typedef struct {
     char    text[LINE_MAX_CHARS];
@@ -51,8 +39,81 @@ typedef struct { char name[32], value[CONTROL_VALUE_LEN]; int line; uint8_t type
 enum { CONTROL_TEXT, CONTROL_PASSWORD, CONTROL_CHECKBOX, CONTROL_RADIO, CONTROL_SUBMIT, CONTROL_BUTTON };
 
 static os_api_t* os = 0;
+static os_api_t user_api;
 static Window browser_win;
+static uint32_t user_window_handle;
+static uint8_t user_window_closed;
 
+static void browser_draw(Window* win);
+
+static int browser_user_draw(uint32_t operation, int32_t x, int32_t y,
+                             int32_t width, int32_t height,
+                             const char* text, uint32_t color,
+                             uint8_t pressed, const uint8_t* data,
+                             uint32_t data_length) {
+    user_window_draw_t drawing = {0};
+    drawing.operation = operation;
+    drawing.x = x - browser_win.x;
+    drawing.y = y - browser_win.y;
+    drawing.width = width;
+    drawing.height = height;
+    drawing.text = text;
+    drawing.color = color;
+    drawing.pressed = pressed;
+    drawing.data = data;
+    drawing.data_length = data_length;
+    return sys_window_draw(user_window_handle, &drawing);
+}
+
+static void browser_user_fill_rect(int32_t x, int32_t y, int32_t width,
+                                   int32_t height, uint32_t color) {
+    (void)browser_user_draw(USER_WINDOW_DRAW_FILL, x, y, width, height,
+                            0, color, 0, 0, 0);
+}
+
+static void browser_user_draw_string(int32_t x, int32_t y, const char* text,
+                                     uint32_t color) {
+    (void)browser_user_draw(USER_WINDOW_DRAW_TEXT, x, y, 0, 0,
+                            text, color, 0, 0, 0);
+}
+
+static void browser_user_draw_button(int32_t x, int32_t y, int32_t width,
+                                     int32_t height, const char* label,
+                                     uint8_t pressed) {
+    (void)browser_user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height,
+                            label, COLOR_WIN_BG, pressed, 0, 0);
+}
+
+static void browser_user_png_render(const uint8_t* data, uint32_t length,
+                                    int32_t x, int32_t y, int32_t width,
+                                    int32_t height) {
+    (void)browser_user_draw(USER_WINDOW_DRAW_IMAGE, x, y, width, height,
+                            0, 0, 0, data, length);
+}
+
+static void browser_user_present(void) {
+    if (user_window_handle) (void)sys_window_present(user_window_handle);
+}
+
+static void browser_user_render_screen(void) {
+    browser_draw(&browser_win);
+    browser_user_present();
+}
+
+static void browser_user_blit_rect(int32_t x, int32_t y, int32_t width,
+                                   int32_t height) {
+    (void)x; (void)y; (void)width; (void)height;
+    browser_user_present();
+}
+
+static void browser_user_unregister(Window* window) {
+    (void)window;
+    if (user_window_handle) {
+        (void)sys_window_close(user_window_handle);
+        user_window_handle = 0;
+    }
+    user_window_closed = 1;
+}
 
 //static char url_input[MAX_URL_LEN] = "connectiontest.menifeetech.pp.ua";
 static char url_input[MAX_URL_LEN] = "home.menifeetech.pp.ua";
@@ -61,21 +122,11 @@ static char status_text[64] = "Ready";
 static int  scroll_y = 0;
 
 
-static volatile tcp_state_t net_state = TCP_ST_CLOSED;
-static uint32_t local_seq = 0x20003000;
-static uint32_t remote_seq = 0;
-static uint16_t client_port = 50100;
-static uint32_t target_ip = 0;
-
-
 static uint8_t  http_raw_buf[MAX_HTML_BUF];
 static uint32_t http_raw_len = 0;
-static volatile uint8_t http_done = 0;
 
 static uint8_t  img_raw_buf[32768];
 static uint32_t img_raw_len = 0;
-static volatile uint8_t img_fetch_active = 0;
-static volatile uint8_t img_done = 0;
 
 
 static render_line_t lines[MAX_RENDER_LINES];
@@ -98,6 +149,147 @@ static char request_body[512];
 static int request_body_len = 0;
 
 static int copy_string(char* dst, int max_len, const char* src);
+
+static int request_append(char* output, uint32_t capacity, uint32_t* length,
+                          const char* text) {
+    while (*text) {
+        if (*length + 1u >= capacity) return 0;
+        output[(*length)++] = *text++;
+    }
+    return 1;
+}
+
+static void request_append_number(char* output, uint32_t capacity,
+                                  uint32_t* length, uint32_t value) {
+    char digits[11];
+    uint32_t count = 0;
+    do { digits[count++] = (char)('0' + value % 10u); value /= 10u; }
+    while (value && count < sizeof(digits));
+    while (count && *length + 1u < capacity) output[(*length)++] = digits[--count];
+}
+
+static int tcp_http_request(const char* host, const char* path,
+                            const char* accept, uint8_t post,
+                            const char* body, uint32_t body_length,
+                            uint8_t* output, uint32_t capacity,
+                            uint32_t* output_length) {
+    int32_t resolver = sys_dns_start(host);
+    if (resolver < 0) return 0;
+    uint32_t address = 0;
+    uint32_t start_tick = sys_get_ticks();
+    uint32_t polls = 0;
+    for (;;) {
+        sys_yield();
+        int32_t result = sys_dns_poll((uint32_t)resolver, &address);
+        if (result == 1) break;
+        if (result != 0 || (uint32_t)(sys_get_ticks() - start_tick) > 800u ||
+            ++polls > 1000000u) return 0;
+    }
+
+    int32_t socket = sys_tcp_connect(address, TCP_PORT_HTTP);
+    if (socket < 0) return 0;
+    start_tick = sys_get_ticks();
+    polls = 0;
+    int32_t state;
+    do {
+        sys_yield();
+        state = sys_tcp_state((uint32_t)socket);
+        if (state < 0 || state == USER_TCP_CLOSED ||
+            (uint32_t)(sys_get_ticks() - start_tick) > 800u ||
+            ++polls > 1000000u) {
+            sys_tcp_close((uint32_t)socket);
+            return 0;
+        }
+    } while (state != USER_TCP_ESTABLISHED);
+
+    char request[1024];
+    uint32_t request_length = 0;
+    if (!request_append(request, sizeof(request), &request_length,
+                        post ? "POST " : "GET ") ||
+        !request_append(request, sizeof(request), &request_length, path) ||
+        !request_append(request, sizeof(request), &request_length,
+                        " HTTP/1.1\r\nHost: ") ||
+        !request_append(request, sizeof(request), &request_length, host) ||
+        !request_append(request, sizeof(request), &request_length,
+                        "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: ") ||
+        !request_append(request, sizeof(request), &request_length, accept)) {
+        sys_tcp_close((uint32_t)socket);
+        return 0;
+    }
+    if (post) {
+        if (!request_append(request, sizeof(request), &request_length,
+                "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ")) {
+            sys_tcp_close((uint32_t)socket);
+            return 0;
+        }
+        request_append_number(request, sizeof(request), &request_length, body_length);
+    }
+    if (!request_append(request, sizeof(request), &request_length,
+                        "\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n")) {
+        sys_tcp_close((uint32_t)socket);
+        return 0;
+    }
+    if (post) {
+        if (body_length > sizeof(request) - request_length) {
+            sys_tcp_close((uint32_t)socket);
+            return 0;
+        }
+        for (uint32_t i = 0; i < body_length; i++) request[request_length++] = body[i];
+    }
+    if (sys_tcp_send((uint32_t)socket, request, request_length) != 1) {
+        sys_tcp_close((uint32_t)socket);
+        return 0;
+    }
+
+    uint32_t total = 0;
+    start_tick = sys_get_ticks();
+    polls = 0;
+    for (;;) {
+        uint8_t chunk[2048];
+        sys_yield();
+        int32_t received = sys_tcp_read((uint32_t)socket, chunk, sizeof(chunk));
+        if (received < 0 || (uint32_t)received > capacity - total) {
+            sys_tcp_close((uint32_t)socket);
+            return 0;
+        }
+        for (int32_t i = 0; i < received; i++) output[total++] = chunk[i];
+        state = sys_tcp_state((uint32_t)socket);
+        if ((state == USER_TCP_CLOSE_WAIT || state == USER_TCP_CLOSED) && !received) break;
+        if (state < 0 || (uint32_t)(sys_get_ticks() - start_tick) > 800u ||
+            ++polls > 1000000u) {
+            sys_tcp_close((uint32_t)socket);
+            return 0;
+        }
+    }
+    sys_tcp_close((uint32_t)socket);
+    *output_length = total;
+    return total != 0;
+}
+
+static int fetch_image_resource(const char* host, const char* path,
+                                uint8_t* out_buf, uint32_t max_len,
+                                uint32_t* out_len) {
+    img_raw_len = 0;
+    if (!tcp_http_request(host, path,
+            "image/png, image/*;q=0.8, */*;q=0.1", 0, 0, 0,
+            img_raw_buf, sizeof(img_raw_buf), &img_raw_len)) return 0;
+    uint32_t body_start = 0;
+    for (uint32_t i = 0; i + 3u < img_raw_len; i++) {
+        if (img_raw_buf[i] == '\r' && img_raw_buf[i + 1u] == '\n' &&
+            img_raw_buf[i + 2u] == '\r' && img_raw_buf[i + 3u] == '\n') {
+            body_start = i + 4u;
+            break;
+        }
+    }
+    if (!body_start) return 0;
+    uint32_t payload_size = img_raw_len - body_start;
+    if (payload_size > max_len) payload_size = max_len;
+    for (uint32_t i = 0; i < payload_size; i++) out_buf[i] = img_raw_buf[body_start + i];
+    *out_len = payload_size;
+    return payload_size != 0;
+}
+
+
 
 static int ascii_equal(char a, char b) {
     if (a >= 'A' && a <= 'Z') a += 32;
@@ -130,193 +322,7 @@ static void set_status(const char* msg) {
     }
 }
 
-static uint16_t calc_checksum(const void* data, uint32_t len) {
-    const uint8_t* bytes = (const uint8_t*)data;
-    uint32_t sum = 0;
-    while (len >= 2) {
-        sum += ((uint16_t)bytes[0] << 8) | bytes[1];
-        bytes += 2;
-        len -= 2;
-    }
-    if (len > 0) sum += (uint16_t)bytes[0] << 8;
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return (uint16_t)(~sum);
-}
 
-static uint8_t send_tcp_seg(uint8_t flags, const uint8_t* payload, uint16_t payload_len) {
-    uint8_t packet[512];
-    uint8_t pseudo[12 + 20 + 384];
-    uint16_t tcp_len = 20 + payload_len;
-
-    packet[0] = (uint8_t)(client_port >> 8);
-    packet[1] = (uint8_t)(client_port & 0xFF);
-    packet[2] = 0x00;
-    packet[3] = (uint8_t)TCP_PORT_HTTP;
-    packet[4] = (uint8_t)(local_seq >> 24);
-    packet[5] = (uint8_t)(local_seq >> 16);
-    packet[6] = (uint8_t)(local_seq >> 8);
-    packet[7] = (uint8_t)(local_seq & 0xFF);
-    packet[8]  = (uint8_t)(remote_seq >> 24);
-    packet[9]  = (uint8_t)(remote_seq >> 16);
-    packet[10] = (uint8_t)(remote_seq >> 8);
-    packet[11] = (uint8_t)(remote_seq & 0xFF);
-    packet[12] = 0x50;
-    packet[13] = flags;
-    packet[14] = 0x20;
-    packet[15] = 0x00;
-    packet[16] = 0; packet[17] = 0; packet[18] = 0; packet[19] = 0;
-
-    for (uint16_t i = 0; i < payload_len; i++) {
-        packet[20 + i] = payload[i];
-    }
-
-    uint32_t local_ip = os->network.ipv4_get_local_ip();
-    pseudo[0] = (uint8_t)(local_ip >> 24);
-    pseudo[1] = (uint8_t)(local_ip >> 16);
-    pseudo[2] = (uint8_t)(local_ip >> 8);
-    pseudo[3] = (uint8_t)(local_ip & 0xFF);
-    pseudo[4] = (uint8_t)(target_ip >> 24);
-    pseudo[5] = (uint8_t)(target_ip >> 16);
-    pseudo[6] = (uint8_t)(target_ip >> 8);
-    pseudo[7] = (uint8_t)(target_ip & 0xFF);
-    pseudo[8] = 0x00;
-    pseudo[9] = TCP_PROTOCOL;
-    pseudo[10] = (uint8_t)(tcp_len >> 8);
-    pseudo[11] = (uint8_t)(tcp_len & 0xFF);
-
-    for (uint16_t i = 0; i < tcp_len; i++) pseudo[12 + i] = packet[i];
-
-    uint16_t csum = calc_checksum(pseudo, 12 + tcp_len);
-    packet[16] = (uint8_t)(csum >> 8);
-    packet[17] = (uint8_t)(csum & 0xFF);
-
-    uint8_t ok = os->network.ipv4_send(target_ip, TCP_PROTOCOL, packet, tcp_len);
-    if (ok) {
-        if (flags & (TCP_SYN | TCP_FIN)) local_seq++;
-        else local_seq += payload_len;
-    }
-    return ok;
-}
-
-static uint8_t browser_tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t* payload, uint32_t len) {
-    (void)src_ip; (void)dst_ip;
-    if (len < 20) return 0;
-
-    uint16_t dst_port = ((uint16_t)payload[2] << 8) | payload[3];
-    if (dst_port != client_port) return 0;
-
-    uint32_t seq = ((uint32_t)payload[4] << 24) | ((uint32_t)payload[5] << 16) |
-                   ((uint32_t)payload[6] << 8)  | (uint32_t)payload[7];
-    uint8_t flags = payload[13];
-    uint16_t hlen = ((payload[12] >> 4) & 0x0F) * 4;
-    uint16_t data_len = len - hlen;
-
-    if ((flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK)) {
-        remote_seq = seq + 1;
-        net_state = TCP_ST_ESTABLISHED;
-        send_tcp_seg(TCP_ACK, 0, 0);
-        return 1;
-    }
-
-    if (data_len > 0) {
-        remote_seq = seq + data_len;
-        if (img_fetch_active) {
-            for (uint16_t i = 0; i < data_len && img_raw_len < sizeof(img_raw_buf) - 1; i++) {
-                img_raw_buf[img_raw_len++] = payload[hlen + i];
-            }
-        } else {
-            for (uint16_t i = 0; i < data_len && http_raw_len < sizeof(http_raw_buf) - 1; i++) {
-                http_raw_buf[http_raw_len++] = payload[hlen + i];
-            }
-        }
-        send_tcp_seg(TCP_ACK, 0, 0);
-        return 1;
-    }
-
-    if (flags & TCP_FIN) {
-        remote_seq = seq + 1;
-        send_tcp_seg(TCP_ACK, 0, 0);
-        net_state = TCP_ST_CLOSED;
-        if (img_fetch_active) img_done = 1;
-        else http_done = 1;
-        return 1;
-    }
-
-    return 0;
-}
-
-static int fetch_image_resource(const char* host, const char* path, uint8_t* out_buf, uint32_t max_len, uint32_t* out_len) {
-    client_port++;
-    if (client_port < 40000) client_port = 50100;
-    net_state = TCP_ST_SYN_SENT;
-    local_seq = 0x87654 + client_port;
-    img_raw_len = 0;
-    img_done = 0;
-    img_fetch_active = 1;
-
-    int connected = 0;
-    for (int attempt = 0; attempt < 3 && !connected; attempt++) {
-        send_tcp_seg(TCP_SYN, 0, 0);
-        for (uint32_t poll = 0; poll < 60000; poll++) {
-            os->network.net_poll();
-            if (net_state == TCP_ST_ESTABLISHED) {
-                connected = 1;
-                break;
-            }
-            for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
-        }
-    }
-    if (!connected) {
-        img_fetch_active = 0;
-        return 0;
-    }
-
-    char req[384];
-    int p = 0;
-    const char* r1 = "GET ";
-    while (*r1) req[p++] = *r1++;
-    int u = 0;
-    while (path[u] && p < 180) req[p++] = path[u++];
-    const char* r2 = " HTTP/1.1\r\nHost: ";
-    while (*r2) req[p++] = *r2++;
-    u = 0;
-    while (host[u] && p < 220) req[p++] = host[u++];
-    const char* r3 = "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: image/png, image/*;q=0.8, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
-    while (*r3) req[p++] = *r3++;
-    req[p] = '\0';
-
-    send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
-
-    for (uint32_t poll = 0; poll < 200000; poll++) {
-        os->network.net_poll();
-        if (img_done || (net_state == TCP_ST_CLOSED && img_raw_len > 0)) {
-            break;
-        }
-        for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
-    }
-
-    img_fetch_active = 0;
-    if (img_raw_len == 0) return 0;
-
-    uint32_t body_start = 0;
-    for (uint32_t i = 0; i + 3 < img_raw_len; i++) {
-        if (img_raw_buf[i] == '\r' && img_raw_buf[i+1] == '\n' &&
-            img_raw_buf[i+2] == '\r' && img_raw_buf[i+3] == '\n') {
-            body_start = i + 4;
-            break;
-        }
-    }
-    if (body_start == 0) return 0;
-
-    uint32_t payload_size = img_raw_len - body_start;
-    if (payload_size > max_len) payload_size = max_len;
-
-    for (uint32_t i = 0; i < payload_size; i++) {
-        out_buf[i] = img_raw_buf[body_start + i];
-    }
-    *out_len = payload_size;
-    return 1;
-}
 
 static int str_has_tag_bounded(const char* p, const char* end, const char* tag) {
     int i = 0;
@@ -798,82 +804,18 @@ static int resolve_redirect(const char* location, const char* current_host,
 }
 
 static int fetch_http_document(const char* host, const char* path) {
-    if (!os->network.dns_resolve(host, &target_ip)) return -1;
-
-    uint32_t gw = (10U << 24) | (0U << 16) | (1U << 8) | 2U;
-    os->network.icmp_request_echo(gw, 0x9999, 1, (const uint8_t*)"probe", 5);
-    for (int p = 0; p < 20000; p++) {
-        os->network.net_poll();
-        for (volatile int d = 0; d < 50; d++) __asm__ volatile ("pause");
-    }
-
-    client_port++;
-    if (client_port < 40000) client_port = 50100;
-    net_state = TCP_ST_SYN_SENT;
-    local_seq = 0x54321 + client_port;
     http_raw_len = 0;
-    http_done = 0;
-
-    int connected = 0;
-    for (int attempt = 0; attempt < 5 && !connected; attempt++) {
-        send_tcp_seg(TCP_SYN, 0, 0);
-        for (uint32_t poll = 0; poll < 100000; poll++) {
-            os->network.net_poll();
-            if (net_state == TCP_ST_ESTABLISHED) {
-                connected = 1;
-                break;
-            }
-            for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
-        }
-    }
-
-    if (!connected) {
-        set_status("Connection failed");
-        browser_draw(&browser_win);
-        os->graphics.blit_all();
-        return -2;
-    }
-
     set_status("Requesting document...");
     browser_draw(&browser_win);
     os->graphics.blit_all();
-
-    char req[384];
-    int p = 0;
-    const char* r1 = "GET ";
-    while (*r1) req[p++] = *r1++;
-    int u = 0;
-    while (path[u] && p < (int)sizeof(req) - 1) req[p++] = path[u++];
-    const char* r2 = " HTTP/1.1\r\nHost: ";
-    while (*r2) req[p++] = *r2++;
-    u = 0;
-    while (host[u] && p < (int)sizeof(req) - 1) req[p++] = host[u++];
-    const char* r3 = request_post ? "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, */*\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: " : "\r\nUser-Agent: Mozilla/1.0 (Nixel)\r\nAccept: text/html, text/plain;q=0.9, */*;q=0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
-    while (*r3 && p < (int)sizeof(req) - 1) req[p++] = *r3++;
-    if (request_post) {
-        char digits[12]; int dn = 0, value = request_body_len;
-        do { digits[dn++] = (char)('0' + value % 10); value /= 10; } while (value && dn < 10);
-        while (dn && p < (int)sizeof(req) - 1) req[p++] = digits[--dn];
-        const char* tail = "\r\nConnection: close\r\n\r\n";
-        while (*tail && p < (int)sizeof(req) - 1) req[p++] = *tail++;
-        for (int i = 0; i < request_body_len && p < (int)sizeof(req) - 1; i++) req[p++] = request_body[i];
-    }
-    req[p] = '\0';
-
-    send_tcp_seg(TCP_PSH | TCP_ACK, (const uint8_t*)req, p);
-
-    for (uint32_t poll = 0; poll < 400000; poll++) {
-        os->network.net_poll();
-        if (http_done || (net_state == TCP_ST_CLOSED && http_raw_len > 0)) {
-            break;
-        }
-        for (volatile int d = 0; d < 100; d++) __asm__ volatile ("pause");
-    }
-
-    if (http_raw_len == 0) return 0;
-    http_raw_buf[http_raw_len] = '\0';
+    if (!tcp_http_request(host, path, "text/html, text/plain;q=0.9, */*;q=0.1",
+                          request_post, request_body,
+                          (uint32_t)request_body_len, http_raw_buf,
+                          sizeof(http_raw_buf), &http_raw_len)) return -2;
     return parse_http_status((const char*)http_raw_buf, http_raw_len);
 }
+
+
 
 static void browser_fetch(void) {
     char current_url[MAX_URL_LEN];
@@ -1089,11 +1031,17 @@ static void browser_handle_key(Window* win, char c) {
     }
 }
 
-int main_app(os_api_t* api) {
-    if (!api) return -1;
-    os = api;
-
-    os->network.ipv4_set_handler(TCP_PROTOCOL, browser_tcp_rx);
+void user_main(const char* arguments) {
+    (void)arguments;
+    user_api.graphics.fill_rect = browser_user_fill_rect;
+    user_api.graphics.draw_string = browser_user_draw_string;
+    user_api.graphics.draw_button = browser_user_draw_button;
+    user_api.graphics.render_screen = browser_user_render_screen;
+    user_api.graphics.blit_rect = browser_user_blit_rect;
+    user_api.graphics.blit_all = browser_user_present;
+    user_api.graphics.png_render = browser_user_png_render;
+    user_api.windows.unregister_window = browser_user_unregister;
+    os = &user_api;
 
     browser_win.x = 80;
     browser_win.y = 40;
@@ -1106,19 +1054,46 @@ int main_app(os_api_t* api) {
     browser_win.handle_key = browser_handle_key;
     browser_win.handle_mouse = browser_handle_mouse;
 
+    user_window_desc_t description = {0};
+    description.x = browser_win.x;
+    description.y = browser_win.y;
+    description.width = browser_win.w;
+    description.height = browser_win.h;
+    copy_string(description.title, sizeof(description.title), browser_win.title);
+    int32_t created = sys_window_create(&description);
+    if (created < 0) return;
+    user_window_handle = (uint32_t)created;
+    user_window_closed = 0;
+
     const char* default_page = "HTTP/1.1 200 OK\r\n\r\n";
 
     int dlen = 0;
     while (default_page[dlen]) dlen++;
     parse_and_layout_html(default_page, dlen);
 
-    os->windows.register_window(&browser_win);
-    os->shell.term_print("Browser started.\n");
-
+    browser_draw(&browser_win);
+    os->graphics.blit_all();
     set_status("Loading page...");
     os->graphics.render_screen();
 
     browser_fetch();
-    
-    return 0;
+
+    while (!user_window_closed && user_window_handle) {
+        user_window_event_t event = {0};
+        sys_yield();
+        int32_t available = sys_window_poll(user_window_handle, &event);
+        if (available < 0 || event.type == USER_WINDOW_EVENT_CLOSE) break;
+        if (!available) continue;
+        if (event.type == USER_WINDOW_EVENT_REDRAW) {
+            browser_draw(&browser_win);
+            os->graphics.blit_all();
+        } else if (event.type == USER_WINDOW_EVENT_KEY) {
+            browser_handle_key(&browser_win, (char)event.key);
+        } else if (event.type == USER_WINDOW_EVENT_MOUSE) {
+            browser_handle_mouse(&browser_win, event.x, event.y,
+                                 (uint8_t)event.buttons);
+        }
+    }
+    if (user_window_handle) (void)sys_window_close(user_window_handle);
+    user_window_handle = 0;
 }

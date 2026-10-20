@@ -81,11 +81,9 @@ for %%A in (files mines calc hexview floppy_debug ping netdiag http_test crash_d
 if not exist src\apps\browser mkdir src\apps\browser
 call :run nasm -f win32 src\apps\browser\entry.asm -o src\apps\browser\entry.o
 call :run %CC% -c src\apps\browser\main.c -o src\apps\browser\main.o
-call :run %CC% -c src\apps\browser\png.c -o src\apps\browser\png.o
-::call :run ld -mi386pe -Ttext 0xC00000 -e _start src\apps\browser\entry.o src\apps\browser\main.o src\apps\browser\png.o -o src\apps\browser\browser.tmp
-call :run ld -mi386pe --omagic -Ttext 0xC00000 -e _start src\apps\browser\entry.o src\apps\browser\main.o src\apps\browser\png.o -o src\apps\browser\browser.tmp
+call :run ld -mi386pe --omagic -Ttext 0xC00000 -e _start src\apps\browser\entry.o src\apps\browser\main.o -o src\apps\browser\browser.tmp
 call :run objcopy -O binary src\apps\browser\browser.tmp browser.bin
-del /q src\apps\browser\browser.tmp src\apps\browser\main.o src\apps\browser\entry.o src\apps\browser\png.o
+del /q src\apps\browser\browser.tmp src\apps\browser\main.o src\apps\browser\entry.o
 
 call :run ld -mi386pe -Ttext 0x100000  ^
     src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o ^
