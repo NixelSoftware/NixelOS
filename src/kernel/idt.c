@@ -3,6 +3,7 @@
 #include "drivers/display.h"
 #include "drivers/serial.h"
 #include "syscall.h"
+#include "arch_i386.h"
 
 static idt_entry_t idt_entries[256];
 static idt_ptr_t   idt_ptr;
@@ -193,6 +194,15 @@ static void kernel_panic(registers_t* regs) {
 }
 
 void isr_handler(registers_t* regs) {
+    if (regs && regs->int_no == 14 && (regs->cs & 3u) == 3u) {
+        uint32_t fault_address;
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_address));
+        debug_print("[USER] page fault at ");
+        debug_hex(fault_address);
+        debug_print("; terminating app\n");
+        arch_user_exit_requested = 1;
+        return;
+    }
     kernel_panic(regs);
 }
 

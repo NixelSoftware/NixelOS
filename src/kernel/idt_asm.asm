@@ -130,6 +130,8 @@ isr_common_stub:
     push esp
     call isr_handler
     add esp, 4
+    cmp dword [arch_user_exit_requested], 0
+    jne user_abort_return
 
     pop eax
     mov gs, ax
@@ -143,6 +145,16 @@ isr_common_stub:
     popa
     add esp, 8
     iret
+
+user_abort_return:
+    mov dword [arch_user_exit_requested], 0
+    mov esp, [arch_user_kernel_esp]
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    popfd
+    ret
 
 idt_flush:
     mov eax, [esp + 4]
