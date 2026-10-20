@@ -2,6 +2,8 @@
 section .text
 
 extern isr_handler
+extern arch_user_exit_requested
+extern arch_user_kernel_esp
 extern syscall_dispatch
 global idt_flush
 global syscall_entry
@@ -83,6 +85,8 @@ syscall_entry:
     push esp
     call syscall_dispatch
     add esp, 4
+    cmp dword [arch_user_exit_requested], 0
+    jne .user_exit
     pop eax
     mov gs, ax
     pop eax
@@ -94,6 +98,15 @@ syscall_entry:
     popa
     add esp, 8
     iret
+.user_exit:
+    mov dword [arch_user_exit_requested], 0
+    mov esp, [arch_user_kernel_esp]
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    popfd
+    ret
 
 isr_common_stub:
     pusha

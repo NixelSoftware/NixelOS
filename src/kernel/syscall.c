@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "idt.h"
 #include "paging.h"
+#include "arch_i386.h"
 #include "drivers/serial.h"
 
 #define SYS_WRITE_MAX 256u
@@ -26,6 +27,10 @@ static int user_readable(uint32_t address, uint32_t length) {
 
 void syscall_dispatch(registers_t* regs) {
     if (!regs) return;
+    if ((regs->cs & 3u) != 3u) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
     switch (regs->eax) {
         case SYS_WRITE: {
             uint32_t address = regs->ebx;
@@ -41,6 +46,9 @@ void syscall_dispatch(registers_t* regs) {
         }
         case SYS_GET_TICKS:
             regs->eax = frame_timer;
+            return;
+        case SYS_EXIT:
+            arch_user_exit_requested = 1;
             return;
         default:
             regs->eax = (uint32_t)-1;

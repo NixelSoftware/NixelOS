@@ -3,10 +3,11 @@
 
 #include "../../kernel/types.h"
 
-/* Initial i386 system-call ABI. EAX selects the call; results return in EAX. */
+/* i386 ABI: call number in EAX, arguments in EBX/ECX/EDX, result in EAX. */
 enum {
-    SYS_WRITE = 1,     /* EBX: byte buffer, ECX: byte count; returns bytes or -1 */
-    SYS_GET_TICKS = 2  /* returns the kernel tick counter */
+    SYS_WRITE = 1,     /* EBX: buffer, ECX: length; returns bytes written or -1 */
+    SYS_GET_TICKS = 2, /* returns the timer tick count */
+    SYS_EXIT = 3       /* EBX: process status; does not return */
 };
 
 static inline int32_t sys_write(const char* buffer, uint32_t length) {
@@ -25,6 +26,14 @@ static inline uint32_t sys_get_ticks(void) {
                       : "0"((uint32_t)SYS_GET_TICKS)
                       : "ebx", "ecx", "edx", "memory", "cc");
     return result;
+}
+
+static inline void sys_exit(uint32_t status) {
+    __asm__ volatile ("int $0x80"
+                      :
+                      : "a"((uint32_t)SYS_EXIT), "b"(status)
+                      : "ecx", "edx", "memory", "cc");
+    for (;;) { }
 }
 
 #endif

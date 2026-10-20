@@ -81,7 +81,7 @@ for source in "${kernel_sources[@]}"; do
     "${cc[@]}" -c "$source" -o "${source%.c}.o"
 done
 
-for app in files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown; do
+for app in files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown userhello; do
     mkdir -p "src/apps/$app"
     nasm -f elf32 "src/apps/$app/entry.asm" -o "src/apps/$app/entry.o"
     "${cc[@]}" -c "src/apps/$app/main.c" -o "src/apps/$app/main.o"
@@ -118,6 +118,7 @@ ld -m elf_i386 -Ttext 0x100000 \
     src/system/services/input/input.o \
     src/system/loader/app_loader.o \
     src/kernel/idt.o \
+    src/kernel/arch_i386.o \
     src/kernel/gdt_asm.o \
     src/kernel/syscall.o \
     src/kernel/paging.o \
@@ -229,6 +230,7 @@ rm -f curl.bin
 rm -f browser.bin
 rm -f crash_debug.bin
 rm -f shutdown.bin
+rm -f userhello.bin
 
 qemu-system-i386 -m 32M \
     -drive file=os.img,format=raw,index=0,media=disk \
