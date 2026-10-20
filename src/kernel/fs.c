@@ -300,13 +300,18 @@ int fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
 int fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes) {
     if (!fs_ready || !filename) return -1;
 
+    debug_print("[FAT32] read: resolving path\n");
     uint32_t parent_cluster;
     char target_83[11];
     if (!resolve_path(filename, &parent_cluster, target_83)) return -1;
 
     fat32_dir_entry_t entry;
+    debug_print("[FAT32] read: searching directory\n");
     if (!find_in_directory(parent_cluster, target_83, &entry, 0, 0)) return -1;
     if (entry.attr & FAT_ATTR_DIRECTORY) return -1;
+    debug_print("[FAT32] read: file entry found, size ");
+    debug_hex(entry.file_size);
+    debug_print("\n");
 
     
     if (!dest || max_bytes == 0) {
@@ -316,11 +321,22 @@ int fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes) {
     uint32_t bytes_to_read = (entry.file_size < max_bytes) ? entry.file_size : max_bytes;
     uint32_t bytes_copied = 0;
     uint32_t curr_cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
+    uint32_t clusters_read = 0;
 
     while (curr_cluster >= 2 && curr_cluster < 0x0FFFFFF8 && bytes_copied < bytes_to_read) {
+        if ((clusters_read & 0x0F) == 0) {
+            debug_print("[FAT32] read: cluster ");
+            debug_hex(curr_cluster);
+            debug_print(" bytes copied ");
+            debug_hex(bytes_copied);
+            debug_print("\n");
+        }
         uint32_t lba = cluster_to_lba(curr_cluster);
         for (uint32_t s = 0; s < sectors_per_cluster && bytes_copied < bytes_to_read; s++) {
-            if (!ata_read_sectors(lba + s, 1, sector_buffer)) return (int)bytes_copied;
+            if (!ata_read_sectors(lba + s, 1, sector_buffer)) {
+                debug_print("[FAT32] read: data sector read failed\n");
+                return (int)bytes_copied;
+            }
             uint32_t chunk = (bytes_to_read - bytes_copied > 512) ? 512 : (bytes_to_read - bytes_copied);
             for (uint32_t b = 0; b < chunk; b++) {
                 dest[bytes_copied + b] = sector_buffer[b];
@@ -328,7 +344,11 @@ int fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes) {
             bytes_copied += chunk;
         }
         curr_cluster = get_next_cluster(curr_cluster);
+        clusters_read++;
     }
+    debug_print("[FAT32] read: complete, bytes copied ");
+    debug_hex(bytes_copied);
+    debug_print("\n");
     return (int)bytes_copied;
 }
 
