@@ -18,13 +18,13 @@ typedef struct {
     uint32_t driver_id;
 } pci_net_match_t;
 
-// Supported network adapters
+
 static const pci_net_match_t supported_cards[] = {
-    // AMD PCNet-PCI II / FAST III
+    
     { 0x1022, 0x2000, "AMD PCNet-PCI II (Am79C970A)", 0 },
     { 0x1022, 0x2001, "AMD PCNet-FAST III (Am79C973)", 0 },
 
-    // Intel E1000 Family
+    
     { 0x8086, 0x100E, "Intel 82540EM Gigabit Ethernet", 1 },
     { 0x8086, 0x100F, "Intel 82545EM Gigabit Ethernet", 1 },
     { 0x8086, 0x1004, "Intel 82543GC Gigabit Ethernet", 1 },
@@ -35,6 +35,9 @@ static const pci_net_match_t supported_cards[] = {
 };
 
 uint32_t net_driver_type = 0xFFFFFFFF;
+uint16_t net_detected_vendor = 0;
+uint16_t net_detected_device = 0;
+const char* net_detected_name = "None";
 
 static uint32_t pci_read_cfg(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
     uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
@@ -43,9 +46,18 @@ static uint32_t pci_read_cfg(uint8_t bus, uint8_t slot, uint8_t func, uint8_t of
     return inl(PCI_CONFIG_DATA);
 }
 
+void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out) {
+    if (vendor_out) *vendor_out = net_detected_vendor;
+    if (device_out) *device_out = net_detected_device;
+    if (name_out)   *name_out   = net_detected_name;
+}
+
 uint8_t sys_net_init(uint16_t io) {
     (void)io;
-    net_driver_type = 0xFFFFFFFF;
+    net_driver_type     = 0xFFFFFFFF;
+    net_detected_vendor = 0;
+    net_detected_device = 0;
+    net_detected_name   = "None";
 
     debug_print("[NET] Probing PCI bus for network adapters...\n");
 
@@ -58,15 +70,34 @@ uint8_t sys_net_init(uint16_t io) {
 
                 if (vendor == 0xFFFF || vendor == 0x0000) continue;
 
-                for (int i = 0; supported_cards[i].vendor_id != 0; i++) {
-                    if (supported_cards[i].vendor_id == vendor &&
-                        supported_cards[i].device_id == device) {
-                        debug_print("[NET] Detected: ");
-                        debug_print(supported_cards[i].name);
-                        debug_print("\n");
+                
+                uint32_t class_reg = pci_read_cfg((uint8_t)bus, slot, func, 0x08);
+                uint8_t base_class = (uint8_t)(class_reg >> 24);
 
-                        net_driver_type = supported_cards[i].driver_id;
-                        goto adapter_matched;
+                
+                if (base_class == 0x02) {
+                    
+                    if (net_detected_vendor == 0) {
+                        net_detected_vendor = vendor;
+                        net_detected_device = device;
+                        net_detected_name   = "Unsupported Network Controller";
+                    }
+
+                    
+                    for (int i = 0; supported_cards[i].vendor_id != 0; i++) {
+                        if (supported_cards[i].vendor_id == vendor &&
+                            supported_cards[i].device_id == device) {
+                            debug_print("[NET] Detected: ");
+                            debug_print(supported_cards[i].name);
+                            debug_print("\n");
+
+                            net_driver_type     = supported_cards[i].driver_id;
+                            net_detected_vendor = vendor;
+                            net_detected_device = device;
+                            net_detected_name   = supported_cards[i].name;
+
+                            goto adapter_matched;
+                        }
                     }
                 }
             }
@@ -80,7 +111,15 @@ adapter_matched:
         return net_init(0);
     }
 
-    debug_print("[NET] Warning: No supported network card found on PCI.\n");
+    if (net_detected_vendor != 0) {
+        debug_print("[NET] Found unsupported network card: ");
+        debug_hex(net_detected_vendor);
+        debug_print(":");
+        debug_hex(net_detected_device);
+        debug_print("\n");
+    } else {
+        debug_print("[NET] Warning: No network card found on PCI.\n");
+    }
     return 0;
 }
 

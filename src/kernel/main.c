@@ -97,6 +97,7 @@ static os_api_t kernel_api = {
         .launch_app = api_launch_app
     },
     .network = {
+        .get_device_info = sys_net_get_device_info,
         .net_poll = sys_net_poll,
         .get_ticks = api_get_ticks,
         .icmp_request_echo = icmp_request_echo,
