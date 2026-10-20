@@ -3,9 +3,12 @@
 #include "paging.h"
 #include "arch_i386.h"
 #include "drivers/serial.h"
+#include "drivers/power.h"
+#include "drivers/net.h"
 
 #define SYS_WRITE_MAX 256u
 extern volatile uint32_t frame_timer;
+extern void kernel_user_write(const char* text, uint32_t length);
 
 static int user_readable(uint32_t address, uint32_t length) {
     if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
@@ -20,6 +23,24 @@ static int user_readable(uint32_t address, uint32_t length) {
         uint32_t* table = (uint32_t*)(pde & 0xFFFFF000u);
         uint32_t pte = table[(page >> 12) & 0x3FFu];
         if ((pte & 0x5u) != 0x5u) return 0;
+        if (page >= (end & ~(PAGE_SIZE - 1u))) break;
+    }
+    return 1;
+}
+
+static int user_writable(uint32_t address, uint32_t length) {
+    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
+        length > APP_VIRTUAL_LIMIT - address) return 0;
+
+    uint32_t* directory = (uint32_t*)paging_current_directory();
+    uint32_t end = address + length - 1u;
+    for (uint32_t page = address & ~(PAGE_SIZE - 1u);;
+         page += PAGE_SIZE) {
+        uint32_t pde = directory[page >> 22];
+        if ((pde & 0x7u) != 0x7u) return 0;
+        uint32_t* table = (uint32_t*)(pde & 0xFFFFF000u);
+        uint32_t pte = table[(page >> 12) & 0x3FFu];
+        if ((pte & 0x7u) != 0x7u) return 0;
         if (page >= (end & ~(PAGE_SIZE - 1u))) break;
     }
     return 1;
@@ -40,6 +61,7 @@ void syscall_dispatch(registers_t* regs) {
                 return;
             }
             const char* text = (const char*)address;
+            kernel_user_write(text, length);
             for (uint32_t i = 0; i < length; i++) debug_putc(text[i]);
             regs->eax = length;
             return;
@@ -50,6 +72,21 @@ void syscall_dispatch(registers_t* regs) {
         case SYS_EXIT:
             arch_user_exit_requested = 1;
             return;
+        case SYS_SHUTDOWN:
+            power_shutdown();
+            regs->eax = (uint32_t)-1;
+            return;
+        case SYS_NET_DIAGNOSTICS: {
+            uint32_t address = regs->ebx;
+            if (!user_writable(address, sizeof(net_diagnostics_t))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            net_poll();
+            net_get_diagnostics((net_diagnostics_t*)address);
+            regs->eax = net_is_ready() ? 1u : 0u;
+            return;
+        }
         default:
             regs->eax = (uint32_t)-1;
             return;

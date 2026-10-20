@@ -68,7 +68,6 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " view <file>     Open in Viewer\n"
                     " ping <host>     Ping an IPv4 address or DNS hostname\n"
                     " ifconfig        Show network configuration\n"
-                    " netdiag         Inspect network driver state\n"
                     " netdev          Show detected network hardware\n"
                     " clear           Clear screen\n");
     } else if (has_prefix(command, "clear")) {
@@ -101,8 +100,6 @@ void shell_execute_command(const char* command, shell_output_fn output,
         } else print("Failed to load BMP!\n");
     } else if (has_prefix(command, "ifconfig")) {
         shell_network_ifconfig(shell_output);
-    } else if (has_prefix(command, "netdiag")) {
-        shell_network_netdiag(shell_output);
     } else if (has_prefix(command, "netdev")) {
         if (!shell_api || !shell_api->network.get_device_info) {
             print("Network API unavailable.\n");

@@ -13,8 +13,15 @@ result in EAX:
 | 1 | `sys_write` | EBX = buffer, ECX = byte count (up to 256) | bytes written, or -1 |
 | 2 | `sys_get_ticks` | none | current timer tick count |
 | 3 | `sys_exit` | EBX = process status | returns to the kernel app loader |
+| 4 | `sys_shutdown` | none | requests kernel-managed system shutdown |
+| 5 | `sys_net_diagnostics` | EBX = writable `net_diagnostics_t*` | snapshot status in EAX (`1` ready, `0` not ready, `-1` invalid buffer) |
 
 `sys_write` accepts only readable user pages in the current app address space.
+`sys_shutdown` is a privileged service exposed through the syscall dispatcher;
+user apps do not call kernel power routines directly. `shutdown` is the second
+app using the ring-3 path. `netdiag` is the third ring-3 app and demonstrates
+the diagnostics snapshot syscall. `sys_write` forwards output to the active
+shell output and the debug serial stream.
 The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT
 vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.

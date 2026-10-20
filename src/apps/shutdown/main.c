@@ -1,14 +1,7 @@
-#include "../../kernel/types.h"
-#include "../../kernel/os_api.h"
+#include "../../system/user/sys_api.h"
 
-int main_app(os_api_t* os) {
-    if (!os) return -1;
-
-    os->shell.term_print("Shutting down the system...\n");
-
-    if (os->system.shutdown) {
-        os->system.shutdown();
-    }
-
-    return 0;
+void user_main(void) {
+    static const char message[] = "Shutting down the system...\n";
+    (void)sys_write(message, sizeof(message) - 1u);
+    sys_shutdown();
 }

@@ -181,6 +181,18 @@ static void term_print(const char* text) {
     if (shell_output) shell_output(text);
 }
 
+void kernel_user_write(const char* text, uint32_t length) {
+    char chunk[257];
+    while (length) {
+        uint32_t count = length < sizeof(chunk) - 1u ? length : sizeof(chunk) - 1u;
+        for (uint32_t i = 0; i < count; i++) chunk[i] = text[i];
+        chunk[count] = '\0';
+        term_print(chunk);
+        text += count;
+        length -= count;
+    }
+}
+
 static uint32_t api_get_ticks(void) {
     return frame_timer;
 }
