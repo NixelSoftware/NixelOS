@@ -2,7 +2,11 @@
 section .text
 
 extern isr_handler
+extern arch_user_exit_requested
+extern arch_user_kernel_esp
+extern syscall_dispatch
 global idt_flush
+global syscall_entry
 
 %macro ISR_NOERRCODE 1
 global isr%1
@@ -58,6 +62,51 @@ ISR_NOERRCODE 31
 ISR_NOERRCODE i
 %assign i i+1
 %endrep
+
+; int 0x80 has no CPU error code. Match registers_t and return the result in EAX.
+syscall_entry:
+    push dword 0
+    push dword 0x80
+    pusha
+    xor eax, eax
+    mov ax, ds
+    push eax
+    mov ax, es
+    push eax
+    mov ax, fs
+    push eax
+    mov ax, gs
+    push eax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    call syscall_dispatch
+    add esp, 4
+    cmp dword [arch_user_exit_requested], 0
+    jne .user_exit
+    pop eax
+    mov gs, ax
+    pop eax
+    mov fs, ax
+    pop eax
+    mov es, ax
+    pop eax
+    mov ds, ax
+    popa
+    add esp, 8
+    iret
+.user_exit:
+    mov dword [arch_user_exit_requested], 0
+    mov esp, [arch_user_kernel_esp]
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    popfd
+    ret
 
 isr_common_stub:
     pusha

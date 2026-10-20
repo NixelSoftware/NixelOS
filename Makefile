@@ -34,7 +34,7 @@ KERNEL_C := \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/loader/app_loader.c \
-  src/kernel/idt.c src/kernel/paging.c src/system/init/splash/startscreen.c \
+  src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \
   src/kernel/drivers/ata.c src/kernel/drivers/net.c \
@@ -52,10 +52,10 @@ KERNEL_C := \
   src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
-              src/kernel/task_switch.asm
+              src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
-        crash_debug shutdown
+        crash_debug shutdown userhello
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin
 .PHONY: all run clean clean-build
 all: os.img
@@ -97,7 +97,7 @@ run: os.img
 	$(QEMU) -m 32M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -serial stdio
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown browser'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown userhello browser'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"

@@ -2,6 +2,7 @@
 #include "../../kernel/paging.h"
 #include "../../kernel/net/ipv4.h"
 #include "../../kernel/drivers/serial.h"
+#include "../../kernel/arch_i386.h"
 
 #define APP_LOAD_LIMIT   1048576u
 #define APP_BSS_LIMIT    0x005F0000u
@@ -128,7 +129,8 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
 
     app_header_t* header = (app_header_t*)APP_VIRTUAL_BASE;
     if (header->magic != APP_HEADER_MAGIC ||
-        (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE)) {
+        (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE &&
+         header->type != APP_TYPE_USER)) {
         paging_activate_directory(kernel_directory);
         instance->pending_release = 1;
         app_loader_collect();
@@ -137,7 +139,11 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
 
     app_entry_fn entry = (app_entry_fn)(APP_VIRTUAL_BASE + sizeof(app_header_t));
     debug_print("[APP] entering executable\n");
-    entry(api);
+    if (header->type == APP_TYPE_USER) {
+        arch_i386_enter_user((uint32_t)entry, APP_BSS_LIMIT - 16u);
+    } else {
+        entry(api);
+    }
     debug_print("[APP] executable returned\n");
     paging_activate_directory(kernel_directory);
 

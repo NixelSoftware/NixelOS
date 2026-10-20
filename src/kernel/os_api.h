@@ -11,7 +11,8 @@
 
 typedef enum {
     APP_TYPE_GUI = 1,
-    APP_TYPE_CONSOLE = 2
+    APP_TYPE_CONSOLE = 2,
+    APP_TYPE_USER = 3
 } app_type_t;
 
 typedef struct {
