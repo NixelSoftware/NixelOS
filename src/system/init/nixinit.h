@@ -5,6 +5,7 @@ typedef struct {
     void (*show_status)(const char* text, int percent);
     void (*initialize_interrupts)(void);
     void (*initialize_timer)(void);
+    void (*initialize_acpi)(void);
     void (*initialize_network_device)(void);
     void (*initialize_network_stack)(void);
     void (*configure_network)(void);
