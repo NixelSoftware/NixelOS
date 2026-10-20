@@ -1,5 +1,6 @@
 #include "dns.h"
 #include "udp.h"
+#include "dhcp.h"
 #include "../kernel_net.h"
 
 #define DNS_PORT 53
@@ -13,7 +14,32 @@ static volatile uint8_t dns_done;
 static volatile uint8_t dns_success;
 static uint32_t dns_address;
 static uint16_t dns_id;
+static uint16_t next_dns_id = 0x4E53;
 static uint8_t dns_packet[DNS_PACKET_SIZE];
+
+static void dns_receive(udp_socket_t* socket, uint32_t source_ip,
+                        uint16_t source_port, const uint8_t* data,
+                        uint16_t length);
+
+static uint8_t query_server(uint32_t server, uint16_t id, uint16_t length) {
+    dns_packet[0] = (uint8_t)(id >> 8);
+    dns_packet[1] = (uint8_t)id;
+    dns_id = id;
+    dns_done = 0;
+    dns_success = 0;
+    dns_socket = udp_connect(server, DNS_PORT);
+    if (!dns_socket) return 0;
+    udp_bind(dns_socket, dns_receive);
+    if (udp_send(dns_socket, dns_packet, length)) {
+        for (uint32_t i = 0; i < DNS_TIMEOUT && !dns_done; i++) {
+            sys_net_poll();
+            for (volatile int delay = 0; delay < 20; delay++)
+                __asm__ volatile ("pause");
+        }
+    }
+    udp_disconnect(dns_socket);
+    return dns_success;
+}
 
 static uint16_t read_be16(const uint8_t* data) {
     return (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
@@ -40,10 +66,18 @@ static void dns_receive(udp_socket_t* socket, uint32_t source_ip,
                         uint16_t source_port, const uint8_t* data,
                         uint16_t length) {
     (void)socket;
-    (void)source_ip;
-    (void)source_port;
-    if (length < 12 || read_be16(data) != dns_id) return;
-    if (!(read_be16(data + 2) & 0x8000) || (read_be16(data + 6) == 0)) {
+    if (source_ip != udp_get_remote_ip(socket) || source_port != DNS_PORT
+        || length < 12 || read_be16(data) != dns_id) return;
+    /* Require a response to our recursive, single-question A query. */
+    if (!(read_be16(data + 2) & 0x8000)
+        || (read_be16(data + 2) & 0x7800) != 0
+        || read_be16(data + 4) != 1
+        || (read_be16(data + 2) & 0x0200)
+        || (read_be16(data + 6) == 0)) {
+        dns_done = 1;
+        return;
+    }
+    if ((read_be16(data + 2) & 0x000F) != 0) {
         dns_done = 1;
         return;
     }
@@ -81,12 +115,18 @@ uint8_t dns_resolve(const char* hostname, uint32_t* address) {
     uint16_t offset = 13;
     uint16_t label_start = 12;
     uint16_t label_length = 0;
+    uint16_t hostname_length = 0;
     uint16_t id;
 
     if (!hostname || !*hostname || !address) return 0;
-    dns_server = PRIMARY_DNS_SERVER;
-    id = (uint16_t)(0x4E53 + (uint16_t)hostname[0]);
+    {
+        const dhcp_lease_t* lease = dhcp_get_lease();
+        dns_server = lease && lease->leased && lease->dns
+                   ? lease->dns : PRIMARY_DNS_SERVER;
+    }
+    id = ++next_dns_id;
     for (uint16_t i = 0; i <= DNS_MAX_NAME && hostname[i]; i++) {
+        if (++hostname_length > DNS_MAX_NAME) return 0;
         if (hostname[i] == '.') {
             if (label_length == 0 || label_length > 63 || offset + label_length + 2 >= DNS_PACKET_SIZE) return 0;
             dns_packet[label_start] = (uint8_t)label_length;
@@ -99,7 +139,8 @@ uint8_t dns_resolve(const char* hostname, uint32_t* address) {
             label_length++;
         }
     }
-    if (label_length == 0 || label_length > 63 || offset >= DNS_PACKET_SIZE - 5) return 0;
+    if (label_length == 0 || label_length > 63
+        || offset >= DNS_PACKET_SIZE - 5) return 0;
     dns_packet[label_start] = (uint8_t)label_length;
     dns_packet[offset++] = 0;
     dns_packet[offset++] = 0;
@@ -108,25 +149,18 @@ uint8_t dns_resolve(const char* hostname, uint32_t* address) {
     dns_packet[offset++] = 1;
 
     for (uint16_t i = 0; i < 12; i++) dns_packet[i] = 0;
-    dns_packet[0] = (uint8_t)(id >> 8);
-    dns_packet[1] = (uint8_t)id;
     dns_packet[2] = 1;
     dns_packet[5] = 1;
-    dns_id = id;
-    dns_done = 0;
-    dns_success = 0;
-    dns_socket = udp_connect(dns_server, DNS_PORT);
-    if (!dns_socket) return 0;
-    udp_bind(dns_socket, dns_receive);
-    if (!udp_send(dns_socket, dns_packet, offset)) {
-        udp_disconnect(dns_socket);
+    if (!query_server(dns_server, id, offset)
+        && dns_server != PRIMARY_DNS_SERVER) {
+        /* DHCP-provided resolvers can be absent or unreachable. Retry this
+           lookup against the public fallback instead of failing the first
+           caller and relying on a later invocation. */
+        id = ++next_dns_id;
+        if (!query_server(PRIMARY_DNS_SERVER, id, offset)) return 0;
+    } else if (!dns_success) {
         return 0;
     }
-    for (uint32_t i = 0; i < DNS_TIMEOUT && !dns_done; i++) {
-        sys_net_poll();
-        for (volatile int delay = 0; delay < 20; delay++) __asm__ volatile ("pause");
-    }
-    udp_disconnect(dns_socket);
     if (!dns_success) return 0;
     *address = dns_address;
     return 1;
