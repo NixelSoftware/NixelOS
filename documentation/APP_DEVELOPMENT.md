@@ -185,7 +185,7 @@ Filename and file-count limits are defined in `src/kernel/fs.h`. Check return va
 | `network.ipv4_get_local_ip()` | Return the local IPv4 address as a `uint32_t`. |
 | `network.dns_resolve(hostname, address_out)` | Resolve a hostname into an IPv4 address; returns success status. |
 
-Callback and packet types are declared in `src/kernel/net/icmp.h`, `src/kernel/net/ipv4.h`, and `src/kernel/net/dns.h`. A protocol handler should validate packet lengths before reading fields. Network callbacks are invoked from network polling, so keep them short and avoid blocking there.
+Callback and packet types are declared in `src/kernel/net/icmp.h`, `src/kernel/net/ipv4.h`, and `src/kernel/net/dns.h`. A protocol handler should validate packet lengths before reading fields. Network callbacks are invoked from network polling, so keep them short and avoid blocking there. Always yield to the kernel and WM using `sys_yield` when involving networking in your application!
 
 ### Floppy and power
 

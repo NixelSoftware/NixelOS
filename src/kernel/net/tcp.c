@@ -304,6 +304,12 @@ void tcp_disconnect(tcp_socket_t* socket) {
     }
 }
 
+void tcp_release(tcp_socket_t* socket) {
+    if (!socket || !socket->in_use) return;
+    tcp_disconnect(socket);
+    release_socket(socket);
+}
+
 tcp_socket_state_t tcp_get_state(const tcp_socket_t* socket) {
     if (!socket || !socket->in_use) return TCP_CLOSED;
     return socket->state;

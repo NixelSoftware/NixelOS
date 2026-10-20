@@ -8,6 +8,7 @@
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/udp.h"
+#include "net/tcp.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    0xCFC
@@ -225,6 +226,7 @@ void sys_net_initialize_stack(void) {
     debug_subsystem_print("[NET TRACE] before udp_init\n");
     udp_init();
     debug_subsystem_print("[NET TRACE] after udp_init\n");
+    tcp_init();
 }
 
 void sys_net_configure_address(void) {

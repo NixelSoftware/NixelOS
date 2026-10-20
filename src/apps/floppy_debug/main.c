@@ -1,8 +1,13 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
+#include "../../kernel/window.h"
+#include "../../system/user/sys_api.h"
 
-static os_api_t* os;
+static os_api_t user_api;
+static os_api_t* os = &user_api;
 static Window win;
+static uint32_t window_handle;
+static uint8_t close_requested;
 
 static uint8_t sector_data[512];
 static char status_msg[64] = "FDC Ready. Click 'Read Boot (0)'.";
@@ -12,6 +17,72 @@ static uint8_t data_valid = 0;
 #define COLOR_BG        0x00C0C0C0
 #define COLOR_TEXT      0x00000000
 #define COLOR_HEX_BG    0x00FFFFFF
+
+static int user_register_window(Window* window) {
+    user_window_desc_t description = {0};
+    description.x = window->x;
+    description.y = window->y;
+    description.width = window->w;
+    description.height = window->h;
+    uint32_t i = 0;
+    while (i < USER_WINDOW_TITLE_MAX - 1u && window->title[i]) {
+        description.title[i] = window->title[i];
+        i++;
+    }
+    description.title[i] = '\0';
+    int32_t handle = sys_window_create(&description);
+    if (handle < 0) return -1;
+    window_handle = (uint32_t)handle;
+    return 0;
+}
+
+static void user_unregister_window(Window* window) {
+    (void)window;
+    if (window_handle) {
+        (void)sys_window_close(window_handle);
+        window_handle = 0;
+    }
+}
+
+static int user_draw(uint32_t operation, int32_t x, int32_t y, int32_t width,
+                     int32_t height, const char* text, uint32_t color,
+                     uint8_t pressed) {
+    user_window_draw_t drawing = {0};
+    drawing.operation = operation;
+    drawing.x = x - win.x;
+    drawing.y = y - win.y;
+    drawing.width = width;
+    drawing.height = height;
+    drawing.text = text;
+    drawing.color = color;
+    drawing.pressed = pressed;
+    return sys_window_draw(window_handle, &drawing);
+}
+
+static void user_fill_rect(int32_t x, int32_t y, int32_t width, int32_t height,
+                           uint32_t color) {
+    (void)user_draw(USER_WINDOW_DRAW_FILL, x, y, width, height, 0, color, 0);
+}
+
+static void user_draw_string(int32_t x, int32_t y, const char* text,
+                             uint32_t color) {
+    (void)user_draw(USER_WINDOW_DRAW_TEXT, x, y, 0, 0, text, color, 0);
+}
+
+static void user_draw_button(int32_t x, int32_t y, int32_t width, int32_t height,
+                             const char* text, uint8_t pressed) {
+    (void)user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height, text,
+                    COLOR_BG, pressed);
+}
+
+static void user_present_rect(int32_t x, int32_t y, int32_t width, int32_t height) {
+    (void)x; (void)y; (void)width; (void)height;
+    if (window_handle) (void)sys_window_present(window_handle);
+}
+
+static void user_blit_all(void) {
+    if (window_handle) (void)sys_window_present(window_handle);
+}
 
 static void int_to_str(int n, char* buf) {
     if (n == 0) {
@@ -124,7 +195,7 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
         str_copy(status_msg, "Reading sector 0 (Boot Sector)...");
         refresh_window(w);
 
-        if (os->devices.floppy_read(0, 1, sector_data)) {
+        if (sys_floppy_read(0, 1, sector_data)) {
             data_valid = 1;
             current_lba = 0;
             if (sector_data[510] == 0x55 && sector_data[511] == 0xAA) {
@@ -147,7 +218,7 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
 
         int ok = 1;
         for (uint32_t sec = 0; sec < 18; sec++) {
-            if (!os->devices.floppy_read(sec, 1, sector_data)) {
+            if (!sys_floppy_read(sec, 1, sector_data)) {
                 ok = 0;
                 char err[48] = "Failed reading track 0, sector: ";
                 char num[8];
@@ -178,9 +249,9 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
             write_pattern[i] = (uint8_t)(i ^ 0xA5);
         }
 
-        if (os->devices.floppy_write(2879, 1, write_pattern)) {
+        if (sys_floppy_write_test_pattern()) {
             uint8_t read_back[512];
-            if (os->devices.floppy_read(2879, 1, read_back)) {
+            if (sys_floppy_read(2879, 1, read_back)) {
                 int matched = 1;
                 for (int i = 0; i < 512; i++) {
                     if (read_back[i] != write_pattern[i]) {
@@ -204,8 +275,17 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
     }
 }
 
-void main_app(os_api_t* api) {
-    os = api;
+void user_main(const char* arguments) {
+    (void)arguments;
+    window_handle = 0;
+    close_requested = 0;
+    user_api.graphics.fill_rect = user_fill_rect;
+    user_api.graphics.draw_string = user_draw_string;
+    user_api.graphics.draw_button = user_draw_button;
+    user_api.graphics.blit_rect = user_present_rect;
+    user_api.graphics.blit_all = user_blit_all;
+    user_api.windows.register_window = user_register_window;
+    user_api.windows.unregister_window = user_unregister_window;
 
     win.x = 200;
     win.y = 120;
@@ -218,12 +298,41 @@ void main_app(os_api_t* api) {
     win.handle_mouse = handle_mouse;
     win.handle_key = 0;
 
-    if (os->devices.floppy_init) {
-        if (!os->devices.floppy_init()) {
-            str_copy(status_msg, "Floppy drive not detected or not ready.");
-        }
+    if (!sys_floppy_init()) {
+        str_copy(status_msg, "Floppy drive not detected or not ready.");
     }
 
-    os->windows.register_window(&win);
-    os->shell.term_print("Floppy Diagnostic is running.\n");
+    if (os->windows.register_window(&win) < 0) {
+        static const char error[] = "floppy_debug: unable to create window\n";
+        sys_write(error, sizeof(error) - 1u);
+        return;
+    }
+    static const char started[] = "Floppy Diagnostic is running.\n";
+    sys_write(started, sizeof(started) - 1u);
+    draw_app(&win);
+    os->graphics.blit_all();
+
+    while (!close_requested) {
+        user_window_event_t event;
+        sys_yield();
+        while (sys_window_poll(window_handle, &event) == 1) {
+            if (event.type == USER_WINDOW_EVENT_CLOSE) {
+                close_requested = 1;
+                break;
+            }
+            if (event.type == USER_WINDOW_EVENT_REDRAW) {
+                win.x = event.x;
+                win.y = event.y;
+            } else if (event.type == USER_WINDOW_EVENT_KEY &&
+                       (uint8_t)event.key == 0x01) {
+                close_requested = 1;
+                break;
+            } else if (event.type == USER_WINDOW_EVENT_MOUSE) {
+                handle_mouse(&win, event.x, event.y, (uint8_t)event.buttons);
+            }
+            draw_app(&win);
+            os->graphics.blit_all();
+        }
+    }
+    os->windows.unregister_window(&win);
 }

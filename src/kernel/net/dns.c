@@ -8,6 +8,8 @@
 #define DNS_PACKET_SIZE 512
 #define DNS_TIMEOUT 100000
 #define PRIMARY_DNS_SERVER 0x01010101
+#define DNS_ASYNC_TIMEOUT_TICKS 500u
+extern volatile uint32_t frame_timer;
 
 static udp_socket_t* dns_socket;
 static volatile uint8_t dns_done;
@@ -16,12 +18,17 @@ static uint32_t dns_address;
 static uint16_t dns_id;
 static uint16_t next_dns_id = 0x4E53;
 static uint8_t dns_packet[DNS_PACKET_SIZE];
+static uint8_t dns_async_active;
+static uint8_t dns_async_fallback_tried;
+static uint32_t dns_async_server;
+static uint32_t dns_async_started_tick;
+static uint16_t dns_async_query_length;
 
 static void dns_receive(udp_socket_t* socket, uint32_t source_ip,
                         uint16_t source_port, const uint8_t* data,
                         uint16_t length);
 
-static uint8_t query_server(uint32_t server, uint16_t id, uint16_t length) {
+static uint8_t start_query_server(uint32_t server, uint16_t id, uint16_t length) {
     dns_packet[0] = (uint8_t)(id >> 8);
     dns_packet[1] = (uint8_t)id;
     dns_id = id;
@@ -30,7 +37,15 @@ static uint8_t query_server(uint32_t server, uint16_t id, uint16_t length) {
     dns_socket = udp_connect(server, DNS_PORT);
     if (!dns_socket) return 0;
     udp_bind(dns_socket, dns_receive);
-    if (udp_send(dns_socket, dns_packet, length)) {
+    if (udp_send(dns_socket, dns_packet, length)) return 1;
+    udp_disconnect(dns_socket);
+    dns_socket = 0;
+    return 0;
+}
+
+static uint8_t query_server(uint32_t server, uint16_t id, uint16_t length) {
+    if (!start_query_server(server, id, length)) return 0;
+    if (dns_socket) {
         for (uint32_t i = 0; i < DNS_TIMEOUT && !dns_done; i++) {
             sys_net_poll();
             for (volatile int delay = 0; delay < 20; delay++)
@@ -38,6 +53,7 @@ static uint8_t query_server(uint32_t server, uint16_t id, uint16_t length) {
         }
     }
     udp_disconnect(dns_socket);
+    dns_socket = 0;
     return dns_success;
 }
 
@@ -118,7 +134,7 @@ uint8_t dns_resolve(const char* hostname, uint32_t* address) {
     uint16_t hostname_length = 0;
     uint16_t id;
 
-    if (!hostname || !*hostname || !address) return 0;
+    if (!hostname || !*hostname || !address || dns_async_active) return 0;
     {
         const dhcp_lease_t* lease = dhcp_get_lease();
         dns_server = lease && lease->leased && lease->dns
@@ -164,4 +180,100 @@ uint8_t dns_resolve(const char* hostname, uint32_t* address) {
     if (!dns_success) return 0;
     *address = dns_address;
     return 1;
+}
+
+uint8_t dns_resolve_async_start(const char* hostname) {
+    uint32_t dns_server;
+    uint16_t offset = 13;
+    uint16_t label_start = 12;
+    uint16_t label_length = 0;
+    uint16_t hostname_length = 0;
+    uint16_t id;
+    if (!hostname || !*hostname || dns_async_active) return 0;
+    {
+        const dhcp_lease_t* lease = dhcp_get_lease();
+        dns_server = lease && lease->leased && lease->dns
+                   ? lease->dns : PRIMARY_DNS_SERVER;
+    }
+    for (uint16_t i = 0; i <= DNS_MAX_NAME && hostname[i]; i++) {
+        if (++hostname_length > DNS_MAX_NAME) return 0;
+        if (hostname[i] == '.') {
+            if (!label_length || label_length > 63 ||
+                offset + label_length + 2 >= DNS_PACKET_SIZE) return 0;
+            dns_packet[label_start] = (uint8_t)label_length;
+            label_start = offset++;
+            label_length = 0;
+        } else {
+            if ((uint8_t)hostname[i] < 0x21 || hostname[i] == 0x7F ||
+                offset >= DNS_PACKET_SIZE - 1) return 0;
+            dns_packet[offset++] = (uint8_t)hostname[i];
+            label_length++;
+        }
+    }
+    if (!label_length || label_length > 63 || offset >= DNS_PACKET_SIZE - 5)
+        return 0;
+    dns_packet[label_start] = (uint8_t)label_length;
+    dns_packet[offset++] = 0;
+    dns_packet[offset++] = 0;
+    dns_packet[offset++] = 1;
+    dns_packet[offset++] = 0;
+    dns_packet[offset++] = 1;
+    for (uint16_t i = 0; i < 12; i++) dns_packet[i] = 0;
+    dns_packet[2] = 1;
+    dns_packet[5] = 1;
+
+    id = ++next_dns_id;
+    dns_async_active = 1;
+    dns_async_fallback_tried = dns_server == PRIMARY_DNS_SERVER;
+    dns_async_server = dns_server;
+    dns_async_started_tick = frame_timer;
+    dns_async_query_length = offset;
+    if (!start_query_server(dns_server, id, offset)) {
+        if (dns_server == PRIMARY_DNS_SERVER) {
+            dns_async_active = 0;
+            return 0;
+        }
+        dns_async_fallback_tried = 1;
+        dns_async_server = PRIMARY_DNS_SERVER;
+        id = ++next_dns_id;
+        if (!start_query_server(PRIMARY_DNS_SERVER, id, offset)) {
+            dns_async_active = 0;
+            return 0;
+        }
+        dns_async_started_tick = frame_timer;
+    }
+    return 1;
+}
+
+int dns_resolve_async_poll(uint32_t* address) {
+    if (!dns_async_active || !address) return -1;
+    if (!dns_done && (uint32_t)(frame_timer - dns_async_started_tick) <
+                     DNS_ASYNC_TIMEOUT_TICKS) return 0;
+    if (dns_done && dns_success) {
+        *address = dns_address;
+        udp_disconnect(dns_socket);
+        dns_socket = 0;
+        dns_async_active = 0;
+        return 1;
+    }
+    udp_disconnect(dns_socket);
+    dns_socket = 0;
+    if (!dns_async_fallback_tried && dns_async_server != PRIMARY_DNS_SERVER) {
+        dns_async_fallback_tried = 1;
+        dns_async_server = PRIMARY_DNS_SERVER;
+        dns_async_started_tick = frame_timer;
+        uint16_t id = ++next_dns_id;
+        if (start_query_server(PRIMARY_DNS_SERVER, id, dns_async_query_length)) {
+            return 0;
+        }
+    }
+    dns_async_active = 0;
+    return -1;
+}
+
+void dns_resolve_async_cancel(void) {
+    if (!dns_async_active) return;
+    udp_disconnect(dns_socket);
+    dns_socket = 0;
+    dns_async_active = 0;
 }

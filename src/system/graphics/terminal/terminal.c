@@ -1,5 +1,7 @@
 #include "terminal.h"
 #include "../../shell/commands.h"
+#include "../wm/wm.h"
+#include "../../../kernel/paging.h"
 
 #define TERM_MAX_LINES 16
 #define TERM_MAX_COLS 44
@@ -10,6 +12,8 @@ static os_api_t* terminal_api;
 static char term_lines[TERM_MAX_LINES][TERM_MAX_COLS + 1];
 static int term_cursor_col;
 static int term_cursor_row;
+
+static void terminal_draw(Window* win);
 
 static void terminal_scroll(void) {
     for (int row = 0; row < TERM_MAX_LINES - 1; row++) {
@@ -34,7 +38,10 @@ static void terminal_clear_output(void) {
 
 static void terminal_append_output(const char* text) {
     while (*text) {
-        if (*text == '\n') {
+        if (*text == '\r') {
+            text++;
+            continue;
+        } else if (*text == '\n') {
             if (term_cursor_row < TERM_MAX_LINES - 1) {
                 term_cursor_row++;
             } else {
@@ -56,6 +63,26 @@ static void terminal_append_output(const char* text) {
             term_lines[term_cursor_row][term_cursor_col] = '\0';
         }
         text++;
+    }
+}
+
+void terminal_write(const char* text, uint32_t length) {
+    char chunk[257];
+    while (length) {
+        uint32_t count = length < sizeof(chunk) - 1u
+            ? length : sizeof(chunk) - 1u;
+        for (uint32_t i = 0; i < count; i++) chunk[i] = text[i];
+        chunk[count] = '\0';
+        terminal_append_output(chunk);
+        text += count;
+        length -= count;
+    }
+    if (terminal_api) {
+        uint32_t previous_directory = paging_current_directory();
+        paging_activate_kernel();
+        terminal_window.visible = 1;
+        wm_bring_to_front(&terminal_window);
+        paging_activate_directory(previous_directory);
     }
 }
 

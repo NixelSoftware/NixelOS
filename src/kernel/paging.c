@@ -119,7 +119,7 @@ int paging_address_space_create(address_space_t* space) {
     for (uint32_t i = 0; i < PAGE_TABLE_ENTRIES; i++)
         space->app_page_table[i] = low_page_table[i];
 
-    /* Keep the kernel's first 4 MiB map intact; apps use a private 4-6 MiB slot. */
+    /* Apps use a private 12-14 MiB slot, outside kernel global data. */
     uint32_t app_directory_index = APP_VIRTUAL_BASE >> 22;
     uint32_t app_page_count = (APP_VIRTUAL_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE;
     for (uint32_t i = 0; i < PAGE_TABLE_ENTRIES; i++) {

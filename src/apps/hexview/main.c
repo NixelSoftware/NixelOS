@@ -1,6 +1,7 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
+#include "../../system/user/sys_api.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -16,8 +17,11 @@
 #define BYTES_PER_ROW     16
 #define VISIBLE_ROWS      14
 
-static os_api_t* os = 0;
+static os_api_t user_api;
+static os_api_t* os = &user_api;
 static Window hex_window;
+static uint32_t hex_window_handle;
+static uint8_t hex_close_requested;
 
 static char target_file[FS_MAX_FILENAME] = "calc.bin";
 static uint8_t file_buffer[MAX_FILE_SIZE];
@@ -25,6 +29,67 @@ static int total_bytes = 0;
 static int current_offset = 0;
 
 static const char hex_chars[] = "0123456789ABCDEF";
+
+static int user_register_window(Window* window) {
+    user_window_desc_t description = {0};
+    description.x = window->x;
+    description.y = window->y;
+    description.width = window->w;
+    description.height = window->h;
+    uint32_t i = 0;
+    while (i < USER_WINDOW_TITLE_MAX - 1u && window->title[i]) {
+        description.title[i] = window->title[i];
+        i++;
+    }
+    description.title[i] = '\0';
+    int32_t handle = sys_window_create(&description);
+    if (handle < 0) return -1;
+    hex_window_handle = (uint32_t)handle;
+    return 0;
+}
+
+static void user_unregister_window(Window* window) {
+    (void)window;
+    if (hex_window_handle) {
+        (void)sys_window_close(hex_window_handle);
+        hex_window_handle = 0;
+    }
+}
+
+static int user_draw(uint32_t operation, int32_t x, int32_t y, int32_t width,
+                     int32_t height, const char* text, uint32_t color,
+                     uint8_t pressed) {
+    user_window_draw_t drawing = {0};
+    drawing.operation = operation;
+    drawing.x = x - hex_window.x;
+    drawing.y = y - hex_window.y;
+    drawing.width = width;
+    drawing.height = height;
+    drawing.text = text;
+    drawing.color = color;
+    drawing.pressed = pressed;
+    return sys_window_draw(hex_window_handle, &drawing);
+}
+
+static void user_fill_rect(int32_t x, int32_t y, int32_t width, int32_t height,
+                           uint32_t color) {
+    (void)user_draw(USER_WINDOW_DRAW_FILL, x, y, width, height, 0, color, 0);
+}
+
+static void user_draw_string(int32_t x, int32_t y, const char* text,
+                             uint32_t color) {
+    (void)user_draw(USER_WINDOW_DRAW_TEXT, x, y, 0, 0, text, color, 0);
+}
+
+static void user_draw_button(int32_t x, int32_t y, int32_t width, int32_t height,
+                             const char* text, uint8_t pressed) {
+    (void)user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height, text,
+                    COLOR_WIN_BG, pressed);
+}
+
+static void user_blit_all(void) {
+    if (hex_window_handle) (void)sys_window_present(hex_window_handle);
+}
 
 static void byte_to_hex(uint8_t byte, char* out) {
     out[0] = hex_chars[(byte >> 4) & 0x0F];
@@ -42,7 +107,7 @@ static void load_current_file(void) {
     for (int i = 0; i < MAX_FILE_SIZE; i++) {
         file_buffer[i] = 0;
     }
-    total_bytes = os->fs.read(target_file, file_buffer, MAX_FILE_SIZE);
+    total_bytes = sys_fs_read(target_file, file_buffer, MAX_FILE_SIZE);
     if (total_bytes < 0) total_bytes = 0;
     current_offset = 0;
 }
@@ -113,8 +178,6 @@ void hex_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
         } else {
             current_offset = 0;
         }
-        hex_draw_content(win);
-        os->graphics.blit_all();
         return;
     }
 
@@ -122,15 +185,14 @@ void hex_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
         if (current_offset + (VISIBLE_ROWS * BYTES_PER_ROW) < total_bytes) {
             current_offset += (VISIBLE_ROWS * BYTES_PER_ROW);
         }
-        hex_draw_content(win);
-        os->graphics.blit_all();
         return;
     }
 }
 
 void hex_handle_key(Window* win, char c) {
     if ((uint8_t)c == 0x01) {
-        os->windows.unregister_window(win);
+        (void)win;
+        hex_close_requested = 1;
         return;
     }
 
@@ -138,8 +200,6 @@ void hex_handle_key(Window* win, char c) {
         if (current_offset + (VISIBLE_ROWS * BYTES_PER_ROW) < total_bytes) {
             current_offset += (VISIBLE_ROWS * BYTES_PER_ROW);
         }
-        hex_draw_content(win);
-        os->graphics.blit_all();
         return;
     }
 
@@ -149,8 +209,6 @@ void hex_handle_key(Window* win, char c) {
         } else {
             current_offset = 0;
         }
-        hex_draw_content(win);
-        os->graphics.blit_all();
         return;
     }
 
@@ -158,27 +216,27 @@ void hex_handle_key(Window* win, char c) {
         char name[] = "files.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
-        hex_draw_content(win);
-        os->graphics.blit_all();
     } else if (c == '2') {
         char name[] = "mines.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
-        hex_draw_content(win);
-        os->graphics.blit_all();
     } else if (c == '3') {
         char name[] = "calc.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
-        hex_draw_content(win);
-        os->graphics.blit_all();
     }
 }
 
-int main_app(os_api_t* api) {
-    if (!api) return -1;
-    os = api;
-
+void user_main(const char* arguments) {
+    (void)arguments;
+    hex_window_handle = 0;
+    hex_close_requested = 0;
+    user_api.graphics.fill_rect = user_fill_rect;
+    user_api.graphics.draw_string = user_draw_string;
+    user_api.graphics.draw_button = user_draw_button;
+    user_api.graphics.blit_all = user_blit_all;
+    user_api.windows.register_window = user_register_window;
+    user_api.windows.unregister_window = user_unregister_window;
     load_current_file();
 
     hex_window.x = 120;
@@ -192,7 +250,37 @@ int main_app(os_api_t* api) {
     hex_window.handle_key = hex_handle_key;
     hex_window.handle_mouse = hex_handle_mouse;
 
-    os->windows.register_window(&hex_window);
-    os->shell.term_print("Hex Viewer is running.\n");
-    return 0;
+    if (os->windows.register_window(&hex_window) < 0) {
+        static const char error[] = "hexview: unable to create window\n";
+        sys_write(error, sizeof(error) - 1u);
+        return;
+    }
+    static const char started[] = "Hex Viewer is running.\n";
+    sys_write(started, sizeof(started) - 1u);
+
+    hex_draw_content(&hex_window);
+    os->graphics.blit_all();
+    while (!hex_close_requested) {
+        user_window_event_t event;
+        sys_yield();
+        while (sys_window_poll(hex_window_handle, &event) == 1) {
+            if (event.type == USER_WINDOW_EVENT_CLOSE) {
+                hex_close_requested = 1;
+                break;
+            }
+            if (event.type == USER_WINDOW_EVENT_REDRAW) {
+                hex_window.x = event.x;
+                hex_window.y = event.y;
+            } else if (event.type == USER_WINDOW_EVENT_KEY) {
+                hex_handle_key(&hex_window, (char)event.key);
+            } else if (event.type == USER_WINDOW_EVENT_MOUSE) {
+                hex_handle_mouse(&hex_window, event.x, event.y,
+                                 (uint8_t)event.buttons);
+            }
+            if (hex_close_requested) break;
+            hex_draw_content(&hex_window);
+            os->graphics.blit_all();
+        }
+    }
+    os->windows.unregister_window(&hex_window);
 }

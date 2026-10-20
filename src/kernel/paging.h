@@ -5,8 +5,8 @@
 
 /* Bootstrap map uses the physical memory range configured by build.sh/Makefile. */
 #define PAGE_SIZE 4096u
-#define APP_VIRTUAL_BASE 0x00400000u
-#define APP_VIRTUAL_LIMIT 0x00600000u
+#define APP_VIRTUAL_BASE 0x00C00000u
+#define APP_VIRTUAL_LIMIT 0x00E00000u
 
 typedef struct {
     uint32_t* directory;

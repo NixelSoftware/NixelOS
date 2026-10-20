@@ -1,14 +1,18 @@
 [bits 32]
 [section .text]
 global _start
-extern main_app
+extern user_main
 
 dd 0x31505041
-db 1, 0, 0, 0
+db 3, 0, 0, 0
 
 _start:
     mov eax, [esp + 4]
     push eax
-    call main_app
+    call user_main
     add esp, 4
-    ret
+    mov eax, 3
+    xor ebx, ebx
+    int 0x80
+.halt:
+    jmp .halt

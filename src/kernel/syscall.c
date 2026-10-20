@@ -5,12 +5,23 @@
 #include "drivers/serial.h"
 #include "drivers/power.h"
 #include "drivers/net.h"
+#include "drivers/floppy.h"
+#include "net/tcp.h"
+#include "fs.h"
 #include "kernel_net.h"
 #include "net/dns.h"
 #include "net/icmp.h"
 #include "../system/graphics/wm/wm.h"
 
 #define SYS_WRITE_MAX 256u
+#define SYS_FS_READ_MAX 16384u
+#define FLOPPY_SECTOR_COUNT 2880u
+#define FLOPPY_SECTOR_SIZE 512u
+#define USER_TCP_SOCKET_MAX 8u
+#define USER_TCP_QUEUE_SIZE 131072u
+#define SYS_FS_WRITE_MAX 65536u
+#define SYS_TCP_SEND_MAX TCP_MAX_PAYLOAD
+#define SYS_TCP_READ_MAX 4096u
 #define USER_PING_REQUEST_MAX 16u
 #define USER_PING_TIMEOUT_TICKS 200u
 #define USER_PING_STALL_POLLS 100000u
@@ -35,6 +46,52 @@ typedef struct {
 static user_ping_request_t user_ping_requests[USER_PING_REQUEST_MAX];
 static uint32_t next_ping_handle = 1;
 static uint16_t next_ping_identifier = 1;
+
+typedef struct {
+    uint32_t owner_directory;
+    uint32_t handle;
+    tcp_socket_t* socket;
+    uint32_t read_head;
+    uint32_t read_count;
+    uint8_t active;
+    uint8_t data[USER_TCP_QUEUE_SIZE];
+} user_tcp_socket_t;
+
+static user_tcp_socket_t user_tcp_sockets[USER_TCP_SOCKET_MAX];
+static uint32_t next_tcp_handle = 1;
+static uint8_t user_dns_active;
+static uint32_t user_dns_owner;
+static uint32_t user_dns_handle;
+static uint32_t next_dns_handle = 1;
+
+static user_tcp_socket_t* user_tcp_by_handle(uint32_t handle,
+                                              uint32_t owner_directory) {
+    for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+        user_tcp_socket_t* slot = &user_tcp_sockets[i];
+        if (slot->active && slot->handle == handle &&
+            slot->owner_directory == owner_directory) return slot;
+    }
+    return 0;
+}
+
+static uint8_t user_tcp_receive(tcp_socket_t* socket, const uint8_t* data,
+                                uint16_t length) {
+    user_tcp_socket_t* slot = 0;
+    for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+        if (user_tcp_sockets[i].active &&
+            user_tcp_sockets[i].socket == socket) {
+            slot = &user_tcp_sockets[i];
+            break;
+        }
+    }
+    if (!slot || length > USER_TCP_QUEUE_SIZE - slot->read_count) return 0;
+    for (uint32_t i = 0; i < length; i++) {
+        uint32_t tail = (slot->read_head + slot->read_count) % USER_TCP_QUEUE_SIZE;
+        slot->data[tail] = data[i];
+        slot->read_count++;
+    }
+    return 1;
+}
 
 static void syscall_ping_reply(uint32_t source_ip, uint16_t identifier,
                                uint16_t sequence, const uint8_t* payload,
@@ -74,6 +131,17 @@ void syscall_forget_address_space(uint32_t directory_address) {
     for (uint32_t i = 0; i < USER_PING_REQUEST_MAX; i++) {
         if (user_ping_requests[i].owner_directory == directory_address)
             user_ping_requests[i].active = 0;
+    }
+    for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+        user_tcp_socket_t* slot = &user_tcp_sockets[i];
+        if (slot->active && slot->owner_directory == directory_address) {
+            tcp_release(slot->socket);
+            slot->active = 0;
+        }
+    }
+    if (user_dns_active && user_dns_owner == directory_address) {
+        dns_resolve_async_cancel();
+        user_dns_active = 0;
     }
 }
 
@@ -129,13 +197,240 @@ void syscall_dispatch(registers_t* regs) {
             }
             const char* text = (const char*)address;
             kernel_user_write(text, length);
-            for (uint32_t i = 0; i < length; i++) debug_putc(text[i]);
             regs->eax = length;
             return;
         }
         case SYS_GET_TICKS:
             regs->eax = frame_timer;
             return;
+        case SYS_DNS_START: {
+            char hostname[254];
+            uint32_t address = regs->ebx;
+            uint32_t length = 0;
+            if (user_dns_active) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            while (length < sizeof(hostname) - 1u) {
+                uint32_t current = address + length;
+                if (current < address || !user_readable(current, 1)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                hostname[length] = *(const char*)current;
+                if (!hostname[length]) break;
+                length++;
+            }
+            if (!length || length == sizeof(hostname) - 1u ||
+                !dns_resolve_async_start(hostname)) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            uint32_t handle = next_dns_handle++;
+            if (!handle || handle > 0x7FFFFFFFu) {
+                next_dns_handle = 2;
+                handle = 1;
+            }
+            user_dns_active = 1;
+            user_dns_owner = paging_current_directory();
+            user_dns_handle = handle;
+            regs->eax = handle;
+            return;
+        }
+        case SYS_DNS_POLL: {
+            uint32_t output_address = regs->ecx;
+            uint32_t resolved = 0;
+            if (!user_dns_active || user_dns_handle != regs->ebx ||
+                user_dns_owner != paging_current_directory() ||
+                !user_writable(output_address, sizeof(resolved))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            int result = dns_resolve_async_poll(&resolved);
+            if (result == 1) *(uint32_t*)output_address = resolved;
+            if (result != 0) user_dns_active = 0;
+            regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
+            return;
+        }
+        case SYS_FS_READ: {
+            char filename[FS_MAX_PATH];
+            uint32_t filename_address = regs->ebx;
+            uint32_t output_address = regs->ecx;
+            uint32_t capacity = regs->edx;
+            uint32_t length = 0;
+            if (capacity > SYS_FS_READ_MAX ||
+                (capacity && !user_writable(output_address, capacity)) ||
+                (!capacity && output_address)) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            while (length < sizeof(filename) - 1u) {
+                uint32_t current = filename_address + length;
+                if (current < filename_address || !user_readable(current, 1)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                filename[length] = *(const char*)current;
+                if (!filename[length]) break;
+                length++;
+            }
+            if (!length || length == sizeof(filename) - 1u) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            regs->eax = (uint32_t)fs_read_file(filename,
+                capacity ? (uint8_t*)output_address : 0, capacity);
+            return;
+        }
+        case SYS_FS_LIST: {
+            uint32_t output_address = regs->ebx;
+            uint32_t output_size = FS_MAX_FILES * FS_MAX_FILENAME;
+            if (!user_writable(output_address, output_size)) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            regs->eax = (uint32_t)fs_list(
+                (char (*)[FS_MAX_FILENAME])output_address);
+            return;
+        }
+        case SYS_FS_WRITE: {
+            char filename[FS_MAX_PATH];
+            uint32_t filename_address = regs->ebx;
+            uint32_t source_address = regs->ecx;
+            uint32_t length = regs->edx;
+            uint32_t name_length = 0;
+            if (!length || length > SYS_FS_WRITE_MAX ||
+                !user_readable(source_address, length)) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            while (name_length < sizeof(filename) - 1u) {
+                uint32_t current = filename_address + name_length;
+                if (current < filename_address || !user_readable(current, 1)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                filename[name_length] = *(const char*)current;
+                if (!filename[name_length]) break;
+                name_length++;
+            }
+            if (!name_length || name_length == sizeof(filename) - 1u) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            regs->eax = (uint32_t)fs_write_file(filename,
+                (const uint8_t*)source_address, length);
+            return;
+        }
+        case SYS_TCP_CONNECT: {
+            uint32_t owner_directory = paging_current_directory();
+            user_tcp_socket_t* slot = 0;
+            for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+                if (!user_tcp_sockets[i].active) {
+                    slot = &user_tcp_sockets[i];
+                    break;
+                }
+            }
+            if (!slot || !regs->ecx || regs->ecx > 65535u) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            tcp_socket_t* socket = tcp_connect(regs->ebx, (uint16_t)regs->ecx);
+            if (!socket) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            uint32_t handle = next_tcp_handle++;
+            if (!handle || handle > 0x7FFFFFFFu) {
+                next_tcp_handle = 2;
+                handle = 1;
+            }
+            slot->owner_directory = owner_directory;
+            slot->handle = handle;
+            slot->socket = socket;
+            slot->read_head = 0;
+            slot->read_count = 0;
+            slot->active = 1;
+            tcp_bind(socket, user_tcp_receive);
+            regs->eax = handle;
+            return;
+        }
+        case SYS_TCP_STATE: {
+            user_tcp_socket_t* slot = user_tcp_by_handle(
+                regs->ebx, paging_current_directory());
+            regs->eax = slot ? (uint32_t)tcp_get_state(slot->socket)
+                             : (uint32_t)-1;
+            return;
+        }
+        case SYS_TCP_SEND: {
+            user_tcp_socket_t* slot = user_tcp_by_handle(
+                regs->ebx, paging_current_directory());
+            uint32_t length = regs->edx;
+            if (!slot || length > SYS_TCP_SEND_MAX ||
+                (length && !user_readable(regs->ecx, length))) {
+                regs->eax = 0;
+                return;
+            }
+            regs->eax = (uint32_t)tcp_send(slot->socket,
+                length ? (const uint8_t*)regs->ecx : 0, (uint16_t)length);
+            return;
+        }
+        case SYS_TCP_READ: {
+            user_tcp_socket_t* slot = user_tcp_by_handle(
+                regs->ebx, paging_current_directory());
+            uint32_t capacity = regs->edx;
+            if (!slot || !capacity || capacity > SYS_TCP_READ_MAX ||
+                !user_writable(regs->ecx, capacity)) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            uint32_t count = slot->read_count < capacity
+                           ? slot->read_count : capacity;
+            uint8_t* output = (uint8_t*)regs->ecx;
+            for (uint32_t i = 0; i < count; i++) {
+                output[i] = slot->data[slot->read_head];
+                slot->read_head = (slot->read_head + 1u) % USER_TCP_QUEUE_SIZE;
+            }
+            slot->read_count -= count;
+            regs->eax = count;
+            return;
+        }
+        case SYS_TCP_CLOSE: {
+            user_tcp_socket_t* slot = user_tcp_by_handle(
+                regs->ebx, paging_current_directory());
+            if (!slot) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            tcp_release(slot->socket);
+            slot->active = 0;
+            regs->eax = 0;
+            return;
+        }
+        case SYS_FLOPPY_INIT:
+            regs->eax = (uint32_t)floppy_init();
+            return;
+        case SYS_FLOPPY_READ: {
+            uint32_t lba = regs->ebx;
+            uint32_t count = regs->ecx;
+            uint32_t buffer = regs->edx;
+            if (!count || count > 18u || lba >= FLOPPY_SECTOR_COUNT ||
+                count > FLOPPY_SECTOR_COUNT - lba ||
+                !user_writable(buffer, count * FLOPPY_SECTOR_SIZE)) {
+                regs->eax = 0;
+                return;
+            }
+            regs->eax = (uint32_t)floppy_read_sectors(lba, (uint8_t)count,
+                                                     (uint8_t*)buffer);
+            return;
+        }
+        case SYS_FLOPPY_TEST_WRITE: {
+            uint8_t pattern[FLOPPY_SECTOR_SIZE];
+            for (uint32_t i = 0; i < FLOPPY_SECTOR_SIZE; i++)
+                pattern[i] = (uint8_t)(i ^ 0xA5u);
+            regs->eax = (uint32_t)floppy_write_sectors(2879u, 1, pattern);
+            return;
+        }
         case SYS_YIELD:
             sys_net_poll();
             wm_poll();

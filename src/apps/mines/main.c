@@ -1,6 +1,7 @@
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
+#include "../../system/user/sys_api.h"
 
 #define COLOR_WIN_BG     0x00C0C0C0
 #define COLOR_DARK_GRAY  0x00808080
@@ -28,11 +29,67 @@ typedef struct {
     uint8_t neighbor_count;
 } Cell;
 
-static os_api_t* os = 0;
+static os_api_t user_api;
+static os_api_t* os = &user_api;
 static Window mines_window;
+static uint32_t mines_window_handle;
+static uint8_t mines_close_requested;
 static Cell grid[GRID_H][GRID_W];
 static int game_state = STATE_PLAYING;
 static uint32_t rng_seed = 0x5A5A1234;
+
+static int user_register_window(Window* window) {
+    user_window_desc_t description = {0};
+    description.x = window->x;
+    description.y = window->y;
+    description.width = window->w;
+    description.height = window->h;
+    uint32_t i = 0;
+    while (i < USER_WINDOW_TITLE_MAX - 1u && window->title[i]) {
+        description.title[i] = window->title[i];
+        i++;
+    }
+    description.title[i] = '\0';
+    int32_t handle = sys_window_create(&description);
+    if (handle < 0) return -1;
+    mines_window_handle = (uint32_t)handle;
+    return 0;
+}
+
+static void user_unregister_window(Window* window) {
+    (void)window;
+    if (mines_window_handle) {
+        (void)sys_window_close(mines_window_handle);
+        mines_window_handle = 0;
+    }
+}
+
+static void user_fill_rect(int32_t x, int32_t y, int32_t width, int32_t height,
+                           uint32_t color) {
+    user_window_draw_t drawing = {0};
+    drawing.operation = USER_WINDOW_DRAW_FILL;
+    drawing.x = x - mines_window.x;
+    drawing.y = y - mines_window.y;
+    drawing.width = width;
+    drawing.height = height;
+    drawing.color = color;
+    (void)sys_window_draw(mines_window_handle, &drawing);
+}
+
+static void user_draw_string(int32_t x, int32_t y, const char* text,
+                             uint32_t color) {
+    user_window_draw_t drawing = {0};
+    drawing.operation = USER_WINDOW_DRAW_TEXT;
+    drawing.x = x - mines_window.x;
+    drawing.y = y - mines_window.y;
+    drawing.text = text;
+    drawing.color = color;
+    (void)sys_window_draw(mines_window_handle, &drawing);
+}
+
+static void user_blit_all(void) {
+    if (mines_window_handle) (void)sys_window_present(mines_window_handle);
+}
 
 static uint32_t rand_simple(void) {
     rng_seed = rng_seed * 1103515245 + 12345;
@@ -96,6 +153,7 @@ static void reset_game(void) {
             grid[r][c].neighbor_count = count;
         }
     }
+
 }
 
 static void reveal_empty_cells(int r, int c) {
@@ -112,6 +170,7 @@ static void reveal_empty_cells(int r, int c) {
             }
         }
     }
+
 }
 
 static void check_win(void) {
@@ -188,6 +247,12 @@ void mines_draw_content(Window* win) {
             }
         }
     }
+
+    if (game_state == STATE_LOST) {
+        os->graphics.draw_string(win->x + 66, win->y + 225, "You lost!", COLOR_RED);
+    } else if (game_state == STATE_WON) {
+        os->graphics.draw_string(win->x + 66, win->y + 225, "You won!", COLOR_GREEN);
+    }
 }
 
 void mines_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
@@ -224,7 +289,6 @@ void mines_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
                         if (grid[r][c].has_mine) grid[r][c].revealed = 1;
                     }
                 }
-                os->windows.show_info_dialog("Uh-Oh!", "You lost! :(");
             } else {
                 reveal_empty_cells(row, col);
                 check_win();
@@ -235,7 +299,8 @@ void mines_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
 
 void mines_handle_key(Window* win, char c) {
     if ((uint8_t)c == 0x01) { // Esc key
-        os->windows.unregister_window(win);
+        (void)win;
+        mines_close_requested = 1;
         return;
     }
     if (c == 'r' || c == 'R') {
@@ -254,10 +319,15 @@ void mines_handle_key(Window* win, char c) {
     }
 }
 
-int main_app(os_api_t* api) {
-    if (!api) return -1;
-    os = api;
-
+void user_main(const char* arguments) {
+    (void)arguments;
+    mines_window_handle = 0;
+    mines_close_requested = 0;
+    user_api.graphics.fill_rect = user_fill_rect;
+    user_api.graphics.draw_string = user_draw_string;
+    user_api.graphics.blit_all = user_blit_all;
+    user_api.windows.register_window = user_register_window;
+    user_api.windows.unregister_window = user_unregister_window;
     reset_game();
 
     mines_window.x = 260;
@@ -271,7 +341,38 @@ int main_app(os_api_t* api) {
     mines_window.handle_key = mines_handle_key;
     mines_window.handle_mouse = mines_handle_mouse;
 
-    os->windows.register_window(&mines_window);
-    os->shell.term_print("Minesweeper is running.\n");
-    return 0;
+    if (os->windows.register_window(&mines_window) < 0) {
+        static const char error[] = "mines: unable to create window\n";
+        sys_write(error, sizeof(error) - 1u);
+        return;
+    }
+    static const char started[] = "Minesweeper is running.\n";
+    sys_write(started, sizeof(started) - 1u);
+
+    mines_draw_content(&mines_window);
+    os->graphics.blit_all();
+    while (!mines_close_requested) {
+        user_window_event_t event;
+        sys_yield();
+        while (sys_window_poll(mines_window_handle, &event) == 1) {
+            if (event.type == USER_WINDOW_EVENT_CLOSE) {
+                mines_close_requested = 1;
+                break;
+            }
+            if (event.type == USER_WINDOW_EVENT_REDRAW) {
+                mines_window.x = event.x;
+                mines_window.y = event.y;
+                mines_draw_content(&mines_window);
+            } else if (event.type == USER_WINDOW_EVENT_KEY) {
+                mines_handle_key(&mines_window, (char)event.key);
+            } else if (event.type == USER_WINDOW_EVENT_MOUSE) {
+                mines_handle_mouse(&mines_window, event.x, event.y,
+                                   (uint8_t)event.buttons);
+            }
+            if (mines_close_requested) break;
+            mines_draw_content(&mines_window);
+            os->graphics.blit_all();
+        }
+    }
+    os->windows.unregister_window(&mines_window);
 }

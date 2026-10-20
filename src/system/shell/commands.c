@@ -4,7 +4,8 @@
 static os_api_t* shell_api;
 static shell_output_fn shell_output;
 static shell_clear_fn shell_clear;
-static char shell_args[FS_MAX_FILENAME];
+#define SHELL_ARGUMENT_MAX 256
+static char shell_args[SHELL_ARGUMENT_MAX];
 
 static void print(const char* text) {
     if (shell_output) shell_output(text);
@@ -151,7 +152,8 @@ void shell_execute_command(const char* command, shell_output_fn output,
         name[length] = '\0';
         while (command[length] == ' ') length++;
         int out = 0;
-        while (command[length] && out < FS_MAX_FILENAME - 1) shell_args[out++] = command[length++];
+        while (command[length] && out < SHELL_ARGUMENT_MAX - 1)
+            shell_args[out++] = command[length++];
         shell_args[out] = '\0';
         int result = shell_api->shell.launch_app ?
             shell_api->shell.launch_app(name, shell_args) : -1;

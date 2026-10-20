@@ -7,7 +7,7 @@
 #include "../graphics/wm/wm.h"
 
 #define APP_LOAD_LIMIT   1048576u
-#define APP_BSS_LIMIT    0x005F0000u
+#define APP_BSS_LIMIT    0x00DF0000u
 #define APP_ARGUMENT_MAX 256u
 #define APP_INSTANCE_MAX 8
 #define APP_MAPPED_PAGES ((APP_BSS_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE)
@@ -160,7 +160,9 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
         ((char*)user_arguments)[argument_length] = '\0';
 
         uint32_t user_stack = APP_BSS_LIMIT - 32u;
-        *(uint32_t*)user_stack = user_arguments;
+        /* Match a cdecl call frame: a return address, then the first argument. */
+        *(uint32_t*)user_stack = 0;
+        *(uint32_t*)(user_stack + sizeof(uint32_t)) = user_arguments;
         arch_i386_enter_user((uint32_t)entry, user_stack);
         wm_user_close_address_space((uint32_t)instance->address_space.directory);
     } else {

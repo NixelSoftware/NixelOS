@@ -39,6 +39,7 @@ tcp_socket_t* tcp_listen(uint16_t local_port);
 void tcp_bind(tcp_socket_t* socket, tcp_data_handler_t handler);
 uint8_t tcp_send(tcp_socket_t* socket, const uint8_t* data, uint16_t length);
 void tcp_disconnect(tcp_socket_t* socket);
+void tcp_release(tcp_socket_t* socket);
 tcp_socket_state_t tcp_get_state(const tcp_socket_t* socket);
 
 #endif
