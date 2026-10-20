@@ -3,14 +3,22 @@ CC = gcc
 NASM ?= nasm
 LD = ld
 OBJCOPY ?= objcopy
-PYTHON ?= python3
-CFLAGS = -O2 -m32 -ffreestanding -fno-pie -fno-stack-protector -Wall -Wextra
+PYTHON ?= python
+CFLAGS = -O2 -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-leading-underscore -Wall -Wextra
+
+ifeq ($(OS),Windows_NT)
+    LD_EMULATION = i386pe
+    NASM_FMT     = win32
+else
+    LD_EMULATION = elf_i386
+    NASM_FMT     = elf32
+endif
 
 .PHONY: all package clean
 all: fastfetch.bin
 
 entry.o: entry.asm
-	$(NASM) -f elf32 $< -o $@
+	$(NASM) -f $(NASM_FMT) $< -o $@
 
 logo.h: ../../../resources/nixelos-trans.ansi.txt generate_logo.py
 	$(PYTHON) generate_logo.py $< $@
@@ -19,7 +27,7 @@ main.o: main.c logo.h ../../system/user/sys_api.h ../../system/user/memory_api.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 fastfetch.elf: entry.o main.o
-	$(LD) -m elf_i386 -Ttext 0xC00000 -e _start $^ -o $@
+	$(LD) -m $(LD_EMULATION) -Ttext 0xC00000 -e _start $^ -o $@
 
 fastfetch.bin: fastfetch.elf
 	$(OBJCOPY) -O binary --remove-section=.bss $< $@
