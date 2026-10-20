@@ -37,6 +37,7 @@ kernel_sources=(
     src/kernel/drivers/ata.c
     src/kernel/drivers/net.c
     src/kernel/drivers/net_e1000.c
+    src/kernel/drivers/net_tg3.c
     src/kernel/drivers/serial.c
     src/kernel/drivers/floppy.c
     src/kernel/drivers/power.c
@@ -112,6 +113,7 @@ ld -m elf_i386 -Ttext 0x10000 \
     src/kernel/drivers/display.o \
     src/kernel/drivers/ata.o \
     src/kernel/drivers/net.o \
+    src/kernel/drivers/net_tg3.o \
     src/kernel/net/ipv4.o \
     src/kernel/net/etherframe.o \
     src/kernel/net/arp.o \
@@ -152,6 +154,18 @@ rm -f src/kernel/kernel.tmp
 
 python3 mkfat32.py ../hdd.img
 
+python3 - <<'PY'
+from pathlib import Path
+
+image_path = Path("../hdd.img")
+boot_path = Path("src/boot.bin")
+image = bytearray(image_path.read_bytes())
+boot = boot_path.read_bytes()
+image[0:3] = boot[0:3]
+image[90:512] = boot[90:512]
+image_path.write_bytes(image)
+PY
+
 cp -f ../hdd.img os.img
 
 rm -f src/boot.bin
@@ -177,6 +191,7 @@ rm -f src/apps/viewer/*.o
 rm -f src/system/graphics/terminal/*.o
 rm -f src/apps/ping/*.o
 rm -f src/apps/netdiag/*.o
+rm -f src/system/graphics/fonts/*.o
 rm -f src/kernel/kernel.bin
 rm -f files.bin
 rm -f mines.bin
