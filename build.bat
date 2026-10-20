@@ -81,7 +81,7 @@ call :run ld -mi386pe --omagic -Ttext 0x200000 -e _start src\apps\browser\entry.
 call :run objcopy -O binary src\apps\browser\browser.tmp browser.bin
 del /q src\apps\browser\browser.tmp src\apps\browser\main.o src\apps\browser\entry.o src\apps\browser\png.o
 
-call :run ld -mi386pe -Ttext 0x10000 ^
+call :run ld -mi386pe -Ttext 0x100000  ^
     src\kernel\kernel_entry.o src\kernel\idt_asm.o src\kernel\task_switch.o ^
     src\kernel\main.o src\kernel\idt.o src\kernel\task.o ^
     src\system\shell\commands.o ^
