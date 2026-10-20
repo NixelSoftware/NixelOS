@@ -34,6 +34,7 @@ for %%S in (
     src\kernel\drivers\serial.c
     src\kernel\drivers\floppy.c
     src\kernel\drivers\power.c
+    src\kernel\drivers\acpi.c
     src\kernel\drivers\ps2.c
     src\kernel\kernel_net.c
     src\kernel\net\ipv4.c
@@ -98,7 +99,7 @@ call :run ld -mi386pe -Ttext 0x10000 ^
     src\system\graphics\terminal\terminal.o ^
     src\kernel\drivers\serial.o src\kernel\drivers\floppy.o src\kernel\kernel_net.o src\kernel\drivers\net_e1000.o ^
     src\system\init\splash\startscreen.o src\system\graphics\screenshot\screenshot.o src\kernel\drivers\power.o src\kernel\drivers\ps2.o ^
-    src\system\graphics\image\png.o src\kernel\net\dns.o src\system\init\splash\logo_data.o ^
+    src\system\graphics\image\png.o src\kernel\net\dns.o src\system\init\splash\logo_data.o src\kernel\drivers\acpi.o ^
     -o src\kernel\kernel.tmp
 call :run objcopy -O binary src\kernel\kernel.tmp src\kernel\kernel.bin
 del /q src\kernel\kernel.tmp

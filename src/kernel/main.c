@@ -8,6 +8,7 @@
 #include "drivers/serial.h"
 #include "drivers/floppy.h"
 #include "drivers/power.h"
+#include "drivers/acpi.h"
 #include "drivers/ps2.h"
 #include "idt.h"
 #include "fs.h" 
@@ -191,6 +192,11 @@ static void kernel_init_timer(void) {
     pit_init(100);
 }
 
+static void kernel_init_acpi(void) {
+    debug_print("[INIT] ACPI init...\n");
+    acpi_init();
+}
+
 static void kernel_init_network_device(void) {
     debug_print("[INIT] Net init...\n");
     sys_net_init(0);
@@ -254,6 +260,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         .show_status = nixinit_show_status,
         .initialize_interrupts = kernel_init_interrupts,
         .initialize_timer = kernel_init_timer,
+        .initialize_acpi = kernel_init_acpi,
         .initialize_network_device = kernel_init_network_device,
         .initialize_network_stack = kernel_init_network_stack,
         .configure_network = kernel_configure_network,

@@ -1,8 +1,12 @@
 #include "power.h"
 #include "serial.h"
+#include "acpi.h"
 
 void power_shutdown(void) {
     debug_print("[POWER] Initiating system shutdown...\n");
+    acpi_power_off();
+    debug_print("[POWER] ACPI Failed :(\n");
+
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
