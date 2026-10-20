@@ -33,6 +33,16 @@ static uint8_t frame_is_used(uint32_t index) {
     return (frame_bitmap[index >> 3] & (1u << (index & 7u))) != 0;
 }
 
+void paging_memory_info(user_memory_info_t* out) {
+    uint32_t allocated = 0;
+    for (uint32_t i = 0; i < FRAME_COUNT; ++i)
+        if (frame_is_used(i)) ++allocated;
+    out->total_bytes = FRAME_POOL_LIMIT;
+    out->reserved_bytes = FRAME_POOL_BASE;
+    out->available_bytes = (FRAME_COUNT - allocated) * PAGE_SIZE;
+    out->used_bytes = out->total_bytes - out->available_bytes;
+}
+
 static void frame_set_used(uint32_t index, uint8_t used) {
     uint8_t mask = (uint8_t)(1u << (index & 7u));
     if (used) frame_bitmap[index >> 3] |= mask;

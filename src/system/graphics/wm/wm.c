@@ -5,6 +5,7 @@
 #include "../../loader/app_loader.h"
 #include "../widgets.h"
 #include "../../../kernel/drivers/display/font.h"
+#include "../terminal/terminal.h"
 
 static Window* windows[WM_MAX_WINDOWS];
 static uint32_t window_directories[WM_MAX_WINDOWS];
@@ -13,6 +14,7 @@ static os_api_t* wm_api;
 static int32_t mouse_x = 400;
 static int32_t mouse_y = 300;
 static Window* dragging_window;
+static uint8_t resizing_terminal;
 static uint32_t dragging_directory;
 static uint8_t previous_left_button;
 static uint8_t start_menu_open;
@@ -630,6 +632,19 @@ static void handle_mouse_event(const os_input_event_t* event) {
     uint8_t left = event->mouse_buttons & 1;
     uint8_t click_down = left && !previous_left_button;
     if (event->mouse_dx || event->mouse_dy) {
+        if (resizing_terminal && left) {
+            int w = mouse_x - terminal_window.x + 1;
+            int h = mouse_y - terminal_window.y + 1;
+            int max_w = SCREEN_WIDTH - terminal_window.x;
+            int max_h = WM_TASKBAR_Y - terminal_window.y;
+            if (w < 184) w = 184;
+            if (h < 110) h = 110;
+            if (w > max_w) w = max_w;
+            if (h > max_h) h = max_h;
+            terminal_window.w = w;
+            terminal_window.h = h;
+            request_redraw();
+        }
         if (dragging_window && left) {
             for (int i = 0; i < WM_MAX_WINDOWS; i++) {
                 if (windows[i] != dragging_window ||
@@ -653,6 +668,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
     if (left != previous_left_button) request_redraw();
 
     if (!left) {
+        resizing_terminal = 0;
         dragging_window = 0;
         dragging_directory = 0;
         previous_left_button = left;
@@ -691,6 +707,18 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 }
                 int close_x = window->x + window->w - 16;
                 int close_y = window->y + 3;
+                if (window == &terminal_window &&
+                    mouse_x >= window->x + window->w - 12 &&
+                    mouse_x <= window->x + window->w &&
+                    mouse_y >= window->y + window->h - 12 &&
+                    mouse_y <= window->y + window->h) {
+                    resizing_terminal = 1;
+                    window_context_leave(previous);
+                    wm_bring_to_front(window);
+                    request_redraw();
+                    handled = 1;
+                    break;
+                }
                 if (mouse_x >= close_x && mouse_x <= close_x + 13 &&
                     mouse_y >= close_y && mouse_y <= close_y + 13) {
                     uint32_t owner_directory = window_directories[i];

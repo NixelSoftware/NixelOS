@@ -42,6 +42,21 @@ from the kernel's global data and display buffers.
 | 25 | `sys_tcp_close` | EBX = socket handle | `0` closed, or `-1` |
 | 26 | `sys_dns_start` | EBX = hostname | resolver handle, or `-1` if another lookup is active |
 | 27 | `sys_dns_poll` | EBX = resolver handle, ECX = writable IPv4 output | `0` pending, `1` resolved, `2` failed |
+| 28 | `sys_memory_info` | EBX = writable `user_memory_info_t*` | `0` success, `-1` invalid output buffer |
+
+`user_memory_info_t` is defined in `src/system/user/memory_api.h` as four
+32-bit byte counts: `total_bytes`, `used_bytes`, `available_bytes`, and
+`reserved_bytes`, in that order (16 bytes total). The syscall validates the
+entire output range as writable user memory. The snapshot includes the calling
+app's pages, page tables, and allocated window surfaces. Available RAM is the
+free page-frame pool; used RAM includes allocated frames plus reserved memory,
+so `total_bytes == used_bytes + available_bytes`.
+
+These numbers describe the current configured 32 MiB layout, not detected
+physical RAM. The lower 16 MiB is reserved for the kernel, fixed buffers,
+stacks, firmware regions, and bootstrap mappings. The upper 16 MiB is managed
+by the frame allocator. Changing QEMU RAM alone does not change this layout;
+BIOS memory-map discovery remains future work.
 
 `sys_write` accepts only readable user pages in the current app address space.
 `sys_shutdown` is a privileged service exposed through the syscall dispatcher;

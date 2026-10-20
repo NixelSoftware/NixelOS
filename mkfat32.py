@@ -20,7 +20,8 @@ ROOT_FILES = [
     "calc.bin", "files.bin", "hexview.bin", "mines.bin",
     "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
-    "shutdown.bin", "userhello.bin"
+    "shutdown.bin", "userhello.bin",
+    "fastfetch.bin",  # Temporary testing inclusion.
 ]
 
 OUTPUT_IMAGE = "disk.img" if len(sys.argv) < 2 else sys.argv[1]

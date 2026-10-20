@@ -5,6 +5,7 @@
 #include "../../kernel/fs.h"
 #include "../../kernel/drivers/net.h"
 #include "window_api.h"
+#include "memory_api.h"
 
 /* i386 ABI: call number in EAX, arguments in EBX/ECX/EDX, result in EAX. */
 enum {
@@ -34,7 +35,8 @@ enum {
     SYS_TCP_READ = 24,       /* EBX: handle, ECX: writable output, EDX: capacity */
     SYS_TCP_CLOSE = 25,      /* EBX: socket handle */
     SYS_DNS_START = 26,      /* EBX: hostname; returns resolver handle */
-    SYS_DNS_POLL = 27        /* EBX: resolver handle, ECX: writable IPv4 output */
+    SYS_DNS_POLL = 27,       /* EBX: resolver handle, ECX: writable IPv4 output */
+    SYS_MEMORY_INFO = 28     /* EBX: writable user_memory_info_t; 0 success, -1 invalid */
 };
 
 enum {
@@ -61,6 +63,15 @@ static inline uint32_t sys_get_ticks(void) {
                       : "=a"(result)
                       : "0"((uint32_t)SYS_GET_TICKS)
                       : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_memory_info(user_memory_info_t* out) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_MEMORY_INFO), "b"(out)
+                      : "ecx", "edx", "memory", "cc");
     return result;
 }
 

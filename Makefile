@@ -56,9 +56,15 @@ KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown userhello
-APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin
+# Temporary Fastfetch image inclusion for testing.
+APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 .PHONY: all run clean clean-build
 all: os.img
+
+.PHONY: fastfetch.bin
+fastfetch.bin:
+	$(MAKE) -C src/apps/fastfetch
+	$(PYTHON) -c "from pathlib import Path; Path('fastfetch.bin').write_bytes(Path('src/apps/fastfetch/fastfetch.bin').read_bytes())"
 
 src/boot.bin: Makefile src/boot/boot.asm
 	$(NASM) -f bin src/boot/boot.asm -o $@

@@ -204,6 +204,17 @@ void syscall_dispatch(registers_t* regs) {
         case SYS_GET_TICKS:
             regs->eax = frame_timer;
             return;
+        case SYS_MEMORY_INFO: {
+            if (!user_writable(regs->ebx, sizeof(user_memory_info_t))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            user_memory_info_t snapshot;
+            paging_memory_info(&snapshot);
+            *(user_memory_info_t*)regs->ebx = snapshot;
+            regs->eax = 0;
+            return;
+        }
         case SYS_DNS_START: {
             char hostname[254];
             uint32_t address = regs->ebx;

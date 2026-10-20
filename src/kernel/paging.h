@@ -2,6 +2,9 @@
 #define KERNEL_PAGING_H
 
 #include "types.h"
+#include "../system/user/memory_api.h"
+
+void paging_memory_info(user_memory_info_t* out);
 
 /* Bootstrap map uses the physical memory range configured by build.sh/Makefile. */
 #define PAGE_SIZE 4096u
