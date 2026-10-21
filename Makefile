@@ -111,7 +111,7 @@ os.img: $(RESOURCE_WAVS) resources Makefile src/boot.bin src/boot_stage2.bin src
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) -m 32M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -device sb16 -serial stdio
+	$(QEMU) -m 128M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -device sb16 -serial stdio
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown userhello sound browser oobe sysdiag'.split()]]"

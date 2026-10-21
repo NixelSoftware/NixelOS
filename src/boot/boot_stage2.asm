@@ -3,6 +3,7 @@
 
 stage2_entry:
     mov [boot_drive], dl
+    call detect_memory
     mov si, msg_stage2
     call print_string
 
@@ -172,6 +173,43 @@ freeze:
     cli
     hlt
     jmp freeze
+
+; E820 handoff: count at 0x5000, up to 128 packed 24-byte entries.
+; Publish only a complete map; unsupported/failed/truncated maps stay empty.
+detect_memory:
+    pushad
+    push es
+    xor ax, ax
+    mov es, ax
+    mov dword [es:0x5000], 0
+    mov di, 0x5004
+    xor ebx, ebx
+    xor bp, bp
+.next:
+    mov dword [es:di + 20], 1
+    mov eax, 0xE820
+    mov edx, 0x534D4150
+    mov ecx, 24
+    int 0x15
+    jc .done
+    cmp eax, 0x534D4150
+    jne .done
+    cmp ecx, 20
+    jb .done
+    inc bp
+    add di, 24
+    test ebx, ebx
+    jz .complete
+    cmp bp, 128
+    jb .next
+    jmp .done
+.complete:
+    movzx eax, bp
+    mov [es:0x5000], eax
+.done:
+    pop es
+    popad
+    ret
 
 print_string:
     pusha

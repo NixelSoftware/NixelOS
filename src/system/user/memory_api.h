@@ -3,7 +3,8 @@
 
 #include "../../kernel/types.h"
 
-/* Byte counts for the configured physical memory layout, not BIOS detection.
+/* Page-aligned BIOS-detected usable RAM below 0xFFFFF000.
+ * Zero counts mean no complete BIOS memory map was available.
  * used_bytes includes reserved_bytes; available_bytes is allocatable now.
  * total_bytes == used_bytes + available_bytes.
  */

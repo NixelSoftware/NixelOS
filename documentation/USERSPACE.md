@@ -52,11 +52,15 @@ app's pages, page tables, and allocated window surfaces. Available RAM is the
 free page-frame pool; used RAM includes allocated frames plus reserved memory,
 so `total_bytes == used_bytes + available_bytes`.
 
-These numbers describe the current configured 32 MiB layout, not detected
-physical RAM. The lower 16 MiB is reserved for the kernel, fixed buffers,
-stacks, firmware regions, and bootstrap mappings. The upper 16 MiB is managed
-by the frame allocator. Changing QEMU RAM alone does not change this layout;
-BIOS memory-map discovery remains future work.
+RAM is detected automatically at boot using BIOS E820. Totals count complete
+usable 4 KiB pages below `0xFFFFF000` (the 32-bit API limit), excluding firmware
+holes and reserved regions. Usable RAM below 16 MiB is reserved for fixed kernel
+buffers and stacks; usable pages above it form the allocation pool. Reserved
+E820 entries override overlapping usable entries. If discovery fails or exceeds
+128 entries, counts are zero and frame allocation fails safely. The boot stack
+and fixed kernel buffers still require sufficient low RAM to start the system.
+Query from an app with `user_memory_info_t info; sys_memory_info(&info);`, or
+from the kernel with `paging_memory_info(&info)`.
 
 `sys_write` accepts only readable user pages in the current app address space.
 `sys_shutdown` is a privileged service exposed through the syscall dispatcher;

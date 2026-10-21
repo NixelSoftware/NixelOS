@@ -6,7 +6,7 @@
 
 void paging_memory_info(user_memory_info_t* out);
 
-/* Bootstrap map uses the physical memory range configured by build.sh/Makefile. */
+/* Physical frames are discovered from the bootloader BIOS memory map. */
 #define PAGE_SIZE 4096u
 #define APP_VIRTUAL_BASE 0x00C00000u
 #define APP_VIRTUAL_LIMIT 0x00E00000u

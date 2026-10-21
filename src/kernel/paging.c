@@ -1,17 +1,15 @@
 #include "paging.h"
 
-/*
- * This kernel currently boots with 32 MiB configured in QEMU. The boot stack
- * is at 15 MiB and the flat kernel and legacy app loader use the first 4 MiB,
- * so the page-frame pool starts at 16 MiB. Add a BIOS memory map before using
- * this allocator on machines with a different memory layout.
+/* The first 16 MiB contains fixed kernel buffers and the boot stack.
+ * Allocate only complete pages advertised as usable by BIOS E820.
+ * The final physical page is excluded to keep byte counts in the 32-bit ABI.
  */
 #define PAGE_DIRECTORY_ENTRIES 1024u
 #define PAGE_TABLE_ENTRIES     1024u
 #define FRAME_POOL_BASE        0x01000000u
-#define FRAME_POOL_LIMIT       0x02000000u
+#define FRAME_POOL_LIMIT       0xFFFFF000u
 #define FRAME_COUNT            ((FRAME_POOL_LIMIT - FRAME_POOL_BASE) / PAGE_SIZE)
-#define FRAME_BITMAP_BYTES     (FRAME_COUNT / 8u)
+#define FRAME_BITMAP_BYTES     ((FRAME_COUNT + 7u) / 8u)
 
 #define PAGE_PRESENT           0x001u
 #define PAGE_WRITABLE          0x002u
@@ -26,8 +24,76 @@ static uint32_t page_directory[PAGE_DIRECTORY_ENTRIES]
 static uint32_t low_page_table[PAGE_TABLE_ENTRIES]
     __attribute__((aligned(PAGE_SIZE)));
 static uint8_t frame_bitmap[FRAME_BITMAP_BYTES];
-static uint32_t active_directory;
+static uint8_t usable_bitmap[FRAME_BITMAP_BYTES];
+static uint32_t detected_total, pool_pages;
 static uint32_t next_frame;
+
+typedef struct __attribute__((packed)) {
+    uint64_t base, length;
+    uint32_t type, attributes;
+} bios_memory_entry_t;
+
+static uint8_t frame_is_usable(uint32_t index) {
+    return (usable_bitmap[index >> 3] & (1u << (index & 7u))) != 0;
+}
+
+static void paging_detect_memory(const bios_memory_entry_t* entries, uint32_t count) {
+    detected_total = pool_pages = 0;
+    for (uint32_t i = 0; i < FRAME_BITMAP_BYTES; ++i) {
+        usable_bitmap[i] = 0;
+        frame_bitmap[i] = 0;
+    }
+    if (count > 128) return;
+    /* Reserved entries win over usable entries, including overlapping ranges. */
+    for (uint32_t pass = 0; pass < 2; ++pass) {
+        for (uint32_t i = 0; i < count; ++i) {
+            const bios_memory_entry_t* e = &entries[i];
+            if (!(e->attributes & 1) || !e->length || e->base >= FRAME_POOL_LIMIT)
+                continue;
+            uint8_t usable = e->type == 1;
+            if (usable != (pass == 0)) continue;
+            uint64_t end = e->base + e->length;
+            if (end < e->base || end > FRAME_POOL_LIMIT) end = FRAME_POOL_LIMIT;
+            uint64_t begin = e->base;
+            if (usable) {
+                begin = (begin + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+                end &= ~((uint64_t)PAGE_SIZE - 1);
+            } else {
+                begin &= ~((uint64_t)PAGE_SIZE - 1);
+                end = (end + PAGE_SIZE - 1) & ~((uint64_t)PAGE_SIZE - 1);
+            }
+            for (uint64_t address = begin; address < end; address += PAGE_SIZE) {
+                /* Low RAM is counted separately after resolving overlaps below. */
+                if (address < FRAME_POOL_BASE) continue;
+                uint32_t index = ((uint32_t)address - FRAME_POOL_BASE) / PAGE_SIZE;
+                uint8_t mask = 1u << (index & 7u);
+                if (usable) usable_bitmap[index >> 3] |= mask;
+                else usable_bitmap[index >> 3] &= (uint8_t)~mask;
+            }
+        }
+    }
+    /* Resolve low-memory pages too, without making them allocatable. */
+    for (uint32_t address = 0; address < FRAME_POOL_BASE; address += PAGE_SIZE) {
+        uint8_t usable = 0, reserved = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            const bios_memory_entry_t* e = &entries[i];
+            if (!(e->attributes & 1) || !e->length) continue;
+            uint64_t end = e->base + e->length;
+            if (end < e->base) end = (uint64_t)-1;
+            if (e->type == 1 && e->base <= address && end >= address + PAGE_SIZE)
+                usable = 1;
+            if (e->type != 1 && e->base < address + PAGE_SIZE && end > address)
+                reserved = 1;
+        }
+        if (usable && !reserved) detected_total += PAGE_SIZE;
+    }
+    for (uint32_t i = 0; i < FRAME_COUNT; ++i)
+        if (frame_is_usable(i)) ++pool_pages;
+    detected_total += pool_pages * PAGE_SIZE;
+    next_frame = 0;
+}
+
+static uint32_t active_directory;
 
 static uint8_t frame_is_used(uint32_t index) {
     return (frame_bitmap[index >> 3] & (1u << (index & 7u))) != 0;
@@ -36,10 +102,11 @@ static uint8_t frame_is_used(uint32_t index) {
 void paging_memory_info(user_memory_info_t* out) {
     uint32_t allocated = 0;
     for (uint32_t i = 0; i < FRAME_COUNT; ++i)
-        if (frame_is_used(i)) ++allocated;
-    out->total_bytes = FRAME_POOL_LIMIT;
-    out->reserved_bytes = FRAME_POOL_BASE;
-    out->available_bytes = (FRAME_COUNT - allocated) * PAGE_SIZE;
+        if (frame_is_usable(i) && frame_is_used(i)) ++allocated;
+    if (!out) return;
+    out->total_bytes = detected_total;
+    out->reserved_bytes = detected_total - pool_pages * PAGE_SIZE;
+    out->available_bytes = (pool_pages - allocated) * PAGE_SIZE;
     out->used_bytes = out->total_bytes - out->available_bytes;
 }
 
@@ -62,8 +129,8 @@ void paging_init(void) {
     for (uint32_t i = 1; i < PAGE_DIRECTORY_ENTRIES; i++)
         page_directory[i] = (i << 22) | PAGE_PRESENT | PAGE_WRITABLE | PAGE_SIZE_4M;
 
-    for (uint32_t i = 0; i < FRAME_BITMAP_BYTES; i++) frame_bitmap[i] = 0;
-    next_frame = 0;
+    paging_detect_memory((const bios_memory_entry_t*)0x5004,
+                         *(volatile uint32_t*)0x5000);
     active_directory = (uint32_t)page_directory;
 
     uint32_t cr4;
@@ -86,7 +153,7 @@ uint8_t paging_is_enabled(void) {
 uint32_t paging_frame_alloc(void) {
     for (uint32_t scanned = 0; scanned < FRAME_COUNT; scanned++) {
         uint32_t index = (next_frame + scanned) % FRAME_COUNT;
-        if (frame_is_used(index)) continue;
+        if (!frame_is_usable(index) || frame_is_used(index)) continue;
         frame_set_used(index, 1);
         next_frame = (index + 1) % FRAME_COUNT;
         uint32_t address = FRAME_POOL_BASE + index * PAGE_SIZE;
@@ -103,7 +170,7 @@ void paging_frame_free(uint32_t physical_address) {
         (physical_address & (PAGE_SIZE - 1u)) != 0) return;
 
     uint32_t index = (physical_address - FRAME_POOL_BASE) / PAGE_SIZE;
-    if (!frame_is_used(index)) return;
+    if (!frame_is_usable(index) || !frame_is_used(index)) return;
     frame_set_used(index, 0);
     if (index < next_frame) next_frame = index;
 }
