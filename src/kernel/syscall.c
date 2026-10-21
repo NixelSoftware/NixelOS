@@ -1,3 +1,5 @@
+#include "drivers/sb16_driver.h"
+static unsigned int audio_owner;
 #include "syscall.h"
 #include "idt.h"
 #include "paging.h"
@@ -129,6 +131,7 @@ static uint8_t ping_identifier_in_use(uint16_t identifier) {
 
 void syscall_forget_address_space(uint32_t directory_address) {
     if (!directory_address) return;
+    if (audio_owner == directory_address) { sb16_shutdown(); audio_owner = 0; }
     for (uint32_t i = 0; i < USER_PING_REQUEST_MAX; i++) {
         if (user_ping_requests[i].owner_directory == directory_address)
             user_ping_requests[i].active = 0;
@@ -264,6 +267,25 @@ void syscall_dispatch(registers_t* regs) {
             regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
             return;
         }
+        case SYS_AUDIO_INIT:
+            regs->eax = (uint32_t)(audio_owner ? -1 : sb16_init(regs->ebx));
+            if ((int32_t)regs->eax == 0) audio_owner = paging_current_directory();
+            return;
+        case SYS_AUDIO_WRITE:
+            regs->eax = (uint32_t)((audio_owner != paging_current_directory() ||
+                regs->ecx > SB16_BUFFER_SIZE || !user_readable(regs->ebx, regs->ecx))
+                ? -1 : sb16_write((const void*)regs->ebx, regs->ecx));
+            return;
+        case SYS_AUDIO_STATUS:
+            regs->eax = (uint32_t)(audio_owner == paging_current_directory() ? sb16_status() : -1);
+            return;
+        case SYS_AUDIO_SHUTDOWN:
+            regs->eax = (uint32_t)-1;
+            if (audio_owner == paging_current_directory()) {
+                sb16_shutdown(); audio_owner = 0; regs->eax = 0;
+            }
+            return;
+        case SYS_FS_READ_AT:
         case SYS_FS_READ: {
             char filename[FS_MAX_PATH];
             uint32_t filename_address = regs->ebx;
@@ -290,8 +312,9 @@ void syscall_dispatch(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 return;
             }
-            regs->eax = (uint32_t)fs_read_file(filename,
-                capacity ? (uint8_t*)output_address : 0, capacity);
+            regs->eax = (uint32_t)fs_read_file_at(filename,
+                capacity ? (uint8_t*)output_address : 0, capacity,
+                regs->eax == SYS_FS_READ_AT ? regs->esi : 0);
             return;
         }
         case SYS_FS_LIST: {

@@ -66,6 +66,7 @@ typedef struct {
 #pragma pack(pop)
 
 
+int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity, uint32_t offset);
 void fs_init(void);
 int  fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]);
 int  fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes);

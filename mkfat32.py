@@ -20,7 +20,7 @@ ROOT_FILES = [
     "calc.bin", "files.bin", "hexview.bin", "mines.bin",
     "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
-    "shutdown.bin", "userhello.bin",
+    "shutdown.bin", "userhello.bin", "sound.bin",
     "fastfetch.bin", "oobe.bin"
 ]
 
@@ -101,16 +101,36 @@ def main():
     struct.pack_into("<I", fat, 4, 0x0FFFFFFF)
     struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
 
-    current_cluster = 3
+    # Resource WAVs are included in the image root under their FAT 8.3 names.
+    files = [Path(name) for name in ROOT_FILES if Path(name).is_file()]
+    files += sorted((p for p in Path("resources").rglob("*")
+                     if p.is_file() and p.suffix.lower() == ".wav"),
+                    key=lambda p: p.as_posix().lower())
+    names = set()
+    for p in files:
+        name = to_83_name(p.name)
+        if name in names:
+            raise ValueError(f"Duplicate FAT 8.3 filename: {p}")
+        names.add(name)
+
+    # Reserve enough root-directory clusters, including the end marker.
+    root_clusters = max(1, math.ceil((len(files) + 1) * 32 / SECTOR_SIZE))
+    if root_clusters > total_clusters:
+        raise ValueError("Root directory exceeds image capacity")
+    for i in range(root_clusters):
+        cluster = root_cluster + i
+        struct.pack_into("<I", fat, cluster * 4,
+                         0x0FFFFFFF if i == root_clusters - 1 else cluster + 1)
+    current_cluster = root_cluster + root_clusters
     root_dir_entries = bytearray()
 
-    for fname in ROOT_FILES:
-        p = Path(fname)
-        if not p.exists():
-            continue
+    for p in files:
+        fname = p.name
         file_bytes = p.read_bytes()
         file_size = len(file_bytes)
         needed_clusters = max(1, math.ceil(file_size / (SECTORS_PER_CLUSTER * SECTOR_SIZE)))
+        if current_cluster + needed_clusters > total_clusters + 2:
+            raise ValueError(f"Not enough image space for {p}")
         first_cluster = current_cluster
 
         for i in range(needed_clusters):
@@ -130,7 +150,7 @@ def main():
         struct.pack_into("<H", entry, 26, first_cluster & 0xFFFF)
         struct.pack_into("<I", entry, 28, file_size)
         root_dir_entries.extend(entry)
-        print(f"  + Injected: {fname} ({file_size} bytes)")
+        print(f"  + Injected: {p} -> {to_83_name(fname).decode().strip()} ({file_size} bytes)")
 
     fat1_offset = fat_begin_lba * SECTOR_SIZE
     fat2_offset = (fat_begin_lba + sectors_per_fat) * SECTOR_SIZE

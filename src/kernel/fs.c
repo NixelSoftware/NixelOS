@@ -298,58 +298,46 @@ int fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
 }
 
 int fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes) {
+    return fs_read_file_at(filename, dest, max_bytes, 0);
+}
+
+int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity,
+                    uint32_t offset) {
     if (!fs_ready || !filename) return -1;
-
-    debug_print("[FAT32] read: resolving path\n");
-    uint32_t parent_cluster;
-    char target_83[11];
-    if (!resolve_path(filename, &parent_cluster, target_83)) return -1;
-
+    uint32_t parent;
+    char name[11];
     fat32_dir_entry_t entry;
-    debug_print("[FAT32] read: searching directory\n");
-    if (!find_in_directory(parent_cluster, target_83, &entry, 0, 0)) return -1;
-    if (entry.attr & FAT_ATTR_DIRECTORY) return -1;
-    debug_print("[FAT32] read: file entry found, size ");
-    debug_hex(entry.file_size);
-    debug_print("\n");
-
-    
-    if (!dest || max_bytes == 0) {
-        return (int)entry.file_size;
+    if (!resolve_path(filename, &parent, name) ||
+        !find_in_directory(parent, name, &entry, 0, 0) ||
+        (entry.attr & FAT_ATTR_DIRECTORY)) return -1;
+    if (!dest || !capacity) return (int)entry.file_size;
+    if (offset >= entry.file_size) return 0;
+    uint32_t remaining = entry.file_size - offset;
+    if (remaining > capacity) remaining = capacity;
+    uint32_t cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
+    uint32_t cluster_bytes = sectors_per_cluster * 512u;
+    uint32_t hops = 0;
+    while (offset >= cluster_bytes && cluster >= 2 && cluster < 0x0FFFFFF8) {
+        if (++hops > entry.file_size / cluster_bytes + 1u) return -1;
+        cluster = get_next_cluster(cluster);
+        offset -= cluster_bytes;
     }
-
-    uint32_t bytes_to_read = (entry.file_size < max_bytes) ? entry.file_size : max_bytes;
-    uint32_t bytes_copied = 0;
-    uint32_t curr_cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
-    uint32_t clusters_read = 0;
-
-    while (curr_cluster >= 2 && curr_cluster < 0x0FFFFFF8 && bytes_copied < bytes_to_read) {
-        if ((clusters_read & 0x0F) == 0) {
-            debug_print("[FAT32] read: cluster ");
-            debug_hex(curr_cluster);
-            debug_print(" bytes copied ");
-            debug_hex(bytes_copied);
-            debug_print("\n");
+    uint32_t copied = 0;
+    while (cluster >= 2 && cluster < 0x0FFFFFF8 && copied < remaining) {
+        uint32_t lba = cluster_to_lba(cluster);
+        for (uint32_t sector = offset / 512u;
+             sector < sectors_per_cluster && copied < remaining; sector++) {
+            if (!ata_read_sectors(lba + sector, 1, sector_buffer)) return -1;
+            uint32_t start = offset % 512u;
+            uint32_t chunk = 512u - start;
+            if (chunk > remaining - copied) chunk = remaining - copied;
+            for (uint32_t i = 0; i < chunk; i++) dest[copied+i] = sector_buffer[start+i];
+            copied += chunk;
+            offset = 0;
         }
-        uint32_t lba = cluster_to_lba(curr_cluster);
-        for (uint32_t s = 0; s < sectors_per_cluster && bytes_copied < bytes_to_read; s++) {
-            if (!ata_read_sectors(lba + s, 1, sector_buffer)) {
-                debug_print("[FAT32] read: data sector read failed\n");
-                return (int)bytes_copied;
-            }
-            uint32_t chunk = (bytes_to_read - bytes_copied > 512) ? 512 : (bytes_to_read - bytes_copied);
-            for (uint32_t b = 0; b < chunk; b++) {
-                dest[bytes_copied + b] = sector_buffer[b];
-            }
-            bytes_copied += chunk;
-        }
-        curr_cluster = get_next_cluster(curr_cluster);
-        clusters_read++;
+        cluster = get_next_cluster(cluster);
     }
-    debug_print("[FAT32] read: complete, bytes copied ");
-    debug_hex(bytes_copied);
-    debug_print("\n");
-    return (int)bytes_copied;
+    return copied == remaining ? (int)copied : -1;
 }
 
 int fs_delete_file(const char* filename) {

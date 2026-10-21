@@ -3,6 +3,7 @@
 #include "drivers/display.h"
 #include "drivers/serial.h"
 #include "syscall.h"
+#include "drivers/sb16_driver.h"
 #include "arch_i386.h"
 
 static idt_entry_t idt_entries[256];
@@ -194,6 +195,7 @@ static void kernel_panic(registers_t* regs) {
 }
 
 void isr_handler(registers_t* regs) {
+    if (regs && regs->int_no == 37) { sb16_interrupt(); return; }
     if (regs && regs->int_no == 14 && (regs->cs & 3u) == 3u) {
         uint32_t fault_address;
         __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_address));
@@ -206,7 +208,33 @@ void isr_handler(registers_t* regs) {
     kernel_panic(regs);
 }
 
+/* BIOS PIC vectors overlap CPU exceptions (IRQ 5 is vector 13).
+ * Move both controllers before any driver unmasks a hardware IRQ.
+ */
+static void pic_write(uint16_t port, uint8_t value) {
+    outb(port, value);
+    outb(0x80, 0); /* ISA I/O delay between initialization words */
+}
+
+static void pic_remap(void) {
+    uint8_t master_mask = inb(0x21);
+    uint8_t slave_mask = inb(0xA1);
+    pic_write(0x20, 0x11);
+    pic_write(0xA0, 0x11);
+    pic_write(0x21, 0x20); /* IRQ 0..7 -> vectors 32..39 */
+    pic_write(0xA1, 0x28); /* IRQ 8..15 -> vectors 40..47 */
+    pic_write(0x21, 0x04); /* slave connected to master IRQ 2 */
+    pic_write(0xA1, 0x02);
+    pic_write(0x21, 0x01); /* 8086 mode */
+    pic_write(0xA1, 0x01);
+    pic_write(0x21, master_mask);
+    pic_write(0xA1, slave_mask);
+}
+
 void idt_init(void) {
+    uint32_t saved_flags;
+    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(saved_flags) : : "memory");
+    pic_remap();
     idt_ptr.limit = sizeof(idt_entry_t) * 256 - 1;
     idt_ptr.base  = (uint32_t)&idt_entries;
 
@@ -271,4 +299,5 @@ void idt_init(void) {
     idt_set_gate(0x80, (uint32_t)syscall_entry, 0x08, 0xEF);
 
     idt_flush((uint32_t)&idt_ptr);
+    __asm__ volatile ("pushl %0; popfl" : : "r"(saved_flags) : "memory", "cc");
 }

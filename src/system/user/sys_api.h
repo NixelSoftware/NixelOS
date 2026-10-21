@@ -36,7 +36,12 @@ enum {
     SYS_TCP_CLOSE = 25,      /* EBX: socket handle */
     SYS_DNS_START = 26,      /* EBX: hostname; returns resolver handle */
     SYS_DNS_POLL = 27,       /* EBX: resolver handle, ECX: writable IPv4 output */
-    SYS_MEMORY_INFO = 28     /* EBX: writable user_memory_info_t; 0 success, -1 invalid */
+    SYS_MEMORY_INFO = 28, /* EBX: writable user_memory_info_t */
+    SYS_AUDIO_INIT = 29, /* EBX: sample rate, signed 16-bit stereo PCM */
+    SYS_AUDIO_WRITE = 30, /* EBX: PCM data, ECX: bytes (4..16384, multiple of 4) */
+    SYS_AUDIO_STATUS = 31, /* 1 playing, 0 idle, -1 unavailable */
+    SYS_AUDIO_SHUTDOWN = 32,
+    SYS_FS_READ_AT = 33 /* as FS_READ, with byte offset in ESI */
 };
 
 enum {
@@ -47,6 +52,37 @@ enum {
     USER_TCP_FIN_WAIT2 = 6,
     USER_TCP_CLOSE_WAIT = 7
 };
+
+static inline int32_t sys_audio_init(uint32_t rate) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_AUDIO_INIT), "b"(rate) : "ecx", "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_audio_write(const void* data, uint32_t length) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_AUDIO_WRITE), "b"(data), "c"(length) : "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_audio_status(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_AUDIO_STATUS) : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
+static inline void sys_audio_shutdown(void) {
+    __asm__ volatile ("int $0x80" : : "a"(SYS_AUDIO_SHUTDOWN)
+        : "ebx", "ecx", "edx", "memory", "cc");
+}
+static inline int32_t sys_fs_read_at(const char* path, void* data,
+                                   uint32_t capacity, uint32_t offset) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_READ_AT), "b"(path), "c"(data), "d"(capacity), "S"(offset)
+        : "memory", "cc");
+    return result;
+}
 
 static inline int32_t sys_write(const char* buffer, uint32_t length) {
     int32_t result;
