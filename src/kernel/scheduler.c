@@ -1,3 +1,22 @@
+/*
+
+I may have spent 3 hours trying to get the scheduler operate smoothly. 
+I am not saying it doesn't work, rather I am saying it works, but not as 
+smooth as I would like it to be. When I wrote this code, only God and I knew 
+how it worked, I took a 1-hour break, and now only God knows how it works.
+This might cost you some of your sanity, and some part of your soul. 
+If you are not ready to lose your sanity, do not read this code. 
+If you are not ready to lose your soul, do not read this code.
+
+If you still wish to proceed after all these warnings, I wish you good luck. 
+You will need it.
+
+Good luck, soldier.
+
+- elyas-code
+*/
+
+
 #include "scheduler.h"
 #include "task.h"
 
