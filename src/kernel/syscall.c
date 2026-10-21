@@ -1,3 +1,4 @@
+#include "../system/services/audio/system_sound.h"
 #include "drivers/sb16_driver.h"
 static unsigned int audio_owner;
 #include "syscall.h"
@@ -467,6 +468,7 @@ void syscall_dispatch(registers_t* regs) {
             return;
         }
         case SYS_YIELD:
+            system_sound_poll();
             sys_net_poll();
             wm_poll();
             regs->eax = 0;

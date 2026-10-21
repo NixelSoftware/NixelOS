@@ -42,7 +42,7 @@ KERNEL_C := \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \
-  src/system/services/input/input.c src/system/loader/app_loader.c \
+  src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/loader/app_loader.c \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \

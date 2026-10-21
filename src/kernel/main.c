@@ -1,3 +1,4 @@
+#include "../system/services/audio/system_sound.h"
 #include "types.h"
 #include "../system/graphics/wm/cursor.h"
 #include "drivers/display/font.h"
@@ -312,6 +313,9 @@ static void kernel_finish_boot(void) {
     needs_redraw = 0;
     debug_print("[INIT] Enable interrupt...\n");
     __asm__ volatile ("sti");
+
+    system_sound_start();
+
 }
 
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
@@ -356,6 +360,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     // This fucking cursor shit is pissing me off
     debug_print("[INIT] Entering system event loop.\n");
     for (;;) {
+        system_sound_poll();
         sys_net_poll(); //- zainabm: readd function if causing any weird problems
         wm_poll();
     }

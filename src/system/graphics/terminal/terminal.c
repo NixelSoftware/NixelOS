@@ -21,7 +21,6 @@ static const uint32_t ansi_palette[16] = {
     0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF
 };
 static unsigned ansi_fg = 7, ansi_bg, ansi_bold, ansi_inverse;
-/* Parser state survives separate writes, including the syscall's 256-byte chunks. */
 static unsigned ansi_state, ansi_count, ansi_params[16], ansi_invalid;
 
 static void terminal_reset_style(void) {
@@ -42,13 +41,11 @@ static void terminal_sgr(void) {
         else if (p >= 100 && p <= 107) ansi_bg = p - 100 + 8;
         else if (p == 39) ansi_fg = 7;
         else if (p == 49) ansi_bg = 0;
-        /* Consume unsupported extended colors as a unit, never as SGR codes. */
         else if (p == 38 || p == 48) {
             if (i + 1 < ansi_count && ansi_params[i + 1] == 5) i += 2;
             else if (i + 1 < ansi_count && ansi_params[i + 1] == 2) i += 4;
             else break;
         }
-        /* Blink and other unsupported attributes are intentionally ignored. */
     }
 }
 
@@ -105,7 +102,6 @@ static void terminal_append_output(const char* text) {
                 ansi_params[0] = 0;
                 ansi_invalid = 0;
             } else if (ansi_state == 3) {
-                /* OSC strings (e.g. window titles) end at BEL or ESC backslash. */
                 if (c == 7 || c == '\\') ansi_state = 0;
             } else if (c >= 0x40 && c <= 0x7E) {
                 if (c == 'm' && !ansi_invalid) terminal_sgr();
@@ -191,7 +187,6 @@ static void terminal_draw(Window* win) {
     for (int r = 0; r <= term_cursor_row; ++r) {
         int len = 0;
         while (term_lines[r][len]) ++len;
-        /* Include a row for the caret when it falls exactly on a wrap. */
         int used = r == term_cursor_row ? term_cursor_col + 1 : len;
         total += used ? (used + cols - 1) / cols : 1;
     }
@@ -276,8 +271,8 @@ void terminal_init(os_api_t* api) {
     terminal_api = api;
     terminal_window.x = 10;
     terminal_window.y = 30;
-    terminal_window.w = 780;
-    terminal_window.h = 420;
+    terminal_window.w = 300;
+    terminal_window.h = 200;
     terminal_window.title = "Terminal";
     terminal_window.visible = 1;
     terminal_window.focused = 1;
