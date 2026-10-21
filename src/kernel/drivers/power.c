@@ -41,6 +41,8 @@ void power_shutdown(void) {
 void power_reboot(void) {
     debug_print("[POWER] Initiating system reboot...\n");
 
+    acpi_reboot();
+    
     uint8_t temp;
     do {
         temp = inb(0x64);

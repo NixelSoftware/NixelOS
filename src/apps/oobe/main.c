@@ -21,23 +21,17 @@ int app_main(os_api_t* api) {
     const int btn_w = 140;
     const int btn_h = 36;
 
-    
     while (1) {
-        
         if (api->network.net_poll) {
             api->network.net_poll();
         }
 
         
         if (needs_full_draw) {
-            
             api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0x00003366);
-
-            
             api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 56, 0x00002244);
             api->graphics.draw_string(24, 20, "NixelOS Out-of-Box Experience", COLOR_WHITE);
 
-            
             api->graphics.fill_rect(card_x, card_y, card_w, card_h, COLOR_WIN_BG);
 
             
@@ -55,7 +49,6 @@ int app_main(os_api_t* api) {
             
             api->graphics.draw_button(btn_x, btn_y, btn_w, btn_h, "Finish Setup", 0);
 
-            
             api->graphics.blit_all();
             needs_full_draw = 0;
         }
@@ -65,7 +58,7 @@ int app_main(os_api_t* api) {
         while (api->input.poll_input && api->input.poll_input(&ev)) {
             if (ev.type == OS_INPUT_MOUSE) {
                 mouse_x += ev.mouse_dx;
-                mouse_y -= ev.mouse_dy; 
+                mouse_y -= ev.mouse_dy;
 
                 if (mouse_x < 0) mouse_x = 0;
                 if (mouse_x >= SCREEN_WIDTH) mouse_x = SCREEN_WIDTH - 1;
@@ -82,17 +75,32 @@ int app_main(os_api_t* api) {
                 if (left_click) {
                     if (mouse_x >= btn_x && mouse_x <= (btn_x + btn_w) &&
                         mouse_y >= btn_y && mouse_y <= (btn_y + btn_h)) {
+
                         
                         const char marker = '1';
                         api->fs.write("OOBE.DON", (const uint8_t*)&marker, 1);
+
+                        
+                        api->graphics.fill_rect(card_x + 30, card_y + 200, 400, 20, COLOR_WIN_BG);
+                        api->graphics.draw_string(card_x + 30, card_y + 200, "Restarting computer...", COLOR_BLACK);
+                        api->graphics.blit_all();
+
+                        
+                        if (api->system.reboot) {
+                            api->system.reboot();
+                        }
                         return 0;
                     }
                 }
             } else if (ev.type == OS_INPUT_KEY) {
                 char ch = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
-                if (ch == '\n' || ch == 27 || ch == ' ') {
+                if (ch == '\n' || ch == ' ') {
                     const char marker = '1';
                     api->fs.write("OOBE.DON", (const uint8_t*)&marker, 1);
+
+                    if (api->system.reboot) {
+                        api->system.reboot();
+                    }
                     return 0;
                 }
             }
