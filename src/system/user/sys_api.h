@@ -38,7 +38,7 @@ enum {
     SYS_DNS_POLL = 27,       /* EBX: resolver handle, ECX: writable IPv4 output */
     SYS_MEMORY_INFO = 28, /* EBX: writable user_memory_info_t */
     SYS_AUDIO_INIT = 29, /* EBX: sample rate, signed 16-bit stereo PCM */
-    SYS_AUDIO_WRITE = 30, /* EBX: PCM data, ECX: bytes (4..16384, multiple of 4) */
+    SYS_AUDIO_WRITE = 30, /* EBX: PCM data, ECX: bytes (4..16384, multiple of 4); 0 queue full, positive bytes accepted */
     SYS_AUDIO_STATUS = 31, /* 1 playing, 0 idle, -1 unavailable */
     SYS_AUDIO_SHUTDOWN = 32,
     SYS_FS_READ_AT = 33 /* as FS_READ, with byte offset in ESI */

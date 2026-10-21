@@ -82,17 +82,26 @@ static uint32_t cluster_to_lba(uint32_t cluster) {
     return cluster_begin_lba + ((cluster - 2) * sectors_per_cluster);
 }
 
+/* Separate from sector_buffer, which file and directory reads overwrite. */
+static uint32_t cached_fat_sector = 0xFFFFFFFFu;
+static uint32_t cached_fat[128];
+
 static uint32_t get_next_cluster(uint32_t current_cluster) {
     uint32_t fat_offset = current_cluster * 4;
     uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
     uint32_t entry_offset = fat_offset % 512;
 
-    if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0x0FFFFFFF;
-    uint32_t next = *(uint32_t*)&sector_buffer[entry_offset];
+    if (cached_fat_sector != fat_sector) {
+        cached_fat_sector = 0xFFFFFFFFu;
+        if (!ata_read_sectors(fat_sector, 1, (uint8_t*)cached_fat)) return 0x0FFFFFFF;
+        cached_fat_sector = fat_sector;
+    }
+    uint32_t next = cached_fat[entry_offset / 4];
     return next & 0x0FFFFFFF;
 }
 
 static void set_cluster_entry(uint32_t cluster, uint32_t value) {
+    cached_fat_sector = 0xFFFFFFFFu;
     uint32_t fat_offset = cluster * 4;
     uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
     uint32_t entry_offset = fat_offset % 512;
@@ -225,6 +234,7 @@ static int resolve_path(const char* path, uint32_t* parent_cluster, char final_8
 }
 
 void fs_init(void) {
+    cached_fat_sector = 0xFFFFFFFFu;
     fs_ready = 0;
     debug_print("[FAT32] Initializing filesystem at LBA 500...\n");
 

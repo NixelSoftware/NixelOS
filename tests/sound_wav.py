@@ -28,6 +28,7 @@ static int32_t sys_fs_read_at(const char* p, void* d, uint32_t n, uint32_t offse
 static int32_t sys_audio_init(uint32_t rate) { assert(rate == 44100); initialized++; return 0; }
 static void sys_audio_shutdown(void) { closed++; }
 static int32_t sys_audio_write(const void* p, uint32_t n) {
+    if (busy) return 0; /* exercise queue backpressure and retry */
     const uint8_t* b = p;
     for (uint32_t i=0; i<n; i++) assert(b[i] == (eight_bit ? ((i & 1) ? (uint8_t)(((played+i)/4) - 128) : 0) : (uint8_t)(played+i)));
     played += n; busy = 1; return n;
@@ -61,6 +62,9 @@ int main(void) {
     fixture(); eight_bit=1; file[22]=1; file[32]=1; file[34]=8;
     put32(28,44100); file_size=44+256; put32(4,file_size-8); put32(40,256);
     run(); assert(!exit_status && played==1024 && closed==1);
+    fixture();
+    if (!setjmp(jump)) user_main("--process-only test.wav");
+    assert(!exit_status && !initialized && !played && !closed);
     return 0;
 }
 '''
