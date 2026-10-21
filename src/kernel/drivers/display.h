@@ -16,6 +16,7 @@
 #define COLOR_TITLE_INACT 0x00808080   
 
 void display_init(uint32_t lfb_addr, uint32_t bpp, uint32_t pitch);
+int display_start_async(void);
 void display_clear(uint32_t color);
 void display_blit(void);
 void display_blit_rect(int32_t x, int32_t y, int32_t w, int32_t h);

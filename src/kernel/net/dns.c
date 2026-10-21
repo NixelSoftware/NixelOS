@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "dns.h"
 #include "udp.h"
 #include "dhcp.h"
@@ -6,7 +7,6 @@
 #define DNS_PORT 53
 #define DNS_MAX_NAME 253
 #define DNS_PACKET_SIZE 512
-#define DNS_TIMEOUT 100000
 #define PRIMARY_DNS_SERVER 0x01010101
 #define DNS_ASYNC_TIMEOUT_TICKS 500u
 extern volatile uint32_t frame_timer;
@@ -41,20 +41,6 @@ static uint8_t start_query_server(uint32_t server, uint16_t id, uint16_t length)
     udp_disconnect(dns_socket);
     dns_socket = 0;
     return 0;
-}
-
-static uint8_t query_server(uint32_t server, uint16_t id, uint16_t length) {
-    if (!start_query_server(server, id, length)) return 0;
-    if (dns_socket) {
-        for (uint32_t i = 0; i < DNS_TIMEOUT && !dns_done; i++) {
-            sys_net_poll();
-            for (volatile int delay = 0; delay < 20; delay++)
-                __asm__ volatile ("pause");
-        }
-    }
-    udp_disconnect(dns_socket);
-    dns_socket = 0;
-    return dns_success;
 }
 
 static uint16_t read_be16(const uint8_t* data) {
@@ -127,62 +113,14 @@ static void dns_receive(udp_socket_t* socket, uint32_t source_ip,
 }
 
 uint8_t dns_resolve(const char* hostname, uint32_t* address) {
-    uint32_t dns_server;
-    uint16_t offset = 13;
-    uint16_t label_start = 12;
-    uint16_t label_length = 0;
-    uint16_t hostname_length = 0;
-    uint16_t id;
-
-    if (!hostname || !*hostname || !address || dns_async_active) return 0;
-    {
-        const dhcp_lease_t* lease = dhcp_get_lease();
-        dns_server = lease && lease->leased && lease->dns
-                   ? lease->dns : PRIMARY_DNS_SERVER;
-    }
-    id = ++next_dns_id;
-    for (uint16_t i = 0; i <= DNS_MAX_NAME && hostname[i]; i++) {
-        if (++hostname_length > DNS_MAX_NAME) return 0;
-        if (hostname[i] == '.') {
-            if (label_length == 0 || label_length > 63 || offset + label_length + 2 >= DNS_PACKET_SIZE) return 0;
-            dns_packet[label_start] = (uint8_t)label_length;
-            label_start = offset++;
-            label_length = 0;
-        } else {
-            if ((uint8_t)hostname[i] < 0x21 || hostname[i] == 0x7F) return 0;
-            if (offset >= DNS_PACKET_SIZE - 1) return 0;
-            dns_packet[offset++] = (uint8_t)hostname[i];
-            label_length++;
-        }
-    }
-    if (label_length == 0 || label_length > 63
-        || offset >= DNS_PACKET_SIZE - 5) return 0;
-    dns_packet[label_start] = (uint8_t)label_length;
-    dns_packet[offset++] = 0;
-    dns_packet[offset++] = 0;
-    dns_packet[offset++] = 1;
-    dns_packet[offset++] = 0;
-    dns_packet[offset++] = 1;
-
-    for (uint16_t i = 0; i < 12; i++) dns_packet[i] = 0;
-    dns_packet[2] = 1;
-    dns_packet[5] = 1;
-    if (!query_server(dns_server, id, offset)
-        && dns_server != PRIMARY_DNS_SERVER) {
-        /* DHCP-provided resolvers can be absent or unreachable. Retry this
-           lookup against the public fallback instead of failing the first
-           caller and relying on a later invocation. */
-        id = ++next_dns_id;
-        if (!query_server(PRIMARY_DNS_SERVER, id, offset)) return 0;
-    } else if (!dns_success) {
-        return 0;
-    }
-    if (!dns_success) return 0;
-    *address = dns_address;
-    return 1;
+    if (!address || !dns_resolve_async_start(hostname)) return 0;
+    int result;
+    while ((result = dns_resolve_async_poll(address)) == 0) task_sleep_ms(1);
+    return result == 1;
 }
 
 uint8_t dns_resolve_async_start(const char* hostname) {
+    MUTEX_GUARD(kernel_mutex);
     uint32_t dns_server;
     uint16_t offset = 13;
     uint16_t label_start = 12;
@@ -246,6 +184,7 @@ uint8_t dns_resolve_async_start(const char* hostname) {
 }
 
 int dns_resolve_async_poll(uint32_t* address) {
+    MUTEX_GUARD(kernel_mutex);
     if (!dns_async_active || !address) return -1;
     if (!dns_done && (uint32_t)(frame_timer - dns_async_started_tick) <
                      DNS_ASYNC_TIMEOUT_TICKS) return 0;
@@ -272,6 +211,7 @@ int dns_resolve_async_poll(uint32_t* address) {
 }
 
 void dns_resolve_async_cancel(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (!dns_async_active) return;
     udp_disconnect(dns_socket);
     dns_socket = 0;

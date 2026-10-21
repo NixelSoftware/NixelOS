@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "ata.h"
 
 #define ATA_DATA         0x1F0
@@ -21,6 +22,10 @@
 static int ata_wait_ready(void) {
     for (volatile int i = 0; i < 100000; i++) {
         uint8_t status = inb(ATA_STATUS);
+        if ((status & ATA_STATUS_BSY) && i > 16 && scheduler_running()) {
+            if (i > 116) return 0;
+            task_sleep_ms(1);
+        }
         if (!(status & ATA_STATUS_BSY)) {
             return 1;
         }
@@ -31,6 +36,10 @@ static int ata_wait_ready(void) {
 static int ata_wait_drq(void) {
     for (volatile int i = 0; i < 100000; i++) {
         uint8_t status = inb(ATA_STATUS);
+        if ((status & ATA_STATUS_BSY) && i > 16 && scheduler_running()) {
+            if (i > 116) return 0;
+            task_sleep_ms(1);
+        }
         if (status & (ATA_STATUS_ERR | ATA_STATUS_DF)) return 0;
         if (!(status & ATA_STATUS_BSY) && (status & ATA_STATUS_DRQ)) {
             return 1;
@@ -47,6 +56,7 @@ static void ata_delay_400ns(void) {
 }
 
 int ata_read_sectors(uint32_t lba, uint8_t sector_count, uint8_t* buffer) {
+    MUTEX_GUARD(filesystem_mutex);
     if (!ata_wait_ready()) return 0;
 
     outb(ATA_DRIVE_SELECT, 0xE0 | ((lba >> 24) & 0x0F));
@@ -62,14 +72,14 @@ int ata_read_sectors(uint32_t lba, uint8_t sector_count, uint8_t* buffer) {
         ata_delay_400ns();
         if (!ata_wait_drq()) return 0;
 
-        for (int i = 0; i < 256; i++) {
-            *ptr++ = inw(ATA_DATA);
-        }
+        uint32_t words = 256;
+        __asm__ volatile ("cld; rep insw" : "+D"(ptr), "+c"(words) : "d"((uint16_t)ATA_DATA) : "memory");
     }
     return 1;
 }
 
 int ata_write_sectors(uint32_t lba, uint8_t sector_count, const uint8_t* buffer) {
+    MUTEX_GUARD(filesystem_mutex);
     if (!ata_wait_ready()) return 0;
 
     outb(ATA_DRIVE_SELECT, 0xE0 | ((lba >> 24) & 0x0F));
@@ -85,9 +95,8 @@ int ata_write_sectors(uint32_t lba, uint8_t sector_count, const uint8_t* buffer)
         ata_delay_400ns();
         if (!ata_wait_drq()) return 0;
 
-        for (int i = 0; i < 256; i++) {
-            outw(ATA_DATA, *ptr++);
-        }
+        uint32_t words = 256;
+        __asm__ volatile ("cld; rep outsw" : "+S"(ptr), "+c"(words) : "d"((uint16_t)ATA_DATA) : "memory");
     }
 
     

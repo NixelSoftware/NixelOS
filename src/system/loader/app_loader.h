@@ -3,7 +3,7 @@
 
 #include "../../kernel/os_api.h"
 
-/* Loads a flat binary into a fresh private virtual address space. */
+/* Loads into a private address space and queues a task. Returns immediately. */
 int app_loader_launch(os_api_t* api, const char* name, const char* arguments);
 
 /* Window manager lifetime hooks for app-owned windows and callbacks. */

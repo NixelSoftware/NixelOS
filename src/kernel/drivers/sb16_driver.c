@@ -1,3 +1,4 @@
+#include "../mutex.h"
 /* Sound Blaster 16: base 0x220, IRQ 5, 16-bit DMA channel 5.
  * Original ECE391 driver by Soumithri Bala; ported to NixelOS.
  */
@@ -14,11 +15,17 @@ static void report(const char* name, uint32_t value) {
 }
 
 
+#define AUDIO_SLOTS 8u
+
 /* Identity-mapped kernel memory, below 16 MiB, within one ISA DMA page. */
-static uint8_t dma_buffer[SB16_BUFFER_SIZE * 2] __attribute__((aligned(131072)));
+static uint8_t dma_buffer[SB16_BUFFER_SIZE * AUDIO_SLOTS] __attribute__((aligned(131072)));
 static volatile int playing;
 static int opened;
-static uint32_t active_slot, queued_length;
+#define SLOT_FILLING 0xFFFFFFFFu
+static volatile uint32_t slot_length[AUDIO_SLOTS];
+static volatile uint32_t read_slot, write_slot, queued_count;
+static uint32_t active_slot, auto_start_slot, first_queued;
+static int auto_dma, auto_exit_pending, draining;
 
 static uint32_t irq_save(void) {
     uint32_t flags;
@@ -32,7 +39,7 @@ static void irq_restore(uint32_t flags) {
 static uint8_t saved_irq_mask;
 
 static int dsp_write(uint8_t value) {
-    for (uint32_t i = 0; i < 100000u; i++) {
+    for (uint32_t i = 0; i < 1024u; i++) {
         if (!(inb(0x22C) & 0x80)) { outb(0x22C, value); return 0; }
     }
     return -1;
@@ -47,23 +54,35 @@ static int reset(void) {
     return -1;
 }
 
+/* Safe in IRQ context: no reset delays or serial output. */
+static void quiesce(void) {
+    outb(0xD4, 5);
+    outb(0x21, inb(0x21) | 0x20u);
+    playing = -1;
+    queued_count = 0;
+}
+
 void sb16_shutdown(void) {
+    MUTEX_GUARD(audio_mutex);
     if (!opened) return;
     uint32_t flags = irq_save();
+    quiesce();
+    opened = 0;
+    irq_restore(flags);
+    /* Reset and diagnostics can be slow; keep timer/input IRQs available. */
+    (void)reset();
+    flags = irq_save();
+    outb(0x21, (inb(0x21) & ~0x20u) | saved_irq_mask);
+    irq_restore(flags);
     debug_print("[AUDIO] playback counters (hex):");
     report(" rate=", sample_rate);
     report(" accepted=", accepted_bytes); report(" completed=", completed_bytes);
     report(" blocks=", completed_blocks); report(" slow_blocks=", slow_blocks);
     report(" refill_stalls=", refill_stalls); debug_print("\n");
-    outb(0xD4, 5); /* mask DMA channel 5 */
-    (void)reset();
-    outb(0x21, (inb(0x21) & ~0x20u) | saved_irq_mask);
-    opened = playing = 0;
-    queued_length = 0;
-    irq_restore(flags);
 }
 
 int32_t sb16_init(uint32_t rate) {
+    MUTEX_GUARD(audio_mutex);
     if (opened || rate < 5000u || rate > 48000u ||
         (uint32_t)dma_buffer + sizeof(dma_buffer) > 0x1000000u) return -1;
     if (reset() < 0) return -1;
@@ -83,7 +102,10 @@ int32_t sb16_init(uint32_t rate) {
     sample_rate = rate;
     accepted_bytes = completed_bytes = completed_blocks = 0;
     slow_blocks = refill_stalls = 0;
-    active_slot = queued_length = 0;
+    active_slot = read_slot = write_slot = queued_count = 0;
+    auto_dma = draining = 0;
+    for (uint32_t i = 0; i < AUDIO_SLOTS; i++) slot_length[i] = 0;
+    playing = 0;
     opened = 1;
     if (dsp_write(0x41) < 0 || dsp_write(rate >> 8) < 0 ||
         dsp_write(rate) < 0 || dsp_write(0xD1) < 0) {
@@ -94,68 +116,150 @@ int32_t sb16_init(uint32_t rate) {
     return 0;
 }
 
-static int32_t start_block(uint32_t slot, uint32_t length) {
+/* Ask the DSP to stop exactly at the declared end of the stream or before
+ * a known short tail. Otherwise an auto-init device may fetch into the next slot
+ * before the CPU handles the boundary IRQ. */
+static int prepare_boundary(void) {
+    if (auto_dma && !auto_exit_pending &&
+        ((draining && queued_count == 1) ||
+         (slot_length[(active_slot + 1u) % AUDIO_SLOTS] > 0 &&
+          slot_length[(active_slot + 1u) % AUDIO_SLOTS] < SB16_BUFFER_SIZE))) {
+        if (dsp_write(0xD9) < 0) { quiesce(); return -1; }
+        auto_exit_pending = 1;
+    }
+    return 0;
+}
+
+/* Full blocks use a cyclic DMA buffer: the DSP and DMA controller continue
+ * at block boundaries without waiting for the interrupt handler. Short writes
+ * use an exact-length single-cycle transfer, preserving the public ABI. */
+static int start_block(uint32_t slot) {
+    uint32_t length = slot_length[slot];
+    auto_dma = length == SB16_BUFFER_SIZE;
+    auto_exit_pending = 0;
+    auto_start_slot = slot;
     uint32_t address = (uint32_t)(dma_buffer + slot * SB16_BUFFER_SIZE);
-    uint32_t count = length / 2u - 1u;
+    uint32_t dma_length = auto_dma ? (AUDIO_SLOTS - slot) * SB16_BUFFER_SIZE : length;
+    uint32_t count = dma_length / 2u - 1u;
     outb(0xD4, 5);
     outb(0xD8, 0);
-    outb(0xD6, 0x49); /* single transfer, memory to device, channel 5 */
+    outb(0xD6, auto_dma ? 0x59 : 0x49);
     outb(0xC4, address >> 1); outb(0xC4, address >> 9);
     outb(0x8B, address >> 16);
     outb(0xD8, 0);
     outb(0xC6, count); outb(0xC6, count >> 8);
-    playing = 1;
-    outb(0xD4, 1);
-    /* DMA counts 16-bit words; single-cycle stereo DSP counts frames.
-     * QEMU multiplies the latter by both channels and sample width.
-     * Reusing the DMA count makes its DSP wait for twice the DMA bytes.
-     */
-    uint32_t dsp_count = length / 4u - 1u;
+    active_slot = slot;
     block_length = length;
     block_started = frame_timer;
-    if (dsp_write(0xB0) < 0 || dsp_write(0x30) < 0 ||
+    /* SB16 auto-init counts 16-bit samples, including both channels. QEMU's
+     * single-cycle stereo command instead expands a frame count by 4 bytes. */
+    uint32_t dsp_count = length / (auto_dma ? 2u : 4u) - 1u;
+    playing = 1;
+    outb(0xD4, 1);
+    if (dsp_write(auto_dma ? 0xB6 : 0xB0) < 0 || dsp_write(0x30) < 0 ||
         dsp_write(dsp_count) < 0 || dsp_write(dsp_count >> 8) < 0) {
-        sb16_shutdown(); return -1;
+        quiesce(); return -1;
     }
-    return (int32_t)length;
+    return prepare_boundary();
 }
 
-int32_t sb16_write(const void* data, uint32_t length) {
-    if (!opened || !data || !length || length > SB16_BUFFER_SIZE || (length & 3u)) return -1;
+static void pause_dma(void) {
+    outb(0xD4, 5);
+    if (auto_dma && dsp_write(0xD5) < 0) { quiesce(); return; }
+    playing = 0;
+}
+
+void sb16_service(void) {
+    MUTEX_GUARD(audio_mutex);
     uint32_t flags = irq_save();
-    if (queued_length) { irq_restore(flags); return 0; }
-    uint32_t slot = playing ? active_slot ^ 1u : active_slot;
-    const uint8_t* source = data;
-    for (uint32_t i = 0; i < length; i++) dma_buffer[slot * SB16_BUFFER_SIZE + i] = source[i];
-    int32_t result = length;
-    if (playing) queued_length = length;
-    else {
-        if (completed_blocks) refill_stalls++;
-        result = start_block(slot, length);
+    if (opened && playing == 0 && queued_count &&
+        slot_length[read_slot] != SLOT_FILLING) {
+        /* Two blocks of prefill avoid starting a full-rate stream with only
+         * one block ready. A short/final stream starts within 20 ms. */
+        if (draining || queued_count >= 2 || slot_length[read_slot] < SB16_BUFFER_SIZE ||
+            (uint32_t)(frame_timer - first_queued) >= 2u) {
+            (void)start_block(read_slot);
+        }
     }
-    if (result > 0) accepted_bytes += length;
     irq_restore(flags);
+}
+
+int32_t sb16_drain(void) {
+    MUTEX_GUARD(audio_mutex);
+    uint32_t flags = irq_save();
+    if (!opened || playing < 0) { irq_restore(flags); return -1; }
+    draining = 1;
+    int result = prepare_boundary();
+    irq_restore(flags);
+    sb16_service();
     return result;
 }
 
-int32_t sb16_status(void) { return opened ? playing : -1; }
+int32_t sb16_write(const void* data, uint32_t length) {
+    MUTEX_GUARD(audio_mutex);
+    if (!opened || playing < 0 || draining || !data || !length || length > SB16_BUFFER_SIZE || (length & 3u)) return -1;
+    uint32_t flags = irq_save();
+    if (queued_count == AUDIO_SLOTS) { irq_restore(flags); return 0; }
+    uint32_t slot = write_slot;
+    if (!queued_count) {
+        first_queued = frame_timer;
+        if (completed_blocks) refill_stalls++;
+    }
+    slot_length[slot] = SLOT_FILLING;
+    write_slot = (slot + 1u) % AUDIO_SLOTS;
+    queued_count++;
+    irq_restore(flags);
+    /* Only this producer owns the reserved slot. The IRQ cannot consume a
+     * SLOT_FILLING entry; all sample copying leaves timer/input IRQs enabled. */
+    const uint32_t* source = data;
+    uint32_t* dest = (uint32_t*)(dma_buffer + slot * SB16_BUFFER_SIZE);
+    uint32_t count = length / sizeof(uint32_t);
+    __asm__ volatile ("cld; rep movsl" : "+S"(source), "+D"(dest), "+c"(count) : : "memory");
+    flags = irq_save();
+    if (playing < 0) { irq_restore(flags); return -1; }
+    slot_length[slot] = length;
+    accepted_bytes += length;
+    irq_restore(flags);
+    sb16_service();
+    return (int32_t)length;
+}
 
-/* Start the queued block before returning to user space. No disk I/O here. */
+int32_t sb16_status(void) {
+    MUTEX_GUARD(audio_mutex);
+    sb16_service();
+    return !opened || playing < 0 ? -1 : (playing || queued_count ? 1 : 0);
+}
+
+/* Normal full-block IRQs only acknowledge, account, and release a queue slot.
+ * DMA runs continuously; no copies, disk I/O, mutexes or DSP restarts here.
+ * Reprogram only on drain/underrun, short writes, or a nonzero-base restart. */
 void sb16_interrupt(void) {
     (void)inb(0x22F);
-    if (opened && playing) {
+    if (opened && playing > 0) {
         uint32_t elapsed = frame_timer - block_started;
         uint32_t expected = (block_length * 100u + sample_rate * 4u - 1u) / (sample_rate * 4u);
         if (elapsed > expected + expected / 4u + 2u) slow_blocks++;
         completed_bytes += block_length;
         completed_blocks++;
-    }
-    playing = 0;
-    if (opened && queued_length) {
-        uint32_t length = queued_length;
-        queued_length = 0;
-        active_slot ^= 1u;
-        (void)start_block(active_slot, length);
+        slot_length[active_slot] = 0;
+        read_slot = (active_slot + 1u) % AUDIO_SLOTS;
+        queued_count--;
+        uint32_t next_length = slot_length[read_slot];
+        if (queued_count && next_length && next_length != SLOT_FILLING) {
+            if (auto_dma && !auto_exit_pending && next_length == SB16_BUFFER_SIZE &&
+                (read_slot != 0 || auto_start_slot == 0)) {
+                active_slot = read_slot;
+                block_length = next_length;
+                block_started = frame_timer;
+                (void)prepare_boundary();
+            } else {
+                pause_dma();
+                if (playing >= 0) (void)start_block(read_slot);
+            }
+        } else {
+            if (queued_count) refill_stalls++; /* producer still copying */
+            pause_dma();
+        }
     }
     outb(0x20, 0x20);
 }

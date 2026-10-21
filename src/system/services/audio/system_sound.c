@@ -69,7 +69,7 @@ void system_sound_poll(void) {
         stop(); return;
     }
     if (!remaining && !pending) {
-        if (sb16_status() == 0) stop();
+        if (sb16_drain() < 0 || sb16_status() == 0) stop();
         return;
     }
     if (!pending) {

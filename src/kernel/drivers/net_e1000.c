@@ -392,7 +392,8 @@ void e1000_poll(void) {
         }
     }
 
-    while (rx_descs[rx_cur].status & RX_STATUS_DD) {
+    /* Return to input/rendering even when the NIC keeps refilling the ring. */
+    for (uint32_t budget = 8; budget && (rx_descs[rx_cur].status & RX_STATUS_DD); budget--) {
         e1000_rx_desc_t* desc = &rx_descs[rx_cur];
         uint16_t length = desc->length;
         diag.last_rx_length = length;

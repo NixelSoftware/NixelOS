@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "floppy.h"
 
 
@@ -147,6 +148,7 @@ static void lba_to_chs(uint32_t lba, uint8_t* cyl, uint8_t* head, uint8_t* sec) 
 }
 
 int floppy_init(void) {
+    MUTEX_GUARD(floppy_mutex);
     
     outb(FDC_DOR, 0x00);
     fdc_delay(10);
@@ -232,6 +234,7 @@ static int floppy_transfer_sector(uint32_t lba, uint8_t* buf, int is_write) {
 }
 
 int floppy_read_sectors(uint32_t lba, uint8_t count, uint8_t* buffer) {
+    MUTEX_GUARD(floppy_mutex);
     for (uint8_t s = 0; s < count; s++) {
         int ok = 0;
         for (int retry = 0; retry < 3; retry++) {
@@ -251,6 +254,7 @@ int floppy_read_sectors(uint32_t lba, uint8_t count, uint8_t* buffer) {
 }
 
 int floppy_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buffer) {
+    MUTEX_GUARD(floppy_mutex);
     for (uint8_t s = 0; s < count; s++) {
         int ok = 0;
         for (int retry = 0; retry < 3; retry++) {

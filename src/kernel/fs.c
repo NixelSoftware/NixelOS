@@ -1,3 +1,4 @@
+#include "mutex.h"
 #include "fs.h"
 #include "drivers/ata.h"
 #include "drivers/serial.h"
@@ -85,6 +86,14 @@ static uint32_t cluster_to_lba(uint32_t cluster) {
 /* Separate from sector_buffer, which file and directory reads overwrite. */
 static uint32_t cached_fat_sector = 0xFFFFFFFFu;
 static uint32_t cached_fat[128];
+/* Streaming reads resume their FAT walk instead of rescanning from byte zero
+ * for every PCM chunk. Separate cursors allow concurrent readers. */
+#define FS_READ_CURSORS 8u
+typedef struct {
+    uint32_t first, size, cluster, offset;
+} read_cursor_t;
+static read_cursor_t read_cursors[FS_READ_CURSORS];
+static uint32_t next_read_cursor;
 
 static uint32_t get_next_cluster(uint32_t current_cluster) {
     uint32_t fat_offset = current_cluster * 4;
@@ -101,6 +110,7 @@ static uint32_t get_next_cluster(uint32_t current_cluster) {
 }
 
 static void set_cluster_entry(uint32_t cluster, uint32_t value) {
+    for (uint32_t i = 0; i < FS_READ_CURSORS; i++) read_cursors[i].first = 0;
     cached_fat_sector = 0xFFFFFFFFu;
     uint32_t fat_offset = cluster * 4;
     uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
@@ -234,6 +244,8 @@ static int resolve_path(const char* path, uint32_t* parent_cluster, char final_8
 }
 
 void fs_init(void) {
+    MUTEX_GUARD(filesystem_mutex);
+    for (uint32_t i = 0; i < FS_READ_CURSORS; i++) read_cursors[i].first = 0;
     cached_fat_sector = 0xFFFFFFFFu;
     fs_ready = 0;
     debug_print("[FAT32] Initializing filesystem at LBA 500...\n");
@@ -264,6 +276,7 @@ void fs_init(void) {
 }
 
 int fs_list_dir(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
+    MUTEX_GUARD(filesystem_mutex);
     if (!fs_ready) return 0;
     uint32_t dir_cluster = root_cluster;
 
@@ -304,15 +317,18 @@ int fs_list_dir(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENA
 }
 
 int fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
+    MUTEX_GUARD(filesystem_mutex);
     return fs_list_dir("/", file_list_out);
 }
 
 int fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes) {
+    MUTEX_GUARD(filesystem_mutex);
     return fs_read_file_at(filename, dest, max_bytes, 0);
 }
 
 int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity,
                     uint32_t offset) {
+    MUTEX_GUARD(filesystem_mutex);
     if (!fs_ready || !filename) return -1;
     uint32_t parent;
     char name[11];
@@ -326,14 +342,33 @@ int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity,
     if (remaining > capacity) remaining = capacity;
     uint32_t cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
     uint32_t cluster_bytes = sectors_per_cluster * 512u;
+    uint32_t first_cluster = cluster, cluster_offset = 0;
+    read_cursor_t* cursor = 0;
+    for (uint32_t i = 0; i < FS_READ_CURSORS; i++) {
+        if (read_cursors[i].first == first_cluster && read_cursors[i].size == entry.file_size) {
+            cursor = &read_cursors[i];
+            if (offset >= cursor->offset) {
+                cluster = cursor->cluster;
+                cluster_offset = cursor->offset;
+                offset -= cluster_offset;
+            }
+            break;
+        }
+    }
+    if (!cursor) cursor = &read_cursors[next_read_cursor++ % FS_READ_CURSORS];
     uint32_t hops = 0;
     while (offset >= cluster_bytes && cluster >= 2 && cluster < 0x0FFFFFF8) {
         if (++hops > entry.file_size / cluster_bytes + 1u) return -1;
         cluster = get_next_cluster(cluster);
         offset -= cluster_bytes;
+        cluster_offset += cluster_bytes;
     }
     uint32_t copied = 0;
     while (cluster >= 2 && cluster < 0x0FFFFFF8 && copied < remaining) {
+        cursor->first = first_cluster;
+        cursor->size = entry.file_size;
+        cursor->cluster = cluster;
+        cursor->offset = cluster_offset;
         uint32_t lba = cluster_to_lba(cluster);
         for (uint32_t sector = offset / 512u;
              sector < sectors_per_cluster && copied < remaining; sector++) {
@@ -346,11 +381,13 @@ int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity,
             offset = 0;
         }
         cluster = get_next_cluster(cluster);
+        cluster_offset += cluster_bytes;
     }
     return copied == remaining ? (int)copied : -1;
 }
 
 int fs_delete_file(const char* filename) {
+    MUTEX_GUARD(filesystem_mutex);
     if (!fs_ready || !filename) return 0;
 
     uint32_t parent_cluster;
@@ -375,6 +412,7 @@ int fs_delete_file(const char* filename) {
 }
 
 int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes) {
+    MUTEX_GUARD(filesystem_mutex);
     if (!fs_ready || !filename) return -1;
 
     uint32_t parent_cluster;

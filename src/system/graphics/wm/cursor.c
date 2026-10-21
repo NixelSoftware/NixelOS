@@ -63,15 +63,11 @@ void wm_cursor_move(int32_t x, int32_t y, uint8_t fast_update) {
     cursor_y = y;
 
     if (fast_update) {
-        int32_t min_x = (last_rendered_x < cursor_x) ? last_rendered_x : cursor_x;
-        int32_t min_y = (last_rendered_y < cursor_y) ? last_rendered_y : cursor_y;
-        int32_t max_x = ((last_rendered_x > cursor_x) ? last_rendered_x : cursor_x) + CURSOR_WIDTH;
-        int32_t max_y = ((last_rendered_y > cursor_y) ? last_rendered_y : cursor_y) + CURSOR_HEIGHT;
-
-        int32_t bw = max_x - min_x;
-        int32_t bh = max_y - min_y;
-
-        display_blit_cursor_region(min_x, min_y, bw, bh, cursor_x, cursor_y, cursor_sprite);
+        /* Restore only the old footprint, then paint the new one. A long
+         * pointer move must not copy the entire rectangle between positions. */
+        display_blit_rect(last_rendered_x, last_rendered_y, CURSOR_WIDTH, CURSOR_HEIGHT);
+        display_blit_cursor_region(cursor_x, cursor_y, CURSOR_WIDTH, CURSOR_HEIGHT,
+                                   cursor_x, cursor_y, cursor_sprite);
 
         last_rendered_x = cursor_x;
         last_rendered_y = cursor_y;
@@ -84,4 +80,7 @@ void wm_cursor_draw(void) {
                                cursor_x, cursor_y, cursor_sprite);
     last_rendered_x = cursor_x;
     last_rendered_y = cursor_y;
+}
+void wm_cursor_erase(void) {
+    display_blit_rect(last_rendered_x, last_rendered_y, CURSOR_WIDTH, CURSOR_HEIGHT);
 }

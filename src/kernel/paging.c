@@ -1,3 +1,4 @@
+#include "mutex.h"
 #include "paging.h"
 
 /* The first 16 MiB contains fixed kernel buffers and the boot stack.
@@ -100,6 +101,7 @@ static uint8_t frame_is_used(uint32_t index) {
 }
 
 void paging_memory_info(user_memory_info_t* out) {
+    MUTEX_GUARD(kernel_mutex);
     uint32_t allocated = 0;
     for (uint32_t i = 0; i < FRAME_COUNT; ++i)
         if (frame_is_usable(i) && frame_is_used(i)) ++allocated;
@@ -151,6 +153,7 @@ uint8_t paging_is_enabled(void) {
 }
 
 uint32_t paging_frame_alloc(void) {
+    MUTEX_GUARD(kernel_mutex);
     for (uint32_t scanned = 0; scanned < FRAME_COUNT; scanned++) {
         uint32_t index = (next_frame + scanned) % FRAME_COUNT;
         if (!frame_is_usable(index) || frame_is_used(index)) continue;
@@ -166,6 +169,7 @@ uint32_t paging_frame_alloc(void) {
 }
 
 void paging_frame_free(uint32_t physical_address) {
+    MUTEX_GUARD(kernel_mutex);
     if (physical_address < FRAME_POOL_BASE || physical_address >= FRAME_POOL_LIMIT ||
         (physical_address & (PAGE_SIZE - 1u)) != 0) return;
 
@@ -176,6 +180,7 @@ void paging_frame_free(uint32_t physical_address) {
 }
 
 int paging_address_space_create(address_space_t* space) {
+    MUTEX_GUARD(kernel_mutex);
     if (!space) return -1;
     space->directory = 0;
     space->app_page_table = 0;
@@ -211,6 +216,7 @@ int paging_address_space_create(address_space_t* space) {
 
 int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_address,
                                     uint8_t writable, uint32_t* physical_out) {
+    MUTEX_GUARD(kernel_mutex);
     if (!space || !space->directory || !space->app_page_table ||
         virtual_address < APP_VIRTUAL_BASE || virtual_address >= APP_VIRTUAL_LIMIT ||
         (virtual_address & (PAGE_SIZE - 1u)) != 0) return -1;
@@ -227,6 +233,7 @@ int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_add
 }
 
 void paging_address_space_destroy(address_space_t* space) {
+    MUTEX_GUARD(kernel_mutex);
     if (!space || !space->directory || !space->app_page_table) return;
     if (active_directory == (uint32_t)space->directory) paging_activate_kernel();
 
@@ -249,13 +256,14 @@ void paging_activate(address_space_t* space) {
 
 void paging_activate_directory(uint32_t directory_address) {
     if (!directory_address || (directory_address & (PAGE_SIZE - 1u))) return;
+    uint32_t flags = task_irq_save();
     active_directory = directory_address;
-    __asm__ volatile ("mov %0, %%cr3" : : "r"(active_directory) : "memory");
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(directory_address) : "memory");
+    task_irq_restore(flags);
 }
 
 void paging_activate_kernel(void) {
-    active_directory = (uint32_t)page_directory;
-    __asm__ volatile ("mov %0, %%cr3" : : "r"(active_directory) : "memory");
+    paging_activate_directory((uint32_t)page_directory);
 }
 
 uint32_t paging_current_directory(void) {

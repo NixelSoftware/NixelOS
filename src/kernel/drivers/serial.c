@@ -17,10 +17,10 @@ static int is_transmit_empty(void) {
 }
 
 void debug_putc(char c) {
-    while (!is_transmit_empty()) {
+    for (unsigned budget = 256; budget; budget--) {
+        if (is_transmit_empty()) { outb(COM1_PORT, c); return; }
         __asm__ volatile ("pause");
     }
-    outb(COM1_PORT, c);
 }
 
 void debug_print(const char* str) {

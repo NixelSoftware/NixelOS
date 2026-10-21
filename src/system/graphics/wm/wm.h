@@ -16,8 +16,16 @@ void wm_bring_to_front(Window* window);
 void wm_draw_windows(void);
 void wm_draw_taskbar(uint8_t start_menu_open);
 void wm_poll(void);
+void wm_invalidate(void);
 uint8_t wm_start_menu_is_open(void);
+typedef struct {
+    uint32_t frames, over_budget;
+    uint64_t total_ns, max_ns;
+} wm_render_stats_t;
+/* Low-overhead counters for diagnosing renderer latency in a debugger. */
+extern wm_render_stats_t wm_render_stats;
 void wm_render_screen(void);
+uint8_t wm_render_drag(void);
 int32_t wm_user_window_create(const user_window_desc_t* description,
                               uint32_t owner_directory);
 int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,

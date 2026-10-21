@@ -17,7 +17,7 @@ enum {
     SYS_DNS_RESOLVE = 6,     /* EBX: hostname, ECX: writable IPv4 output */
     SYS_PING_START = 7,      /* EBX: destination IPv4, ECX: sequence; returns request handle */
     SYS_PING_POLL = 8,       /* EBX: handle, ECX: writable ms output; 0 pending, 1 reply, 2 timeout */
-    SYS_YIELD = 9,           /* services kernel event loops, then returns to the app */
+    SYS_YIELD = 9,           /* sleeps until the next timer tick; other tasks keep running */
     SYS_WINDOW_CREATE = 10,  /* EBX: readable user_window_desc_t*; returns window handle */
     SYS_WINDOW_DRAW = 11,    /* EBX: handle, ECX: readable user_window_draw_t* */
     SYS_WINDOW_POLL = 12,    /* EBX: handle, ECX: writable user_window_event_t* */
@@ -41,7 +41,8 @@ enum {
     SYS_AUDIO_WRITE = 30, /* EBX: PCM data, ECX: bytes (4..16384, multiple of 4); 0 queue full, positive bytes accepted */
     SYS_AUDIO_STATUS = 31, /* 1 playing, 0 idle, -1 unavailable */
     SYS_AUDIO_SHUTDOWN = 32,
-    SYS_FS_READ_AT = 33 /* as FS_READ, with byte offset in ESI */
+    SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
+    SYS_AUDIO_DRAIN = 34 /* finish all queued samples; rejects further writes */
 };
 
 enum {
@@ -63,6 +64,12 @@ static inline int32_t sys_audio_write(const void* data, uint32_t length) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result)
         : "0"(SYS_AUDIO_WRITE), "b"(data), "c"(length) : "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_audio_drain(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_AUDIO_DRAIN) : "ebx", "ecx", "edx", "memory", "cc");
     return result;
 }
 static inline int32_t sys_audio_status(void) {

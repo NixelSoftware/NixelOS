@@ -1,3 +1,4 @@
+#include "../../kernel/mutex.h"
 #include "commands.h"
 #include "network_commands.h"
 
@@ -166,4 +167,47 @@ void shell_execute_command(const char* command, shell_output_fn output,
 void shell_initialize(os_api_t* api) {
     shell_api = api;
     shell_network_initialize(api);
+}
+
+/* Commands run on a worker stack. Input callbacks only copy a bounded request;
+ * disk waits and application preparation never retain the input callback lock. */
+#define SHELL_QUEUE_SIZE 8u
+typedef struct {
+    char command[SHELL_ARGUMENT_MAX];
+    shell_output_fn output;
+    shell_clear_fn clear;
+} shell_request_t;
+static shell_request_t shell_queue[SHELL_QUEUE_SIZE];
+static uint32_t shell_head, shell_count;
+
+int shell_submit_command(const char* command, shell_output_fn output, shell_clear_fn clear) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!command) return 0;
+    uint32_t length = 0;
+    while (command[length] && length < SHELL_ARGUMENT_MAX) length++;
+    if (length == SHELL_ARGUMENT_MAX || shell_count == SHELL_QUEUE_SIZE) return 0;
+    if (!length) return 1;
+    shell_request_t* request = &shell_queue[(shell_head + shell_count) % SHELL_QUEUE_SIZE];
+    for (uint32_t i = 0; i <= length; i++) request->command[i] = command[i];
+    request->output = output; request->clear = clear;
+    shell_count++;
+    return 1;
+}
+
+void shell_service(void* argument) {
+    (void)argument;
+    for (;;) {
+        shell_request_t request;
+        mutex_lock(&kernel_mutex);
+        if (!shell_count) {
+            mutex_unlock(&kernel_mutex);
+            task_sleep_ms(1);
+            continue;
+        }
+        request = shell_queue[shell_head];
+        shell_head = (shell_head + 1u) % SHELL_QUEUE_SIZE;
+        shell_count--;
+        mutex_unlock(&kernel_mutex);
+        shell_execute_command(request.command, request.output, request.clear);
+    }
 }

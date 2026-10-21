@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "etherframe.h"
 #include "../drivers/net.h"
 #include "../drivers/serial.h"
@@ -17,12 +18,14 @@ static void write_be16(uint8_t* data, uint16_t value) {
 }
 
 uint64_t etherframe_mac_from_bytes(const uint8_t mac[6]) {
+    MUTEX_GUARD(kernel_mutex);
     uint64_t result = 0;
     for (uint8_t i = 0; i < 6; i++) result = (result << 8) | mac[i];
     return result;
 }
 
 void etherframe_mac_to_bytes(uint64_t mac, uint8_t output[6]) {
+    MUTEX_GUARD(kernel_mutex);
     for (int8_t i = 5; i >= 0; i--) {
         output[i] = (uint8_t)mac;
         mac >>= 8;
@@ -30,6 +33,7 @@ void etherframe_mac_to_bytes(uint64_t mac, uint8_t output[6]) {
 }
 
 void etherframe_init(const uint8_t address[6]) {
+    MUTEX_GUARD(kernel_mutex);
     uint32_t return_address = (uint32_t)__builtin_return_address(0);
     debug_subsystem_print("[NET TRACE] etherframe_init return address: ");
     debug_subsystem_hex(return_address);
@@ -48,10 +52,12 @@ void etherframe_init(const uint8_t address[6]) {
 
 void etherframe_set_handler(uint16_t ether_type,
                             etherframe_handler_t handler) {
+    MUTEX_GUARD(kernel_mutex);
     handlers[ether_type] = handler;
 }
 
 uint8_t etherframe_receive(const uint8_t* frame, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
     uint16_t ether_type;
     uint64_t destination;
     etherframe_handler_t handler;
@@ -74,6 +80,7 @@ uint8_t etherframe_receive(const uint8_t* frame, uint32_t length) {
 
 uint8_t etherframe_send(uint64_t destination_mac, uint16_t ether_type,
                         const uint8_t* payload, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
     if (!payload || length > ETHERFRAME_MAX_PAYLOAD) return 0;
 
     etherframe_mac_to_bytes(destination_mac, transmit_frame);
@@ -87,5 +94,6 @@ uint8_t etherframe_send(uint64_t destination_mac, uint16_t ether_type,
 }
 
 uint64_t etherframe_get_mac_address(void) {
+    MUTEX_GUARD(kernel_mutex);
     return etherframe_mac_from_bytes(local_mac);
 }

@@ -1,5 +1,7 @@
+#include "../../../kernel/mutex.h"
 #include "wm.h"
 #include "desktop.h"
+#include "cursor.h"
 #include "../../../kernel/paging.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../loader/app_loader.h"
@@ -19,6 +21,17 @@ static uint32_t dragging_directory;
 static uint8_t previous_left_button;
 static uint8_t start_menu_open;
 static uint8_t redraw_pending;
+static uint32_t scene_generation;
+/* One background and one retained image for the actively dragged window.
+ * This keeps motion independent of legacy draw callbacks and other windows. */
+static uint32_t drag_background[SCREEN_WIDTH * SCREEN_HEIGHT];
+static uint32_t drag_pixels[SCREEN_WIDTH * WM_TASKBAR_Y];
+static struct {
+    Window* window;
+    uint32_t directory, generation;
+    int32_t x, y, w, h;
+    uint8_t valid;
+} drag_cache;
 
 #define USER_WINDOW_EVENT_CAPACITY 16u
 #define USER_WINDOW_TEXT_MAX 64u
@@ -142,10 +155,27 @@ static void user_surface_text(user_window_slot_t* slot, int32_t x, int32_t y,
 static void user_surface_composite(user_window_slot_t* slot) {
     if (!slot) return;
     Window* window = &slot->window;
+    /* The compositor already owns kernel_mutex. Copy page-sized row spans
+     * directly, avoiding a mutex/IRQ transition for every individual pixel. */
+    int32_t left = window->x < 0 ? -window->x : 0;
+    int32_t right = window->w;
+    if (window->x + right > SCREEN_WIDTH) right = SCREEN_WIDTH - window->x;
+    if (left >= right) return;
+    uint32_t* buffer = display_get_backbuffer();
     for (int32_t y = 18; y < window->h; y++) {
-        for (int32_t x = 0; x < window->w; x++) {
-            uint32_t* pixel = user_surface_pixel(slot, (uint32_t)x, (uint32_t)y);
-            if (pixel) display_put_pixel(window->x + x, window->y + y, *pixel);
+        int32_t py = window->y + y;
+        if (py < 0 || py >= SCREEN_HEIGHT) continue;
+        int32_t x = left;
+        while (x < right) {
+            uint32_t offset = ((uint32_t)y * window->w + x) * sizeof(uint32_t);
+            uint32_t count = (PAGE_SIZE - (offset & (PAGE_SIZE - 1u))) / sizeof(uint32_t);
+            if (count > (uint32_t)(right - x)) count = (uint32_t)(right - x);
+            const uint32_t* source = user_surface_pixel(slot, (uint32_t)x, (uint32_t)y);
+            if (!source) break;
+            uint32_t* dest = buffer + py * SCREEN_WIDTH + window->x + x;
+            uint32_t copied = count;
+            __asm__ volatile ("cld; rep movsl" : "+S"(source), "+D"(dest), "+c"(copied) : : "memory");
+            x += count;
         }
     }
 }
@@ -158,8 +188,14 @@ static void user_surface_release(user_window_slot_t* slot) {
 }
 
 static void request_redraw(void) {
+    scene_generation++;
     redraw_pending = 1;
     if (invalidate) invalidate();
+}
+
+void wm_invalidate(void) {
+    MUTEX_GUARD(kernel_mutex);
+    request_redraw();
 }
 
 static uint32_t window_context_enter(int index) {
@@ -172,7 +208,6 @@ static uint32_t window_context_enter(int index) {
 
 static void window_context_leave(uint32_t previous) {
     if (paging_current_directory() != previous) paging_activate_directory(previous);
-    app_loader_collect();
 }
 
 static int find_window_index(const char* title) {
@@ -222,11 +257,12 @@ static void wm_bring_to_front_index(int target_index) {
 }
 
 void wm_initialize(os_api_t* api, void (*invalidate_callback)(void)) {
+    MUTEX_GUARD(kernel_mutex);
     wm_api = api;
     invalidate = invalidate_callback;
 }
 
-static void draw_window_frame(Window* window, uint8_t queue_redraw) {
+static void draw_window_frame(Window* window) {
     if (!wm_api || !window || !window->visible) return;
     wm_api->graphics.fill_rect(window->x, window->y, window->w, window->h, COLOR_WIN_BG);
     wm_api->graphics.fill_rect(window->x + 2, window->y + 2, window->w - 4, 15,
@@ -245,21 +281,109 @@ static void draw_window_frame(Window* window, uint8_t queue_redraw) {
     user_window_slot_t* user_slot = user_slot_for_window(window);
     if (user_slot) {
         user_surface_composite(user_slot);
-        if (queue_redraw)
-            user_window_enqueue_simple(user_slot, USER_WINDOW_EVENT_REDRAW);
     } else if (window->draw_content) window->draw_content(window);
 }
 
-void wm_draw_windows(void) {
+static void draw_windows_except(Window* excluded) {
+    MUTEX_GUARD(kernel_mutex);
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
-        if (!windows[i]) continue;
+        if (!windows[i] || windows[i] == excluded) continue;
         uint32_t previous = window_context_enter(i);
-        draw_window_frame(windows[i], 1);
+        draw_window_frame(windows[i]);
         window_context_leave(previous);
     }
 }
 
+void wm_draw_windows(void) { draw_windows_except(0); }
+
+static void copy_pixels(uint32_t* dest, const uint32_t* source, uint32_t count) {
+    __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(count) : : "memory");
+}
+
+/* Restore/paste only a clipped window footprint; taskbar pixels stay intact. */
+static void drag_restore(int32_t x, int32_t y, int32_t w, int32_t h) {
+    int32_t left = x < 0 ? 0 : x, top = y < 0 ? 0 : y;
+    int32_t right = x + w < SCREEN_WIDTH ? x + w : SCREEN_WIDTH;
+    int32_t bottom = y + h < WM_TASKBAR_Y ? y + h : WM_TASKBAR_Y;
+    uint32_t* buffer = display_get_backbuffer();
+    if (left >= right || top >= bottom) return;
+    for (int32_t row = top; row < bottom; row++)
+        copy_pixels(buffer + row * SCREEN_WIDTH + left,
+                    drag_background + row * SCREEN_WIDTH + left, right - left);
+}
+
+uint8_t wm_render_drag(void) {
+    MUTEX_GUARD(kernel_mutex);
+    int index = -1;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++)
+        if (dragging_window && windows[i] == dragging_window &&
+            window_directories[i] == dragging_directory) { index = i; break; }
+    if (index < 0) { drag_cache.valid = 0; return 0; }
+    uint32_t previous = window_context_enter(index);
+    Window* w = windows[index];
+    int32_t x = w->x, y = w->y, width = w->w, height = w->h;
+    uint8_t visible = w->visible;
+    window_context_leave(previous);
+    if (!visible || width <= 0 || width > SCREEN_WIDTH ||
+        height <= 0 || height > WM_TASKBAR_Y) { drag_cache.valid = 0; return 0; }
+    uint32_t* buffer = display_get_backbuffer();
+    if (!drag_cache.valid || drag_cache.window != w ||
+        drag_cache.directory != dragging_directory || drag_cache.generation != scene_generation ||
+        drag_cache.w != width || drag_cache.h != height) {
+        drag_cache.valid = 0;
+        /* Capture a complete window. An initially clipped window uses the
+         * regular compositor until it is fully visible. */
+        if (x < 0 || y < 0 || x + width > SCREEN_WIDTH || y + height > WM_TASKBAR_Y) return 0;
+        display_clear(COLOR_DESKTOP);
+        desktop_draw();
+        draw_windows_except(w);
+        wm_draw_taskbar(start_menu_open);
+        copy_pixels(drag_background, buffer, SCREEN_WIDTH * SCREEN_HEIGHT);
+        previous = window_context_enter(index);
+        draw_window_frame(w);
+        window_context_leave(previous);
+        for (int32_t row = 0; row < height; row++)
+            copy_pixels(drag_pixels + row * width, buffer + (y + row) * SCREEN_WIDTH + x, width);
+        drag_cache.window = w; drag_cache.directory = dragging_directory;
+        drag_cache.generation = scene_generation;
+        drag_cache.x = x; drag_cache.y = y;
+        drag_cache.w = width; drag_cache.h = height; drag_cache.valid = 1;
+        display_blit();
+        wm_cursor_draw();
+        return 1;
+    }
+    int32_t old_x = drag_cache.x, old_y = drag_cache.y;
+    drag_restore(old_x, old_y, width, height);
+    int32_t left = x < 0 ? 0 : x, top = y < 0 ? 0 : y;
+    int32_t right = x + width < SCREEN_WIDTH ? x + width : SCREEN_WIDTH;
+    int32_t bottom = y + height < WM_TASKBAR_Y ? y + height : WM_TASKBAR_Y;
+    if (left < right && top < bottom)
+        for (int32_t row = top; row < bottom; row++)
+            copy_pixels(buffer + row * SCREEN_WIDTH + left,
+                        drag_pixels + (row - y) * width + left - x, right - left);
+    /* The VRAM copy includes the old and new footprints, not the full screen.
+     * Merge overlapping footprints to avoid copying their intersection twice. */
+    wm_cursor_erase();
+    if (x < old_x + width && old_x < x + width && y < old_y + height && old_y < y + height) {
+        int32_t bx = x < old_x ? x : old_x, by = y < old_y ? y : old_y;
+        int32_t ex = (x > old_x ? x : old_x) + width;
+        int32_t ey = (y > old_y ? y : old_y) + height;
+        if (ey > WM_TASKBAR_Y) ey = WM_TASKBAR_Y;
+        display_blit_rect(bx, by, ex - bx, ey - by);
+    } else {
+        int32_t oh = old_y + height > WM_TASKBAR_Y ? WM_TASKBAR_Y - old_y : height;
+        int32_t nh = y + height > WM_TASKBAR_Y ? WM_TASKBAR_Y - y : height;
+        display_blit_rect(old_x, old_y, width, oh);
+        display_blit_rect(x, y, width, nh);
+    }
+    drag_cache.x = x; drag_cache.y = y;
+    wm_cursor_draw();
+    return 1;
+}
+
+
 void wm_draw_taskbar(uint8_t start_menu_open) {
+    MUTEX_GUARD(kernel_mutex);
     if (!wm_api) return;
     const int y = WM_TASKBAR_Y;
     wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, WM_TASKBAR_HEIGHT, COLOR_WIN_BG);
@@ -303,11 +427,13 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
 }
 
 Window* wm_get_window(int index) {
+    MUTEX_GUARD(kernel_mutex);
     if (index < 0 || index >= WM_MAX_WINDOWS) return 0;
     return windows[index];
 }
 
 void wm_bring_to_front(Window* target) {
+    MUTEX_GUARD(kernel_mutex);
     if (!target) return;
     uint32_t directory = paging_current_directory();
     if (directory == paging_kernel_directory()) directory = 0;
@@ -322,6 +448,7 @@ void wm_bring_to_front(Window* target) {
 }
 
 int wm_register_window(Window* window) {
+    MUTEX_GUARD(kernel_mutex);
     if (!window) return -1;
     uint32_t owner_directory = paging_current_directory();
     if (owner_directory == paging_kernel_directory()) owner_directory = 0;
@@ -363,6 +490,7 @@ int wm_register_window(Window* window) {
 
 int32_t wm_user_window_create(const user_window_desc_t* description,
                               uint32_t owner_directory) {
+    MUTEX_GUARD(kernel_mutex);
     if (!description || !owner_directory || !description->title[0] ||
         description->width < 80 || description->height < 50 ||
         description->width > SCREEN_WIDTH || description->height > WM_TASKBAR_Y ||
@@ -443,6 +571,7 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
 int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
                             const user_window_draw_t* drawing,
                             const char* text, const uint8_t* image_data) {
+    MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !drawing || !wm_api) return -1;
     Window* window = &slot->window;
@@ -515,6 +644,7 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
 
 int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
                             user_window_event_t* event) {
+    MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !event) return -1;
     if (slot->event_read == slot->event_write) {
@@ -527,20 +657,10 @@ int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
 }
 
 int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory) {
+    MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !wm_api || !wm_api->graphics.blit_rect) return -1;
-    int target_index = -1;
-    for (int i = 0; i < WM_MAX_WINDOWS; i++)
-        if (windows[i] == &slot->window) target_index = i;
-    if (target_index < 0) return -1;
-    for (int i = target_index; i < WM_MAX_WINDOWS; i++) {
-        if (!windows[i] || !windows[i]->visible) continue;
-        uint32_t previous = window_context_enter(i);
-        draw_window_frame(windows[i], 0);
-        window_context_leave(previous);
-    }
-    display_blit_rect(slot->window.x, slot->window.y,
-                      slot->window.w, slot->window.h);
+    request_redraw();
     return 0;
 }
 
@@ -566,6 +686,7 @@ static void user_window_remove_slot(user_window_slot_t* slot) {
 }
 
 int32_t wm_user_window_close(uint32_t handle, uint32_t owner_directory) {
+    MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot) return -1;
     user_window_remove_slot(slot);
@@ -573,6 +694,7 @@ int32_t wm_user_window_close(uint32_t handle, uint32_t owner_directory) {
 }
 
 void wm_user_close_address_space(uint32_t owner_directory) {
+    MUTEX_GUARD(kernel_mutex);
     if (!owner_directory) return;
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (user_window_slots[i].active &&
@@ -582,6 +704,7 @@ void wm_user_close_address_space(uint32_t owner_directory) {
 }
 
 void wm_unregister_window(Window* window) {
+    MUTEX_GUARD(kernel_mutex);
     if (!window) return;
     uint32_t owner_directory = paging_current_directory();
     if (owner_directory == paging_kernel_directory()) owner_directory = 0;
@@ -656,9 +779,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 if (windows[i]->y > WM_TASKBAR_Y - 24)
                     windows[i]->y = WM_TASKBAR_Y - 24;
                 window_context_leave(previous);
-                user_window_slot_t* user_slot = user_slot_for_window(dragging_window);
-                if (user_slot) user_window_enqueue_simple(user_slot, USER_WINDOW_EVENT_REDRAW);
-                request_redraw();
+                redraw_pending = 1;
                 break;
             }
         }
@@ -668,6 +789,12 @@ static void handle_mouse_event(const os_input_event_t* event) {
     if (left != previous_left_button) request_redraw();
 
     if (!left) {
+        /* Retained pixels move without repainting. Notify the application
+         * once on drop so its cached window origin follows the final position. */
+        if (dragging_window) {
+            user_window_slot_t* slot = user_slot_for_window(dragging_window);
+            if (slot) user_window_enqueue_simple(slot, USER_WINDOW_EVENT_REDRAW);
+        }
         resizing_terminal = 0;
         dragging_window = 0;
         dragging_directory = 0;
@@ -831,20 +958,31 @@ static void handle_key_event(const os_input_event_t* event) {
 }
 
 uint8_t wm_start_menu_is_open(void) {
+    MUTEX_GUARD(kernel_mutex);
     return start_menu_open;
 }
 
 void wm_poll(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (!wm_api) return;
     os_input_event_t event;
     event.type = OS_INPUT_NONE;
-    if (wm_api->input.poll_input && wm_api->input.poll_input(&event)) {
+    for (unsigned budget = 16; budget; budget--) {
+        if (!wm_api->input.poll_input || !wm_api->input.poll_input(&event)) break;
         if (event.type == OS_INPUT_MOUSE) handle_mouse_event(&event);
         else if (event.type == OS_INPUT_KEY) handle_key_event(&event);
     }
-    if (wm_api->graphics.take_redraw_request && wm_api->graphics.take_redraw_request())
+    if (wm_api->graphics.take_redraw_request && wm_api->graphics.take_redraw_request()) {
+        scene_generation++;
         redraw_pending = 1;
-    if (redraw_pending && wm_api->graphics.render_screen) {
+    }
+    static uint64_t next_frame;
+    uint32_t irq_flags = task_irq_save();
+    uint64_t now = scheduler_clock();
+    task_irq_restore(irq_flags);
+    if (redraw_pending && now >= next_frame && wm_api->graphics.render_screen) {
+        if (!next_frame || now - next_frame > 16666667u) next_frame = now + 16666667u;
+        else next_frame += 16666667u;
         wm_api->graphics.render_screen();
         redraw_pending = 0;
     }

@@ -1,3 +1,4 @@
+#include "../../../kernel/mutex.h"
 #include "terminal.h"
 #include "../../shell/commands.h"
 #include "../wm/wm.h"
@@ -12,6 +13,9 @@ static os_api_t* terminal_api;
 static char term_lines[TERM_MAX_LINES][TERM_MAX_COLS + 1];
 static int term_cursor_col;
 static int term_cursor_row;
+static char term_input[TERM_MAX_COLS - 1];
+static int term_input_length, term_editing;
+static int term_output_row, term_output_col;
 static uint32_t term_fg[TERM_MAX_LINES][TERM_MAX_COLS];
 static uint32_t term_bg[TERM_MAX_LINES][TERM_MAX_COLS];
 static const uint32_t ansi_palette[16] = {
@@ -75,6 +79,7 @@ static void terminal_scroll(void) {
 
 static void terminal_clear_output(void) {
     terminal_reset_style();
+    term_editing = term_input_length = 0;
     ansi_state = ansi_invalid = 0;
     for (int row = 0; row < TERM_MAX_LINES; row++) {
         for (int col = 0; col <= TERM_MAX_COLS; col++) {
@@ -148,24 +153,46 @@ static void terminal_append_output(const char* text) {
     }
 }
 
+/* Keep background output separate from the command being edited. Preserve
+ * the output cursor and ANSI parser across short SYS_WRITE calls. */
+static void terminal_show_input(void) {
+    term_output_row = term_cursor_row;
+    term_output_col = term_cursor_col;
+    if (term_cursor_col) {
+        if (term_cursor_row < TERM_MAX_LINES - 1) term_cursor_row++;
+        else { terminal_scroll(); term_output_row--; }
+    }
+    term_lines[term_cursor_row][0] = '>';
+    term_lines[term_cursor_row][1] = ' ';
+    for (int i = 0; i < term_input_length; i++)
+        term_lines[term_cursor_row][i + 2] = term_input[i];
+    term_cursor_col = term_input_length + 2;
+    term_lines[term_cursor_row][term_cursor_col] = 0;
+    for (int i = 0; i < term_cursor_col; i++) {
+        term_fg[term_cursor_row][i] = ansi_palette[7];
+        term_bg[term_cursor_row][i] = 0;
+    }
+}
+
 void terminal_write(const char* text, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!length) return;
+    if (term_editing) {
+        term_lines[term_cursor_row][0] = 0;
+        term_cursor_row = term_output_row;
+        term_cursor_col = term_output_col;
+    }
     char chunk[257];
     while (length) {
-        uint32_t count = length < sizeof(chunk) - 1u
-            ? length : sizeof(chunk) - 1u;
+        uint32_t count = length < sizeof(chunk) - 1u ? length : sizeof(chunk) - 1u;
         for (uint32_t i = 0; i < count; i++) chunk[i] = text[i];
-        chunk[count] = '\0';
+        chunk[count] = 0;
         terminal_append_output(chunk);
         text += count;
         length -= count;
     }
-    if (terminal_api) {
-        uint32_t previous_directory = paging_current_directory();
-        paging_activate_kernel();
-        terminal_window.visible = 1;
-        wm_bring_to_front(&terminal_window);
-        paging_activate_directory(previous_directory);
-    }
+    if (term_editing) terminal_show_input();
+    /* Background output must not steal focus from the window being used. */
 }
 
 static void terminal_draw(Window* win) {
@@ -223,47 +250,61 @@ static void terminal_draw(Window* win) {
 static void terminal_prompt(void) {
     terminal_reset_style();
     ansi_state = 0;
-    if (term_cursor_col > 0) {
-        if (term_cursor_row < TERM_MAX_LINES - 1) {
-            term_cursor_row++;
-        } else {
-            terminal_scroll();
-        }
+    if (term_cursor_col) {
+        if (term_cursor_row < TERM_MAX_LINES - 1) term_cursor_row++;
+        else terminal_scroll();
+        term_cursor_col = 0;
     }
-    term_lines[term_cursor_row][0] = '>';
-    term_lines[term_cursor_row][1] = ' ';
-    term_lines[term_cursor_row][2] = '\0';
-    term_cursor_col = 2;
-    terminal_style_cell(term_cursor_row, 0);
-    terminal_style_cell(term_cursor_row, 1);
+    term_input_length = 0;
+    term_input[0] = 0;
+    term_editing = 1;
+    terminal_show_input();
+}
+
+static void terminal_shell_output(const char* text) {
+    uint32_t length = 0;
+    while (text[length]) length++;
+    terminal_write(text, length);
+    wm_invalidate();
+}
+static void terminal_shell_clear(void) {
+    MUTEX_GUARD(kernel_mutex);
+    char input[sizeof(term_input)];
+    int length = term_input_length;
+    for (int i = 0; i <= length; i++) input[i] = term_input[i];
+    terminal_clear_output();
+    for (int i = 0; i <= length; i++) term_input[i] = input[i];
+    term_input_length = length;
+    term_editing = 1;
+    terminal_show_input();
+    wm_invalidate();
 }
 
 static void terminal_handle_key(Window* win, char c) {
     (void)win;
-
     if (c == '\b') {
-        if (term_cursor_col > 2) {
-            term_cursor_col--;
-            term_lines[term_cursor_row][term_cursor_col] = 0;
+        if (term_input_length) {
+            term_input[--term_input_length] = 0;
+            term_lines[term_cursor_row][--term_cursor_col] = 0;
         }
     } else if (c == '\n') {
         char command[TERM_MAX_COLS + 1];
-        for (int i = 0; i <= TERM_MAX_COLS; i++) {
-            command[i] = term_lines[term_cursor_row][i];
-        }
+        for (int i = 0; i <= term_input_length; i++) command[i] = term_input[i];
+        term_editing = 0;
         term_cursor_col = 0;
-        term_cursor_row++;
-        if (term_cursor_row >= TERM_MAX_LINES) {
-            terminal_scroll();
-            term_cursor_row = TERM_MAX_LINES - 1;
-        }
-        term_lines[term_cursor_row][0] = '\0';
-        shell_execute_command(command, terminal_append_output, terminal_clear_output);
+        if (term_cursor_row < TERM_MAX_LINES - 1) term_cursor_row++;
+        else terminal_scroll();
+        term_lines[term_cursor_row][0] = 0;
+        if (!shell_submit_command(command, terminal_shell_output, terminal_shell_clear))
+            terminal_append_output("Command queue is full.\n");
         terminal_prompt();
     } else if (c >= ' ' && c <= '~' && term_cursor_col < TERM_MAX_COLS) {
-        terminal_style_cell(term_cursor_row, term_cursor_col);
+        term_input[term_input_length++] = c;
+        term_input[term_input_length] = 0;
+        term_fg[term_cursor_row][term_cursor_col] = ansi_palette[7];
+        term_bg[term_cursor_row][term_cursor_col] = 0;
         term_lines[term_cursor_row][term_cursor_col++] = c;
-        term_lines[term_cursor_row][term_cursor_col] = '\0';
+        term_lines[term_cursor_row][term_cursor_col] = 0;
     }
 }
 

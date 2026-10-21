@@ -1,10 +1,13 @@
+#include "../mutex.h"
 #include "arp.h"
 #include "etherframe.h"
 #include "ipv4.h"
 #include "../kernel_net.h"
 
 #define ARP_PACKET_SIZE 28
-#define ARP_RESOLVE_TIMEOUT 10000
+extern volatile uint32_t frame_timer;
+static uint32_t request_ip[ARP_CACHE_SIZE], request_tick[ARP_CACHE_SIZE];
+static uint8_t request_pending[ARP_CACHE_SIZE];
 
 typedef struct {
     uint32_t ip;
@@ -57,6 +60,7 @@ static void cache_insert(uint32_t ip, const uint8_t mac[6]) {
 }
 
 void arp_init(uint32_t address, const uint8_t address_mac[6]) {
+    MUTEX_GUARD(kernel_mutex);
     local_ip = address;
     for (uint8_t i = 0; i < 6; i++) local_mac[i] = address_mac[i];
     arp_clear_cache();
@@ -65,16 +69,21 @@ void arp_init(uint32_t address, const uint8_t address_mac[6]) {
 }
 
 void arp_clear_cache(void) {
-    for (uint32_t i = 0; i < ARP_CACHE_SIZE; i++) cache[i].valid = 0;
+    MUTEX_GUARD(kernel_mutex);
+    for (uint32_t i = 0; i < ARP_CACHE_SIZE; i++) {
+        cache[i].valid = 0; request_pending[i] = 0;
+    }
 }
 
 void arp_set_local_ip(uint32_t address) {
+    MUTEX_GUARD(kernel_mutex);
     local_ip = address;
 }
 
 uint8_t arp_receive(const uint8_t source_mac[6],
                     const uint8_t destination_mac[6],
                     const uint8_t* payload, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
     uint16_t hardware_type;
     uint16_t protocol_type;
     uint16_t operation;
@@ -118,6 +127,7 @@ uint8_t arp_receive(const uint8_t source_mac[6],
 }
 
 void arp_request(uint32_t ip_address) {
+    MUTEX_GUARD(kernel_mutex);
     uint8_t request[ARP_PACKET_SIZE];
     for (uint8_t i = 0; i < 6; i++) {
         request[i] = local_mac[i];
@@ -136,6 +146,7 @@ void arp_request(uint32_t ip_address) {
 }
 
 uint8_t arp_resolve(uint32_t ip_address, uint8_t mac[6]) {
+    MUTEX_GUARD(kernel_mutex);
     if (ip_address == 0xFFFFFFFFU) {
         for (uint8_t i = 0; i < 6; i++) mac[i] = 0xFF;
         return 1;
@@ -146,20 +157,15 @@ uint8_t arp_resolve(uint32_t ip_address, uint8_t mac[6]) {
             return 1;
         }
     }
-    arp_request(ip_address);
-
-    /* ARP replies arrive asynchronously, so poll while waiting for the cache
-       entry instead of making the first IPv4 send fail immediately. */
-    for (uint32_t i = 0; i < ARP_RESOLVE_TIMEOUT; i++) {
-        sys_net_poll();
-        for (uint32_t j = 0; j < ARP_CACHE_SIZE; j++) {
-            if (cache[j].valid && cache[j].ip == ip_address) {
-                for (uint8_t k = 0; k < 6; k++) mac[k] = cache[j].mac[k];
-                return 1;
-            }
-        }
-        for (volatile int delay = 0; delay < 20; delay++)
-            __asm__ volatile ("pause");
+    /* Cache miss is asynchronous. IPv4 owns a bounded copy of the outgoing
+     * packet and retries after the desktop network pump receives the reply. */
+    uint32_t slot = ip_address % ARP_CACHE_SIZE;
+    if (!request_pending[slot] || request_ip[slot] != ip_address ||
+        (uint32_t)(frame_timer - request_tick[slot]) >= 100u) {
+        request_pending[slot] = 1;
+        request_ip[slot] = ip_address;
+        request_tick[slot] = frame_timer;
+        arp_request(ip_address);
     }
     return 0;
 }

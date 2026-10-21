@@ -29,6 +29,7 @@ SECTIONS
         *(COMMON)
     }
     __bss_end = .;
+    ASSERT(__bss_end <= 0x00A00000, "Kernel globals overlap the fixed graphics backbuffer")
 
     /DISCARD/ :
     {

@@ -1,3 +1,4 @@
+#include "mutex.h"
 #include "kernel_net.h"
 #include "drivers/net.h"
 #include "drivers/net_e1000.h"
@@ -69,12 +70,14 @@ static uint32_t pci_read_cfg(uint8_t bus, uint8_t slot, uint8_t func, uint8_t of
 }
 
 void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out) {
+    MUTEX_GUARD(kernel_mutex);
     if (vendor_out) *vendor_out = net_detected_vendor;
     if (device_out) *device_out = net_detected_device;
     if (name_out)   *name_out   = net_detected_name;
 }
 
 uint8_t sys_net_init(uint16_t io) {
+    MUTEX_GUARD(kernel_mutex);
     (void)io;
     net_driver_type     = 0xFFFFFFFF;
     net_detected_vendor = 0;
@@ -148,6 +151,7 @@ adapter_matched:
 }
 
 uint8_t sys_net_is_ready(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) return tg3_is_ready();
     if (net_driver_type == 1) return e1000_is_ready();
     if (net_driver_type == 0) return net_is_ready();
@@ -155,18 +159,22 @@ uint8_t sys_net_is_ready(void) {
 }
 
 void sys_net_shutdown(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) tg3_shutdown();
     else if (net_driver_type == 1) e1000_shutdown();
     else if (net_driver_type == 0) net_shutdown();
 }
 
 void sys_net_poll(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) tg3_poll();
     else if (net_driver_type == 1) e1000_poll();
     else if (net_driver_type == 0) net_poll();
+    ipv4_poll();
 }
 
 uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) return tg3_send(data, length);
     if (net_driver_type == 1) return e1000_send(data, length);
     if (net_driver_type == 0) return net_send(data, length);
@@ -174,12 +182,14 @@ uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
 }
 
 void sys_net_set_receive_handler(net_receive_handler_t handler) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) tg3_set_receive_handler(handler);
     else if (net_driver_type == 1) e1000_set_receive_handler(handler);
     else if (net_driver_type == 0) net_set_receive_handler(handler);
 }
 
 uint64_t sys_net_get_mac_address(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) return tg3_get_mac_address();
     if (net_driver_type == 1) return e1000_get_mac_address();
     if (net_driver_type == 0) return net_get_mac_address();
@@ -187,12 +197,14 @@ uint64_t sys_net_get_mac_address(void) {
 }
 
 void sys_net_set_ip_address(uint32_t address) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) tg3_set_ip_address(address);
     else if (net_driver_type == 1) e1000_set_ip_address(address);
     else if (net_driver_type == 0) net_set_ip_address(address);
 }
 
 uint32_t sys_net_get_ip_address(void) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) return tg3_get_ip_address();
     if (net_driver_type == 1) return e1000_get_ip_address();
     if (net_driver_type == 0) return net_get_ip_address();
@@ -200,12 +212,14 @@ uint32_t sys_net_get_ip_address(void) {
 }
 
 void sys_net_get_diagnostics(net_diagnostics_t* d) {
+    MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 2) tg3_get_diagnostics(d);
     else if (net_driver_type == 1) e1000_get_diagnostics(d);
     else if (net_driver_type == 0) net_get_diagnostics(d);
 }
 
 void sys_net_initialize_stack(void) {
+    MUTEX_GUARD(kernel_mutex);
     debug_subsystem_print("[NET TRACE] reading adapter MAC\n");
     uint64_t mac_value = sys_net_get_mac_address();
     uint8_t mac[6];
@@ -230,6 +244,7 @@ void sys_net_initialize_stack(void) {
 }
 
 void sys_net_configure_address(void) {
+    MUTEX_GUARD(kernel_mutex);
     dhcp_lease_t lease;
     if (!dhcp_request(&lease, 100000))
         ipv4_set_configuration(0x0A0000E3, 0x0A000002, 0xFFFFFF00);
@@ -237,6 +252,7 @@ void sys_net_configure_address(void) {
 
 void sys_net_get_configuration(uint32_t* subnet_mask, uint32_t* gateway,
                                uint8_t* dhcp_leased) {
+    MUTEX_GUARD(kernel_mutex);
     const dhcp_lease_t* lease = dhcp_get_lease();
     if (subnet_mask) *subnet_mask = lease->leased ? lease->subnet_mask : 0xFFFFFF00;
     if (gateway) *gateway = lease->leased ? lease->gateway : 0x0A000002;

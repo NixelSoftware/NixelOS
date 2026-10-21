@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "udp.h"
 #include "ipv4.h"
 
@@ -121,12 +122,14 @@ static uint8_t udp_receive(uint32_t source_ip, uint32_t destination_ip,
 }
 
 void udp_init(void) {
+    MUTEX_GUARD(kernel_mutex);
     for (uint32_t i = 0; i < UDP_MAX_SOCKETS; i++) sockets[i].in_use = 0;
     next_ephemeral_port = 1024;
     ipv4_set_protocol_handler(UDP_PROTOCOL, udp_receive);
 }
 
 udp_socket_t* udp_connect(uint32_t remote_ip, uint16_t remote_port) {
+    MUTEX_GUARD(kernel_mutex);
     udp_socket_t* socket = allocate_socket();
     if (!socket) return 0;
 
@@ -139,6 +142,7 @@ udp_socket_t* udp_connect(uint32_t remote_ip, uint16_t remote_port) {
 }
 
 udp_socket_t* udp_listen(uint16_t local_port) {
+    MUTEX_GUARD(kernel_mutex);
     udp_socket_t* socket = allocate_socket();
     if (!socket) return 0;
 
@@ -149,14 +153,17 @@ udp_socket_t* udp_listen(uint16_t local_port) {
 }
 
 void udp_bind(udp_socket_t* socket, udp_data_handler_t handler) {
+    MUTEX_GUARD(kernel_mutex);
     if (socket && socket->in_use) socket->handler = handler;
 }
 
 void udp_set_local_port(udp_socket_t* socket, uint16_t port) {
+    MUTEX_GUARD(kernel_mutex);
     if (socket && socket->in_use && port != 0) socket->local_port = port;
 }
 
 uint8_t udp_send(udp_socket_t* socket, const uint8_t* data, uint16_t length) {
+    MUTEX_GUARD(kernel_mutex);
     uint16_t packet_length;
     uint16_t checksum;
 
@@ -186,17 +193,21 @@ uint8_t udp_send(udp_socket_t* socket, const uint8_t* data, uint16_t length) {
 }
 
 void udp_disconnect(udp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     if (socket && socket->in_use) socket->in_use = 0;
 }
 
 uint16_t udp_get_local_port(const udp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     return socket && socket->in_use ? socket->local_port : 0;
 }
 
 uint16_t udp_get_remote_port(const udp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     return socket && socket->in_use ? socket->remote_port : 0;
 }
 
 uint32_t udp_get_remote_ip(const udp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     return socket && socket->in_use ? socket->remote_ip : 0;
 }

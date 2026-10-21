@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "tcp.h"
 #include "ipv4.h"
 
@@ -246,6 +247,7 @@ static uint8_t tcp_receive(uint32_t source_ip, uint32_t destination_ip,
 }
 
 void tcp_init(void) {
+    MUTEX_GUARD(kernel_mutex);
     for (uint32_t i = 0; i < TCP_MAX_SOCKETS; i++) sockets[i].in_use = 0;
     next_ephemeral_port = 1024;
     initial_sequence = 0xC001CAFE;
@@ -253,6 +255,7 @@ void tcp_init(void) {
 }
 
 tcp_socket_t* tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
+    MUTEX_GUARD(kernel_mutex);
     tcp_socket_t* socket = allocate_socket();
     if (!socket) return 0;
 
@@ -274,6 +277,7 @@ tcp_socket_t* tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
 }
 
 tcp_socket_t* tcp_listen(uint16_t local_port) {
+    MUTEX_GUARD(kernel_mutex);
     tcp_socket_t* socket = allocate_socket();
     if (!socket) return 0;
 
@@ -284,10 +288,12 @@ tcp_socket_t* tcp_listen(uint16_t local_port) {
 }
 
 void tcp_bind(tcp_socket_t* socket, tcp_data_handler_t handler) {
+    MUTEX_GUARD(kernel_mutex);
     if (socket && socket->in_use) socket->handler = handler;
 }
 
 uint8_t tcp_send(tcp_socket_t* socket, const uint8_t* data, uint16_t length) {
+    MUTEX_GUARD(kernel_mutex);
     if (!socket || !socket->in_use || socket->state != TCP_ESTABLISHED
         || (!data && length != 0)) {
         return 0;
@@ -296,6 +302,7 @@ uint8_t tcp_send(tcp_socket_t* socket, const uint8_t* data, uint16_t length) {
 }
 
 void tcp_disconnect(tcp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     if (!socket || !socket->in_use) return;
     if (socket->state == TCP_ESTABLISHED || socket->state == TCP_CLOSE_WAIT) {
         if (send_segment(socket, 0, 0, TCP_FLAG_FIN | TCP_FLAG_ACK)) {
@@ -305,12 +312,14 @@ void tcp_disconnect(tcp_socket_t* socket) {
 }
 
 void tcp_release(tcp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     if (!socket || !socket->in_use) return;
     tcp_disconnect(socket);
     release_socket(socket);
 }
 
 tcp_socket_state_t tcp_get_state(const tcp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
     if (!socket || !socket->in_use) return TCP_CLOSED;
     return socket->state;
 }

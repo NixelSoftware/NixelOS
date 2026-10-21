@@ -1,3 +1,4 @@
+#include "../mutex.h"
 #include "icmp.h"
 #include "ipv4.h"
 
@@ -53,21 +54,25 @@ static uint8_t icmp_receive(uint32_t source_ip, uint32_t destination_ip,
 }
 
 uint16_t icmp_checksum(const void* data, uint16_t length) {
+    MUTEX_GUARD(kernel_mutex);
     return ipv4_checksum(data, length);
 }
 
 void icmp_init(void) {
+    MUTEX_GUARD(kernel_mutex);
     echo_reply_handler = 0;
     ipv4_set_protocol_handler(ICMP_PROTOCOL, icmp_receive);
 }
 
 void icmp_set_echo_reply_handler(icmp_echo_reply_handler_t handler) {
+    MUTEX_GUARD(kernel_mutex);
     echo_reply_handler = handler;
 }
 
 uint8_t icmp_request_echo(uint32_t destination_ip, uint16_t identifier,
                           uint16_t sequence, const uint8_t* payload,
                           uint16_t length) {
+    MUTEX_GUARD(kernel_mutex);
     uint16_t packet_length;
 
     if (length > ICMP_MAX_PACKET_SIZE - ICMP_ECHO_HEADER_SIZE

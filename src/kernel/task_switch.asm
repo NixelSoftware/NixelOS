@@ -1,17 +1,13 @@
 [bits 32]
-[section .text]
-
+section .text
 extern current_task
 extern task_schedule_next
-extern frame_timer
-
+extern task_timer_tick
 global irq0_timer_handler
+global task_yield
 
-irq0_timer_handler:
+%macro SAVE_CONTEXT 0
     pushad
-
-    inc dword [frame_timer]
-
     xor eax, eax
     mov ax, ds
     push eax
@@ -21,27 +17,44 @@ irq0_timer_handler:
     push eax
     mov ax, gs
     push eax
-
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
-
+    cld
     mov eax, [current_task]
     test eax, eax
-    jz .skip_save
+    jz %%done
     mov [eax + 8], esp
+%%done:
+%endmacro
 
-.skip_save:
+irq0_timer_handler:
+    SAVE_CONTEXT
     mov al, 0x20
     out 0x20, al
+    ; 4 segments + pushad + EIP place interrupted CS at offset 52.
+    push dword [esp + 52]
+    call task_timer_tick
+    add esp, 4
+    jmp restore_context
 
+; Build exactly the same ring-0 iret frame as an IRQ, retaining caller IF.
+; Unlike the timer, an explicit yield may switch while running kernel code.
+task_yield:
+    pushfd
+    cli
+    push dword 0x08
+    push dword .resumed
+    SAVE_CONTEXT
     call task_schedule_next
-
+restore_context:
     mov eax, [current_task]
+    test eax, eax
+    jz .restore
     mov esp, [eax + 8]
-
+.restore:
     pop eax
     mov gs, ax
     pop eax
@@ -50,6 +63,8 @@ irq0_timer_handler:
     mov es, ax
     pop eax
     mov ds, ax
-
     popad
-    iret
+    iretd
+; Nonlocal label because restore_context changes NASM's local label scope.
+task_yield.resumed:
+    ret

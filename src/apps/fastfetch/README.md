@@ -19,6 +19,4 @@ https://github.com/fastfetch-cli/fastfetch (main frontend, OS and CPU modules).
 It does not contain the full upstream program. Output uses the conventional
 OS, Shell, Terminal, CPU, and Memory fields. Unsupported fields are omitted.
 CPU information uses CPUID. Memory is shown as used / total in MiB through
-`sys_memory_info` (syscall 28); available RAM remains exposed by the ABI.
-Used includes the reserved lower 16 MiB and allocated frames. The total reflects
-the kernel's configured 32 MiB layout, not a hardware RAM probe.
+`sys_memory_info` (syscall 28).

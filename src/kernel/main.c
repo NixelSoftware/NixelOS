@@ -11,10 +11,13 @@
 #include "drivers/power.h"
 #include "drivers/acpi.h"
 #include "drivers/ps2.h"
+#include "drivers/sb16_driver.h"
 #include "idt.h"
 #include "fs.h" 
 #include "os_api.h"
 #include "task.h"
+#include "scheduler.h"
+#include "mutex.h"
 #include "paging.h"
 #include "arch_i386.h"
 #include "syscall.h"
@@ -40,6 +43,7 @@
 #include "../system/graphics/widgets.h"
 
 static void term_print(const char* text);
+void kernel_user_write(const char* text, uint32_t length);
 static void api_put_pixel(int32_t x, int32_t y, uint32_t color);
 static void api_move_cursor(int32_t x, int32_t y, uint8_t fast_update);
 static void api_render_screen(void);
@@ -135,6 +139,7 @@ static os_api_t kernel_api = {
 };
 
 static void api_put_pixel(int32_t x, int32_t y, uint32_t color) {
+    MUTEX_GUARD(kernel_mutex);
     if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) return;
     uint32_t* buffer = display_get_backbuffer();
     buffer[y * SCREEN_WIDTH + x] = color;
@@ -145,11 +150,13 @@ static void api_move_cursor(int32_t x, int32_t y, uint8_t fast_update) {
 }
 
 static void api_render_screen(void) {
+    MUTEX_GUARD(kernel_mutex);
     wm_render_screen();
     needs_redraw = 0;
 }
 
 static uint8_t api_take_redraw_request(void) {
+    MUTEX_GUARD(kernel_mutex);
     uint8_t pending = needs_redraw;
     needs_redraw = 0;
     return pending;
@@ -161,11 +168,13 @@ static void api_capture_screenshot(void) {
 }
 
 static void api_shell_set_output(shell_output_fn output) {
+    MUTEX_GUARD(kernel_mutex);
     shell_output = output;
 }
 
 static int api_shell_open_viewer(const char* filename) {
     if (!viewer_load_bmp(filename)) return 0;
+    MUTEX_GUARD(kernel_mutex);
     viewer_window.visible = 1;
     wm_bring_to_front(&viewer_window);
     needs_redraw = 1;
@@ -173,16 +182,20 @@ static int api_shell_open_viewer(const char* filename) {
 }
 
 static int api_launch_app(const char* name, const char* arguments) {
+    MUTEX_GUARD(kernel_mutex);
     int result = app_loader_launch(&kernel_api, name, arguments);
     if (result == 0) needs_redraw = 1;
     return result;
 }
 
 static void term_print(const char* text) {
-    if (shell_output) shell_output(text);
+    uint32_t length = 0;
+    while (text[length]) length++;
+    kernel_user_write(text, length);
 }
 
 void kernel_user_write(const char* text, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
     terminal_write(text, length);
     needs_redraw = 1;
 }
@@ -238,6 +251,9 @@ static void kernel_init_interrupts(void) {
 static void kernel_init_timer(void) {
     debug_print("[INIT] PIT init...\n");
     pit_init(100);
+    /* The bootloader masks every PIC line; PIT programming alone cannot
+     * deliver ticks for scheduling, sleeps, and network/audio deadlines. */
+    outb(0x21, inb(0x21) & ~1u);
 }
 
 static void kernel_init_acpi(void) {
@@ -274,6 +290,7 @@ static void kernel_initialize_tasking(void) {
 }
 
 static void kernel_mark_redraw(void) {
+    MUTEX_GUARD(kernel_mutex);
     needs_redraw = 1;
 }
 
@@ -314,8 +331,21 @@ static void kernel_finish_boot(void) {
     debug_print("[INIT] Enable interrupt...\n");
     __asm__ volatile ("sti");
 
-    system_sound_start();
 
+}
+
+static void network_service(void* arg) {
+    (void)arg;
+    for (;;) { sys_net_poll(); task_sleep_ms(2); }
+}
+static void audio_service(void* arg) {
+    (void)arg;
+    system_sound_start();
+    for (;;) { system_sound_poll(); sb16_service(); task_sleep_ms(2); }
+}
+static void cleanup_service(void* arg) {
+    (void)arg;
+    for (;;) { app_loader_collect(); task_sleep_ms(20); }
 }
 
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
@@ -357,11 +387,20 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     }
     #endif
     
-    // This fucking cursor shit is pissing me off
-    debug_print("[INIT] Entering system event loop.\n");
+    /* Every service has its own schedulable context. Only the idle task halts;
+     * ready applications never wait behind an unconditional HLT in the WM. */
+    if (task_create_nice(network_service, 0, "network", -2) < 0 ||
+        task_create_nice(audio_service, 0, "audio", -4) < 0 ||
+        task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
+        task_create_nice(shell_service, 0, "shell", 0) < 0 ||
+        display_start_async() < 0) {
+        debug_print("[INIT] Cannot allocate service tasks\n");
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
+    scheduler_start();
+    debug_print("[INIT] CFS scheduler started: 1000 Hz, independent services\n");
     for (;;) {
-        system_sound_poll();
-        sys_net_poll(); //- zainabm: readd function if causing any weird problems
         wm_poll();
+        task_sleep_ms(2);
     }
 }

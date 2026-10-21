@@ -23,7 +23,7 @@ from the kernel's global data and display buffers.
 | 6 | `sys_dns_resolve` | EBX = hostname, ECX = writable IPv4 output | `1` resolved, `0` lookup failed, `-1` invalid pointer |
 | 7 | `sys_ping_start` | EBX = destination IPv4, ECX = sequence | request handle, or `-1` if it could not be submitted |
 | 8 | `sys_ping_poll` | EBX = request handle, ECX = writable milliseconds output | `0` pending, `1` reply received, `2` timed out, `-1` invalid handle or pointer |
-| 9 | `sys_yield` | none | services kernel network and window/input polling before returning |
+| 9 | `sys_yield` | none | sleeps for 1 ms while other tasks run |
 | 10 | `sys_window_create` | EBX = readable `user_window_desc_t*` | window handle, or `-1` |
 | 11 | `sys_window_draw` | EBX = handle, ECX = readable `user_window_draw_t*` | `0` success, `-1` invalid request |
 | 12 | `sys_window_poll` | EBX = handle, ECX = writable `user_window_event_t*` | `1` event, `0` no event, `-1` invalid handle or pointer |
@@ -43,6 +43,25 @@ from the kernel's global data and display buffers.
 | 26 | `sys_dns_start` | EBX = hostname | resolver handle, or `-1` if another lookup is active |
 | 27 | `sys_dns_poll` | EBX = resolver handle, ECX = writable IPv4 output | `0` pending, `1` resolved, `2` failed |
 | 28 | `sys_memory_info` | EBX = writable `user_memory_info_t*` | `0` success, `-1` invalid output buffer |
+| 29 | `sys_audio_init` | EBX = sample rate | `0` opened, `-1` unavailable or busy |
+| 30 | `sys_audio_write` | EBX = readable signed 16-bit stereo PCM, ECX = bytes (4..16384, multiple of 4) | bytes accepted, `0` queue full, `-1` invalid/closed/draining |
+| 31 | `sys_audio_status` | none | `1` queued/playing, `0` drained, `-1` unavailable |
+| 32 | `sys_audio_shutdown` | none | closes the caller's audio stream |
+| 33 | `sys_fs_read_at` | as read, with byte offset in ESI | bytes read, or `-1` |
+| 34 | `sys_audio_drain` | none | `0` end of stream accepted, `-1` unavailable |
+
+Window presentation queues damage for an independent display task; it does not
+wait for the framebuffer transfer to finish. Terminal commands are also queued
+to a shell worker so filesystem waits leave input processing available.
+
+Audio ownership belongs to the calling address space. Retry a full queue after
+`sys_yield`. Once the final PCM block is accepted, call `sys_audio_drain` and
+poll `sys_audio_status` until it returns zero before shutting down. Drain marks
+the end of the stream, rejects further writes, and lets DMA stop at the exact
+last block. Native rates up to 44.1 kHz are recommended for SB16 compatibility.
+The `sound` app converts higher-rate WAV sources (up to 48 kHz) to 44.1 kHz with
+streaming linear interpolation and keeps its output queue filled with full blocks.
+
 
 `user_memory_info_t` is defined in `src/system/user/memory_api.h` as four
 32-bit byte counts: `total_bytes`, `used_bytes`, `available_bytes`, and
@@ -73,17 +92,17 @@ app; it deliberately faults outside its mapped address range to demonstrate
 that a user page fault terminates the app and returns control to the shell.
 `ping` is the fifth ring-3 app and uses kernel-mediated DNS and asynchronous
 ICMP request handles. Requests are owned by the calling address space and can
-be polled independently. While waiting, ping calls `sys_yield` so the kernel
-continues network and window/input polling. The runner still executes one user
-app at a time, so this cooperative yield keeps the system event loop responsive
-but does not provide simultaneous user processes; that needs scheduler/process
-work to follow.
+be polled independently. While waiting, ping calls `sys_yield` to sleep briefly.
+The preemptive single-CPU CFS scheduler runs user applications and kernel
+services concurrently, including tasks that do not voluntarily yield. See
+[scheduling.md](scheduling.md) for policy, locking and latency details.
 `calc` is the sixth ring-3 app and retains its calculator window. Ring-3 window
 apps create kernel-managed frames, draw into a private window surface through
 validated fill, text, button, and PNG image syscalls, and receive queued key,
 mouse, redraw, and close events. The WM composites those surfaces in window
 z-order. Apps call
-`sys_yield` to let the window manager process input, then poll their event queue.
+`sys_yield` while waiting, then poll their event queue. Input and rendering run
+in independently scheduled kernel work.
 The window manager never invokes a user callback while running in ring 0.
 `mines` is the seventh ring-3 app and uses the same window and event interface
 for its Minesweeper board.
@@ -108,8 +127,6 @@ The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT
 vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.
 
-The first runner is synchronous and supports one user app at a time. Timer
-interrupts return to that app, but this is not yet preemptive process
-scheduling. Existing GUI and console apps continue to use the legacy ring-0
-`os_api_t` callback interface. Moving them requires replacing those direct
-callbacks with kernel-mediated services.
+Timer interrupts can switch between concurrent user applications and kernel
+workers. Legacy ring-0 applications still use the privileged `os_api_t`
+callback interface; ring-3 apps use validated kernel services.

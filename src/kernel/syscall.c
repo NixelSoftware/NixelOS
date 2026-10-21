@@ -2,6 +2,8 @@
 #include "drivers/sb16_driver.h"
 static unsigned int audio_owner;
 #include "syscall.h"
+#include "task.h"
+#include "mutex.h"
 #include "idt.h"
 #include "paging.h"
 #include "arch_i386.h"
@@ -186,7 +188,7 @@ static int user_writable(uint32_t address, uint32_t length) {
     return 1;
 }
 
-void syscall_dispatch(registers_t* regs) {
+static void syscall_dispatch_impl(registers_t* regs) {
     if (!regs) return;
     if ((regs->cs & 3u) != 3u) {
         regs->eax = (uint32_t)-1;
@@ -276,6 +278,9 @@ void syscall_dispatch(registers_t* regs) {
             regs->eax = (uint32_t)((audio_owner != paging_current_directory() ||
                 regs->ecx > SB16_BUFFER_SIZE || !user_readable(regs->ebx, regs->ecx))
                 ? -1 : sb16_write((const void*)regs->ebx, regs->ecx));
+            return;
+        case SYS_AUDIO_DRAIN:
+            regs->eax = (uint32_t)(audio_owner == paging_current_directory() ? sb16_drain() : -1);
             return;
         case SYS_AUDIO_STATUS:
             regs->eax = (uint32_t)(audio_owner == paging_current_directory() ? sb16_status() : -1);
@@ -468,9 +473,9 @@ void syscall_dispatch(registers_t* regs) {
             return;
         }
         case SYS_YIELD:
-            system_sound_poll();
-            sys_net_poll();
-            wm_poll();
+            /* The desktop task owns service pumping. Park this waiter rather
+             * than recursively entering WM callbacks on the app's stack. */
+            task_sleep_ms(1);
             regs->eax = 0;
             return;
         case SYS_WINDOW_CREATE: {
@@ -595,7 +600,25 @@ void syscall_dispatch(registers_t* regs) {
                 regs->eax = 0;
                 return;
             }
-            regs->eax = dns_resolve(hostname, &resolved_address);
+            mutex_lock(&kernel_mutex);
+            if (user_dns_active || !dns_resolve_async_start(hostname)) {
+                mutex_unlock(&kernel_mutex);
+                regs->eax = 0;
+                return;
+            }
+            user_dns_active = 1;
+            user_dns_owner = paging_current_directory();
+            mutex_unlock(&kernel_mutex);
+            int result;
+            for (;;) {
+                mutex_lock(&kernel_mutex);
+                result = dns_resolve_async_poll(&resolved_address);
+                if (result != 0) user_dns_active = 0;
+                mutex_unlock(&kernel_mutex);
+                if (result != 0) break;
+                task_sleep_ms(1);
+            }
+            regs->eax = result == 1;
             if (regs->eax) *(uint32_t*)output_address = resolved_address;
             return;
         }
@@ -700,5 +723,24 @@ void syscall_dispatch(registers_t* regs) {
         default:
             regs->eax = (uint32_t)-1;
             return;
+    }
+}
+
+/* I/O waiters hold only their device/filesystem lock, so they cannot prevent
+ * the compositor or network worker from progressing while a device is busy. */
+void syscall_dispatch(registers_t* regs) {
+    if (!regs) return;
+    switch (regs->eax) {
+        case SYS_YIELD: case SYS_DNS_RESOLVE:
+        case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_WRITE:
+        case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
+        case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN:
+            syscall_dispatch_impl(regs);
+            return;
+        default: {
+            MUTEX_GUARD(kernel_mutex);
+            syscall_dispatch_impl(regs);
+            return;
+        }
     }
 }

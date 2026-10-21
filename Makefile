@@ -1,10 +1,13 @@
 # GNU Make is the single build entry point on Windows and Linux.
+.DEFAULT_GOAL := all
 PYTHON ?= python3
 NASM ?= nasm
 CC = gcc
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
+# Use QEMU_ACCEL=kvm on Linux hosts with an accessible /dev/kvm.
+QEMU_ACCEL ?= tcg
 
 ENABLE_OOBE ?= 0
 
@@ -56,13 +59,14 @@ KERNEL_C := \
   src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
   src/system/graphics/wm/cursor.c src/kernel/drivers/display/font.c \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
-  src/system/graphics/wm/desktop.c src/kernel/task.c \
+  src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c src/kernel/mutex.c \
   src/system/graphics/dialog/dialog.c src/apps/notepad/notepad.c \
   src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
+$(KERNEL_OBJ): src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown userhello sound oobe sysdiag
 # Temporary Fastfetch image inclusion for testing.
@@ -106,12 +110,12 @@ src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
 RESOURCE_WAVS := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() == '.wav'))")
 
 os.img: $(RESOURCE_WAVS) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
-	$(PYTHON) mkfat32.py os.img
-	$(PYTHON) -c "from pathlib import Path; p=Path('os.img'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d)"
+	$(PYTHON) mkfat32.py os.img.new
+	$(PYTHON) -c "from pathlib import Path; p=Path('os.img.new'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d); p.replace('os.img')"
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) -m 128M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -device sb16 -serial stdio
+	$(QEMU) -accel $(QEMU_ACCEL) -smp 1 -m 128M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -device sb16 -serial stdio
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown userhello sound browser oobe sysdiag'.split()]]"

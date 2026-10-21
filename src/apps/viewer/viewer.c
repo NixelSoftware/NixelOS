@@ -1,3 +1,4 @@
+#include "../../kernel/mutex.h"
 #include "viewer.h"
 #include "../../kernel/drivers/display/font.h"
 #include "../../kernel/drivers/display.h"
@@ -33,6 +34,7 @@ int viewer_load_bmp(const char* filename) {
     }
 
     
+    MUTEX_GUARD(kernel_mutex);
     uint32_t data_offset = *(uint32_t*)&bmp_raw_buffer[0x0A];
     int32_t  w           = *(int32_t*)&bmp_raw_buffer[0x12];
     int32_t  h           = *(int32_t*)&bmp_raw_buffer[0x16];

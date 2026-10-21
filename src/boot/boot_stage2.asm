@@ -103,7 +103,7 @@ stage2_entry:
 .find_mode_loop:
     mov cx, [fs:si]
     cmp cx, 0xFFFF
-    je .no_mode_found
+    je .try_fallback_mode
     add si, 2
     push si
 
@@ -129,8 +129,19 @@ stage2_entry:
     cmp al, 32
     je .mode_found
     cmp al, 24
-    je .mode_found
+    jne .find_mode_loop
+    mov [fallback_mode], cx
     jmp .find_mode_loop
+
+.try_fallback_mode:
+    mov cx, [fallback_mode]
+    cmp cx, 0xFFFF
+    je .no_mode_found
+    mov ax, 0x4F01
+    mov di, 0x9200
+    int 0x10
+    cmp ax, 0x004F
+    jne .no_mode_found
 
 .mode_found:
     mov [selected_mode], cx
@@ -231,6 +242,7 @@ msg_kerr    db "Kernel Read Failed!", 13, 10, 0
 msg_verr    db "VBE Call Failed!", 13, 10, 0
 msg_nomode  db "No 800x600 LFB Mode Found!", 13, 10, 0
 
+fallback_mode dw 0xFFFF
 selected_mode dw 0
 boot_drive    db 0
 

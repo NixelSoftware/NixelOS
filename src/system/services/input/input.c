@@ -14,37 +14,39 @@ void input_initialize(os_api_t* api) {
 int input_poll_event(os_input_event_t* event) {
     if (!input_api || !event || !input_api->input.ps2_status || !input_api->input.ps2_read_data)
         return 0;
-
     event->type = OS_INPUT_NONE;
-    uint8_t status = input_api->input.ps2_status();
-    if (!(status & 0x01)) return 0;
-    uint8_t value = input_api->input.ps2_read_data();
-
-    if (status & 0x20) {
-        if (mouse_packet_cycle == 0) {
-            if (value & 0x08) {
-                mouse_packet[0] = value;
-                mouse_packet_cycle = 1;
+    /* Assemble a full mouse packet in one poll instead of spending three
+     * scheduler ticks on its three bytes. Bound the work on a busy controller. */
+    for (unsigned budget = 32; budget; budget--) {
+        uint8_t status = input_api->input.ps2_status();
+        if (!(status & 0x01)) return 0;
+        uint8_t value = input_api->input.ps2_read_data();
+        if (status & 0x20) {
+            if (mouse_packet_cycle == 0) {
+                if (value & 0x08) {
+                    mouse_packet[0] = value;
+                    mouse_packet_cycle = 1;
+                }
+                continue;
             }
-            return 0;
+            if (mouse_packet_cycle == 1) {
+                mouse_packet[1] = value;
+                mouse_packet_cycle = 2;
+                continue;
+            }
+            mouse_packet[2] = value;
+            mouse_packet_cycle = 0;
+            if (mouse_packet[0] & 0xC0) continue;
+            event->type = OS_INPUT_MOUSE;
+            event->mouse_dx = (int8_t)mouse_packet[1];
+            event->mouse_dy = (int8_t)mouse_packet[2];
+            event->mouse_buttons = mouse_packet[0];
+            return 1;
         }
-        if (mouse_packet_cycle == 1) {
-            mouse_packet[1] = value;
-            mouse_packet_cycle = 2;
-            return 0;
-        }
-        mouse_packet[2] = value;
-        mouse_packet_cycle = 0;
-        if (mouse_packet[0] & 0xC0) return 0;
-        event->type = OS_INPUT_MOUSE;
-        event->mouse_dx = (int8_t)mouse_packet[1];
-        event->mouse_dy = (int8_t)mouse_packet[2];
-        event->mouse_buttons = mouse_packet[0];
+        /* The translator also needs modifier release codes (e.g. Shift-up). */
+        event->type = OS_INPUT_KEY;
+        event->scancode = value;
         return 1;
     }
-
-    if (value & 0x80) return 0;
-    event->type = OS_INPUT_KEY;
-    event->scancode = value;
-    return 1;
+    return 0;
 }

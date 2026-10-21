@@ -5,6 +5,7 @@ extern isr_handler
 extern arch_user_exit_requested
 extern arch_user_kernel_esp
 extern syscall_dispatch
+extern task_preempt_point
 global idt_flush
 global syscall_entry
 
@@ -82,9 +83,12 @@ syscall_entry:
     mov es, ax
     mov fs, ax
     mov gs, ax
+    cld
     push esp
     call syscall_dispatch
     add esp, 4
+    call task_preempt_point
+    cli
     cmp dword [arch_user_exit_requested], 0
     jne .user_exit
     pop eax
@@ -101,6 +105,7 @@ syscall_entry:
 .user_exit:
     mov dword [arch_user_exit_requested], 0
     mov esp, [arch_user_kernel_esp]
+    mov dword [arch_user_kernel_esp], 0
     pop edi
     pop esi
     pop ebx
@@ -127,11 +132,16 @@ isr_common_stub:
     mov fs, ax
     mov gs, ax
 
+    cld
     push esp
     call isr_handler
     add esp, 4
+    cli
     cmp dword [arch_user_exit_requested], 0
-    jne user_abort_return
+    je .no_user_abort
+    test byte [esp + 60], 3
+    jnz user_abort_return
+.no_user_abort:
 
     pop eax
     mov gs, ax
@@ -149,6 +159,7 @@ isr_common_stub:
 user_abort_return:
     mov dword [arch_user_exit_requested], 0
     mov esp, [arch_user_kernel_esp]
+    mov dword [arch_user_kernel_esp], 0
     pop edi
     pop esi
     pop ebx

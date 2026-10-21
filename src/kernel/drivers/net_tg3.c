@@ -570,7 +570,8 @@ void tg3_poll(void) {
     if (!tg3_ready) return;
 
     
-    while (1) {
+    /* A busy link must not monopolize the system event loop. */
+    for (uint32_t budget = 8; budget; budget--) {
         tg3_rx_desc_t* desc = &rx_ret_ring[tg3_rx_rcb_cons];
         uint32_t len = (desc->len_flags >> 16) & 0xFFFF;
 
