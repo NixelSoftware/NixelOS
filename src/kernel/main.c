@@ -345,6 +345,14 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     };
     nixinit_start(&init_services);
 
+    #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
+    char oobe_check[1];
+    if (fs_read_file("OOBE.DON", (uint8_t*)oobe_check, 1) < 0) {
+        debug_print("[OOBE] First boot detected. Launching setup wizard...\n");
+        api_launch_app("oobe.bin", "");
+    }
+    #endif
+    
     // This fucking cursor shit is pissing me off
     debug_print("[INIT] Entering system event loop.\n");
     for (;;) {

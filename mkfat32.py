@@ -21,7 +21,7 @@ ROOT_FILES = [
     "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
     "shutdown.bin", "userhello.bin",
-    "fastfetch.bin",  # Temporary testing inclusion.
+    "fastfetch.bin", "oobe.bin"
 ]
 
 OUTPUT_IMAGE = "disk.img" if len(sys.argv) < 2 else sys.argv[1]

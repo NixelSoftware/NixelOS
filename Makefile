@@ -6,6 +6,8 @@ LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
 
+ENABLE_OOBE ?= 0
+
 ifeq ($(OS),Windows_NT)
   NASM_FORMAT := win32
   LD_FORMAT := i386pe
@@ -24,8 +26,15 @@ $(error DEBUG_SUBSYSTEMS must be 0 or 1)
 endif
 endif
 
+ifeq ($(ENABLE_OOBE),1)
+  OOBE_VAL += -DENABLE_OOBE=1
+  OOBE_APP := oobe
+else
+  OOBE_APP :=
+endif
+
 CFLAGS := -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
-          -mno-stack-arg-probe -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS)
+          -mno-stack-arg-probe -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
 NASMFLAGS := -f $(NASM_FORMAT)
 
 KERNEL_C := \
@@ -55,7 +64,7 @@ KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
-        crash_debug shutdown userhello
+        crash_debug shutdown userhello oobe
 # Temporary Fastfetch image inclusion for testing.
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 .PHONY: all run clean clean-build
