@@ -20,7 +20,7 @@ ROOT_FILES = [
     "calc.bin", "files.bin", "hexview.bin", "mines.bin",
     "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
-    "shutdown.bin", "userhello.bin",
+    "shutdown.bin", "userhello.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin"
 ]
 
