@@ -3,12 +3,13 @@ CC = gcc
 NASM ?= nasm
 LD = ld
 OBJCOPY ?= objcopy
-PYTHON ?= python
+PYTHON ?= python3
 CFLAGS = -O2 -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-leading-underscore -Wall -Wextra
 
 ifeq ($(OS),Windows_NT)
     LD_EMULATION = i386pe
     NASM_FMT     = win32
+	PYTHON := python
 else
     LD_EMULATION = elf_i386
     NASM_FMT     = elf32
