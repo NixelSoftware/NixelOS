@@ -12,10 +12,11 @@ QEMU_ACCEL ?= tcg
 ENABLE_OOBE ?= 0
 
 ifeq ($(OS),Windows_NT)
-  NASM_FORMAT := win32
-  LD_FORMAT := i386pe
-  LDFLAGS := -m $(LD_FORMAT) --image-base 0 --disable-reloc-section
-  PYTHON := python
+  #NASM_FORMAT := win32
+  #LD_FORMAT := i386pe
+  #LDFLAGS := -m $(LD_FORMAT) --image-base 0 --disable-reloc-section
+  #PYTHON := python
+  $(error Windows compilation has been removed. Please compile on Linux)
 else
   NASM_FORMAT := elf32
   LD_FORMAT := elf_i386
