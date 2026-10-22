@@ -6,7 +6,7 @@ Install GNU Make, GCC, NASM, binutils, Python, and QEMU, then run `make` to buil
 `DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
 remove generated build artifacts.
 # Todo
-- [ ] **zainabm** - Implement ACPI for reboots
+- [X] **zainabm** - Implement ACPI for reboots
 - [x] **zainabm** - Implement proper ACPI
 - [ ] **zainabm** - Add telnet server
 - [x] **zainabm** - Implement memory protection
