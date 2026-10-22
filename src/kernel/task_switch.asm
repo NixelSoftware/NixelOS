@@ -3,6 +3,7 @@ section .text
 extern current_task
 extern task_schedule_next
 extern task_timer_tick
+extern task_timer_irq_exit
 %if STARTUP_TRACE
 extern startup_trace_timer
 %endif
@@ -42,15 +43,15 @@ irq0_timer_handler:
 %endif
     mov al, 0x20
     out 0x20, al
-    ; 4 segments + pushad + EIP place interrupted CS at offset 52.
-    push dword [esp + 52]
     call task_timer_tick
-    add esp, 4
 %if STARTUP_TRACE
     push dword 0
     call startup_trace_timer
     add esp, 4
 %endif
+    ; Finish IRQ work on the interrupted task before changing current_task.
+    ; IRQs stay disabled and SAVE_CONTEXT has published its resumable frame.
+    call task_timer_irq_exit
     jmp restore_context
 
 ; Build exactly the same ring-0 iret frame as an IRQ, retaining caller IF.

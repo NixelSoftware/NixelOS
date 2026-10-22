@@ -1,5 +1,8 @@
 # CFS scheduler
 
+The Linux reference model and staged implementation checklist are maintained in
+[Linux multitasking plan](linux-multitasking.md).
+
 The kernel uses the single-CPU CFS implementation in `src/kernel/scheduler.c` and `scheduler.h`. `task.c` handles task creation, stacks and architecture context switching; it delegates CPU selection and accounting to the scheduler. The Makefile links both into the kernel.
 
 The policy follows the [Linux CFS design](https://www.kernel.org/doc/html/v6.2/scheduler/sched-design-CFS.html): a red-black run queue ordered by weighted virtual runtime, a monotonically advancing minimum virtual runtime, and selection of the leftmost runnable entity. The running task is kept outside the tree. Nice values from -20 through 19 use the conventional CFS weight table; normal priority has weight 1024.

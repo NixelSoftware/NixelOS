@@ -12,6 +12,19 @@
 #define TASK_STATE_SLEEPING 4
 #define TASK_STATE_BLOCKED 5
 
+/* task_switch.asm timer/yield ABI, NOT the exception/syscall registers_t.
+ * Hardware appends user ESP/SS only when returning across privilege levels. */
+typedef struct task_switch_frame {
+    uint32_t gs, fs, es, ds;
+    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
+    uint32_t eip, cs, eflags;
+} task_switch_frame_t;
+_Static_assert(sizeof(task_switch_frame_t) == 60, "switch frame size");
+_Static_assert(__builtin_offsetof(task_switch_frame_t, edi) == 16, "PUSHAD offset");
+_Static_assert(__builtin_offsetof(task_switch_frame_t, eip) == 48, "IRET offset");
+_Static_assert(__builtin_offsetof(task_switch_frame_t, cs) == 52, "saved CS offset");
+_Static_assert(__builtin_offsetof(task_switch_frame_t, eflags) == 56, "saved flags offset");
+
 typedef struct task {
     uint32_t id, state, esp; /* esp at offset 8 is shared with task_switch.asm. */
     uint32_t directory, user_kernel_esp, user_exit_requested;
@@ -24,6 +37,7 @@ typedef struct task {
     uint8_t stack[TASK_STACK_SIZE] __attribute__((aligned(16)));
     char name[16];
 } task_t;
+_Static_assert(__builtin_offsetof(task_t, esp) == 8, "assembly task ESP offset");
 void tasking_init(void);
 int task_create(void (*entry)(void*), void* arg, const char* name);
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice);
@@ -34,7 +48,9 @@ void task_sleep_ms(uint32_t milliseconds);
 void task_preempt_disable(void);
 void task_preempt_enable(void);
 void task_preempt_point(void);
-void task_timer_tick(uint32_t interrupted_cs);
+void task_timer_tick(void);
+/* Timer return only: saved frame exists and local IRQs remain disabled. */
+void task_timer_irq_exit(void);
 void task_schedule_next(void);
 extern task_t* current_task;
 static inline uint32_t task_irq_save(void) {

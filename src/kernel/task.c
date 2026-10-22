@@ -27,11 +27,13 @@ void task_schedule_next(void) {
     if (paging_current_directory() != next->directory)
         paging_activate_directory(next->directory);
 }
-void task_timer_tick(uint32_t interrupted_cs) {
-    (void)interrupted_cs;
+void task_timer_tick(void) {
     scheduler_irq_tick();
     if (!current_task || !scheduler_running()) return;
     scheduler_tick(scheduler_clock());
+}
+void task_timer_irq_exit(void) {
+    if (!current_task || !scheduler_running()) return;
     /* Kernel threads and syscall work are preemptible too. Shared state is
      * protected by sleeping mutexes; only tiny atomic regions defer switches. */
     if (!current_task->preempt_count && scheduler_need_reschedule()) task_schedule_next();
@@ -87,10 +89,12 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
     uint32_t* sp = (uint32_t*)((uint32_t)(t->stack + TASK_STACK_SIZE) & ~0xFu);
     sp -= 3;
     *(--sp) = (uint32_t)arg; *(--sp) = (uint32_t)task_return_stub;
-    *(--sp) = 0x202; *(--sp) = 0x08; *(--sp) = (uint32_t)entry;
-    for (int i = 0; i < 8; i++) *(--sp) = 0;
-    for (int i = 0; i < 4; i++) *(--sp) = 0x10;
-    t->esp = (uint32_t)sp;
+    task_switch_frame_t* frame = (task_switch_frame_t*)((uint8_t*)sp - sizeof(*frame));
+    *frame = (task_switch_frame_t){
+        .gs = 0x10, .fs = 0x10, .es = 0x10, .ds = 0x10,
+        .eip = (uint32_t)entry, .cs = 0x08, .eflags = 0x202
+    };
+    t->esp = (uint32_t)frame;
 }
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice) {
     if (!entry) return -1;
