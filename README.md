@@ -1,10 +1,16 @@
-pmo
 
 # Building
 Install GNU Make, GCC, NASM, binutils, Python, and QEMU, then run `make` to build
 `os.img` or `make run` to build and start it in QEMU. Set
 `DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
 remove generated build artifacts.
+# Makefile arguments
+
+| Argument | Value | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `DEBUG_SUBSYSTEMS` | `1` | `0` | Enable verbose subsystem traces |
+| `ENABLE_OOBE` | `1` | `0` | Enable the Work In Progress OOBE |
+
 # Todo
 - [X] **zainabm** - Implement ACPI for reboots
 - [x] **zainabm** - Implement proper ACPI
