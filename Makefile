@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := all
 PYTHON ?= python3
 NASM ?= nasm
-CC = gcc
+CC ?= gcc
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
@@ -13,11 +13,13 @@ QEMU_EXTRA ?=
 ENABLE_OOBE ?= 0
 
 ifeq ($(OS),Windows_NT)
-  #NASM_FORMAT := win32
-  #LD_FORMAT := i386pe
-  #LDFLAGS := -m $(LD_FORMAT) --image-base 0 --disable-reloc-section
-  #PYTHON := python
-  $(error Windows compilation has been removed. Please compile on Linux)
+  PYTHON := python
+  CC := i686-elf-gcc
+  LD := i686-elf-ld
+  OBJCOPY := i686-elf-objcopy
+  NASM_FORMAT := elf32
+  LD_FORMAT := elf_i386
+  LDFLAGS := -m $(LD_FORMAT)
 else
   NASM_FORMAT := elf32
   LD_FORMAT := elf_i386

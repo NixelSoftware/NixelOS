@@ -45,6 +45,15 @@ sudo apk add build-base nasm qemu-system-x86_64
 sudo xbps-install -S base-devel nasm qemu-system-x86_64
 ```
 
+### Windows
+Install [MSYS2](https://www.msys2.org/) and Download [i686-elf-tools](https://github.com/lordmilko/i686-elf-tools).
+In MINGW2, Install MAKE
+```cmd
+pacman -S mingw-w64-x86_64-make
+```
+
+Add both to your path
+
 # Building
 Install GNU Make, GCC, NASM, binutils, Python, and QEMU, then run `make` to build
 `os.img` or `make run` to build and start it in QEMU. Set
