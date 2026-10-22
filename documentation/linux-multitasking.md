@@ -104,7 +104,7 @@ new runtime testing has been performed.
 - [x] Guard task-slot reuse and enforce the current-task exit ownership contract.
 - [x] Defer collection while active or suspended live task contexts reference the directory.
 - [x] Complete temporary/nested callback mapping and reclamation failure-path checks.
-- [ ] Validate idle transitions and nested preemption/IRQ-disabled boundaries under timer interrupts.
+- [x] Validate idle transitions and nested preemption/IRQ-disabled boundaries under timer interrupts.
 
 ### Phase 3: modern fair policy
 
@@ -337,3 +337,43 @@ Validation:
 These scopes must be balanced in LIFO order. They protect managed app directories;
 they do not introduce asynchronous task cancellation or recover abandoned kernel
 call chains. The next Phase 2 step is idle and nested preemption boundary validation.
+
+### Phase 2, increment 6 — idle and interrupt boundaries — 2026-10-23
+
+Added the repeatable `tools/multitasking-boundary/run.py` QEMU regression. It
+builds an isolated Multiboot test kernel in a temporary directory using the
+production `task.c`, `scheduler.c` (including its hardware clock), and
+`task_switch.asm`. A minimal GDT, IDT and PIC setup delivers real 1 kHz PIT
+interrupts through the production save/restore and IRET path. No OS disk image
+is modified. Requires GCC with i386 support, NASM, GNU ld and qemu-system-i386.
+
+The test checks two nested preemption disables while timer interrupts continue
+accounting and request rescheduling. The inner enable cannot switch; the outer
+enable services the request. It also checks nested IRQ save/restore, enabling
+preemption with IRQs masked, retention of the pending request until timer return,
+and a voluntary sleep that resumes with IF still disabled. Switch hooks assert
+that local IRQs are masked, preemption depth is zero and timer tracing has ended.
+
+After the worker exits, 128 alternating zero/one/two-millisecond sleeps exercise
+the production idle `sti; hlt` loop and timer wakeup. Every sleep must produce
+exactly one idle entry and exit, restore the boot context and IF, and leave
+current runnable outside the run tree. Idle time must increase while runnable
+count and load include only the boot task. The existing idle loop requires no
+change: timer-return selection handles runnable work before returning to idle;
+adjacent STI/HLT prevents an interrupt between enabling IRQs and halting.
+
+Validation:
+
+- `python3 tools/multitasking-boundary/run.py`: passed on one-CPU QEMU TCG with
+  `qemu32` (TSC accounting) and `qemu32,-tsc` (PIT clock fallback). Both runs check
+  the selected clock source and exit through the debug-exit device; a crash,
+  assertion failure or 30-second timeout fails the runner.
+- `make -j4 src/kernel/kernel.bin`: passed.
+- `git diff --check`: passed.
+
+Tracing hooks are test assertions, rather than the production trace recorder.
+Paging and TSS operations are stubbed: this validates ring-0 stacks, real timer
+delivery, idle progress and deferred scheduling on one CPU, not user transitions,
+CR3 isolation, other IRQ handlers, SMP or mixed-device workload latency.
+Phase 2 is complete; the next step is pinning and specifying the Phase 3 EEVDF
+policy before changing task selection.
