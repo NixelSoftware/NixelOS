@@ -42,7 +42,8 @@ enum {
     SYS_AUDIO_STATUS = 31, /* 1 playing, 0 idle, -1 unavailable */
     SYS_AUDIO_SHUTDOWN = 32,
     SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
-    SYS_AUDIO_DRAIN = 34 /* finish all queued samples; rejects further writes */
+    SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
+    SYS_REBOOT = 35 /* requests a kernel managed reboot */
 };
 
 enum {
@@ -240,6 +241,14 @@ static inline void sys_shutdown(void) {
     __asm__ volatile ("int $0x80"
                       :
                       : "a"((uint32_t)SYS_SHUTDOWN)
+                      : "ebx", "ecx", "edx", "memory", "cc");
+    for (;;) { }
+}
+
+static inline void sys_reboot(void) {
+    __asm__ volatile ("int $0x80"
+                      :
+                      : "a"((uint32_t)SYS_REBOOT)
                       : "ebx", "ecx", "edx", "memory", "cc");
     for (;;) { }
 }

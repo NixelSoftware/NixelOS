@@ -566,6 +566,10 @@ static void syscall_dispatch_impl(registers_t* regs) {
             power_shutdown();
             regs->eax = (uint32_t)-1;
             return;
+        case SYS_REBOOT:
+            power_reboot();
+            regs->eax = (uint32_t)-1;
+            return;
         case SYS_NET_DIAGNOSTICS: {
             uint32_t address = regs->ebx;
             if (!user_writable(address, sizeof(net_diagnostics_t))) {
