@@ -46,7 +46,7 @@ sudo xbps-install -S base-devel nasm qemu-system-x86_64
 ```
 
 ### Windows
-Install [MSYS2]([https://openai.com](https://www.msys2.org/))
+Install [MSYS2]((https://www.msys2.org/))
 Download [i686-elf-tools](https://github.com/lordmilko/i686-elf-tools)
 In MINGW2, Install MAKE
 ```cmd
