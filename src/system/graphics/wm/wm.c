@@ -1,6 +1,7 @@
 #include "../../../kernel/mutex.h"
 #include "wm.h"
 #include "desktop.h"
+#include "desktop_wallpaper.h"
 #include "cursor.h"
 #include "../../../kernel/paging.h"
 #include "../../../kernel/drivers/display.h"
@@ -336,7 +337,8 @@ uint8_t wm_render_drag(void) {
         /* Capture a complete window. An initially clipped window uses the
          * regular compositor until it is fully visible. */
         if (x < 0 || y < 0 || x + width > SCREEN_WIDTH || y + height > WM_TASKBAR_Y) return 0;
-        display_clear(COLOR_DESKTOP);
+        //display_clear(COLOR_DESKTOP);
+        desktop_wallpaper_draw();
         desktop_draw();
         draw_windows_except(w);
         wm_draw_taskbar(start_menu_open);

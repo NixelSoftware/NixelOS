@@ -1,4 +1,5 @@
 #include "desktop.h"
+#include "desktop_wallpaper.h"
 #include "../../../kernel/drivers/serial.h"
 #include "wm.h"
 
@@ -83,6 +84,7 @@ void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
     icons[1].target_window = note_win;
     icons[1].icon_type = 1;
     icons[1].selected = 0;
+    desktop_wallpaper_init(api, WALLPAPER_MODE_STRETCH);
 }
 
 void desktop_draw(void) {
