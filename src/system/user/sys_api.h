@@ -40,7 +40,7 @@ enum {
     SYS_AUDIO_INIT = 29, /* EBX: sample rate, signed 16-bit stereo PCM */
     SYS_AUDIO_WRITE = 30, /* EBX: PCM data, ECX: bytes (4..16384, multiple of 4); 0 queue full, positive bytes accepted */
     SYS_AUDIO_STATUS = 31, /* 1 playing, 0 idle, -1 unavailable */
-    SYS_AUDIO_SHUTDOWN = 32,
+    SYS_AUDIO_SHUTDOWN = 32, /* requests a kernel managed shutdown */
     SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
     SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
     SYS_REBOOT = 35 /* requests a kernel managed reboot */
