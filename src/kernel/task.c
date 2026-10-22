@@ -67,6 +67,11 @@ void task_sleep(uint32_t ticks) {
 }
 void task_exit(void) {
     __asm__ volatile ("cli" : : : "memory");
+    /* Dropping locks here could publish partially updated shared state.
+     * Report a kernel contract violation rather than strand lock waiters. */
+    if (current_task->owned_mutexes || current_task->waiting_mutex ||
+        current_task->wait_next || current_task->preempt_count)
+        __asm__ volatile ("ud2");
     scheduler_exit(current_task, scheduler_clock());
     task_yield();
     for (;;) __asm__ volatile ("sti; hlt");
@@ -96,12 +101,20 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
     };
     t->esp = (uint32_t)frame;
 }
+static int slot_reusable(const task_t* t) {
+    /* setup overwrites the stack and linkage. Never do that while any of
+     * these references still belong to the old execution context. IRQs off. */
+    return t != current_task &&
+        (t->state == TASK_STATE_UNUSED || t->state == TASK_STATE_TERMINATED) &&
+        !t->owned_mutexes && !t->waiting_mutex && !t->wait_next &&
+        !t->sched.runnable && !t->sched.in_tree && !t->sched.sleep_next;
+}
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice) {
     if (!entry) return -1;
     uint32_t flags = task_irq_save();
     int slot = -1;
     for (int i = 1; i < MAX_TASKS - 1; i++) {
-        if (task_list[i].state == TASK_STATE_UNUSED || task_list[i].state == TASK_STATE_TERMINATED) {
+        if (slot_reusable(&task_list[i])) {
             slot = i; break;
         }
     }

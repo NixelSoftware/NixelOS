@@ -41,6 +41,8 @@ _Static_assert(__builtin_offsetof(task_t, esp) == 8, "assembly task ESP offset")
 void tasking_init(void);
 int task_create(void (*entry)(void*), void* arg, const char* name);
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice);
+/* Current-task exit only; mutex ownership/waits and preempt-disable nesting
+ * must be cleared by the caller. Violations trap rather than abandon locks. */
 void task_exit(void) __attribute__((noreturn));
 void task_yield(void);
 void task_sleep(uint32_t legacy_ticks);

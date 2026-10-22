@@ -236,6 +236,9 @@ void scheduler_init(task_t* boot, task_t* idle, uint64_t now) {
     idle->state = TASK_STATE_READY;
 }
 void scheduler_enqueue(task_t* t, int nice, uint64_t now) {
+    /* Creation/reuse only; waking an existing task must preserve its history. */
+    if (!t || t == rq.idle || t == rq.current ||
+        (t->state != TASK_STATE_UNUSED && t->state != TASK_STATE_TERMINATED)) return;
     if (nice < -20) nice = -20;
     if (nice > 19) nice = 19;
     account(now);
@@ -254,19 +257,29 @@ static void unlink_sleep(task_t* t) {
     t->sched.sleep_next = 0;
 }
 void scheduler_wake(task_t* t, uint64_t now) {
-    if (t->sched.runnable || t == rq.idle || t->state == TASK_STATE_TERMINATED) return;
+    if (!t || t == rq.idle || t->sched.runnable ||
+        (t->state != TASK_STATE_BLOCKED && t->state != TASK_STATE_SLEEPING)) return;
     account(now);
     if (t->state == TASK_STATE_SLEEPING) unlink_sleep(t);
     uint64_t credit = virtual_delta(SCHED_SLEEPER_CREDIT_NS, t->sched.weight);
     uint64_t floor = rq.min_vruntime > credit ? rq.min_vruntime - credit : 0;
     if (t->sched.vruntime < floor) t->sched.vruntime = floor;
-    t->sched.runnable = 1; t->state = TASK_STATE_READY;
-    startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_READY, 0);
-    rq.nr_running++; rq.load += t->sched.weight; insert(&t->sched);
+    t->sched.runnable = 1;
+    /* A wake can cancel a wait before the task has scheduled away. Current
+     * stays outside the tree; pick_next will enqueue it exactly once. */
+    t->state = t == rq.current ? TASK_STATE_RUNNING : TASK_STATE_READY;
+    startup_trace_event(TR_TASK_STATE, t->id, t->state, 0);
+    rq.nr_running++; rq.load += t->sched.weight;
+    if (t != rq.current) insert(&t->sched);
     check_preempt(t);
 }
 void scheduler_block(task_t* t, uint64_t now) {
+    if (!t || t == rq.idle || t->state == TASK_STATE_UNUSED ||
+        t->state == TASK_STATE_TERMINATED) return;
     account(now);
+    /* Remove before changing state: wake/tick identify timed waits by state.
+     * This also lets scheduler_sleep replace an existing deadline safely. */
+    if (t->state == TASK_STATE_SLEEPING) unlink_sleep(t);
     if (t->sched.in_tree) remove_entity(&t->sched);
     if (t->sched.runnable) { rq.nr_running--; rq.load -= t->sched.weight; }
     t->sched.runnable = 0; t->state = TASK_STATE_BLOCKED;
@@ -275,6 +288,8 @@ void scheduler_block(task_t* t, uint64_t now) {
     update_min();
 }
 void scheduler_sleep(task_t* t, uint64_t deadline, uint64_t now) {
+    if (!t || t == rq.idle || t->state == TASK_STATE_UNUSED ||
+        t->state == TASK_STATE_TERMINATED) return;
     scheduler_block(t, now); t->state = TASK_STATE_SLEEPING; t->sched.wake_at = deadline;
     startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_SLEEPING, (uint32_t)(deadline-now));
     task_t** link = &rq.sleepers;
@@ -282,7 +297,8 @@ void scheduler_sleep(task_t* t, uint64_t deadline, uint64_t now) {
     t->sched.sleep_next = *link; *link = t;
 }
 void scheduler_exit(task_t* t, uint64_t now) {
-    if (t->state == TASK_STATE_SLEEPING) unlink_sleep(t);
+    if (!t || t == rq.idle || t->state == TASK_STATE_UNUSED ||
+        t->state == TASK_STATE_TERMINATED) return;
     scheduler_block(t, now); t->state = TASK_STATE_TERMINATED;
     startup_trace_event(TR_TASK_STATE,t->id,TASK_STATE_TERMINATED,0);
 }

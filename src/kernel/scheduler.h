@@ -28,6 +28,10 @@ typedef struct {
 /* Policy entry points run with local IRQs disabled. The running entity is
  * excluded from the RB tree; runnable/load counts include it, excluding idle. */
 void scheduler_init(struct task* boot, struct task* idle, uint64_t now);
+/* Enqueue initializes unused/terminated slots only, excluding current/idle.
+ * Wake accepts blocked/sleeping tasks only. Repeated sleep replaces a timed
+ * wait; block cancels it. Waking current before it schedules away cancels the
+ * wait without putting current in the tree. Invalid transitions are ignored. */
 void scheduler_enqueue(struct task* task, int nice, uint64_t now);
 void scheduler_wake(struct task* task, uint64_t now);
 void scheduler_sleep(struct task* task, uint64_t deadline, uint64_t now);

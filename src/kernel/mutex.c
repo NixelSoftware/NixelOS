@@ -32,7 +32,9 @@ void mutex_lock(mutex_t* lock) {
     uint32_t flags = task_irq_save();
     if (lock->owner == current_task) { lock->depth++; startup_trace_event(TR_LOCK_ACQUIRE,(uint32_t)lock,current_task->id,lock->depth); task_irq_restore(flags); return; }
     if (!lock->owner) { attach(lock, current_task); startup_trace_event(TR_LOCK_ACQUIRE,(uint32_t)lock,current_task->id,1); task_irq_restore(flags); return; }
-    /* Enqueue atomically with blocking, so an unlock cannot lose a wakeup. */
+    /* On this single CPU, IRQs stay off from the owner check through waiter
+     * publication, blocking and yield. No unlock can run inside that gap.
+     * An SMP port must replace this with shared wait/owner synchronization. */
     current_task->wait_next = 0;
     if (lock->tail) lock->tail->wait_next = current_task;
     else lock->head = current_task;
@@ -57,6 +59,8 @@ void mutex_unlock(mutex_t* lock) {
     if (next) {
         lock->head = next->wait_next;
         if (!lock->head) lock->tail = 0;
+        /* Publish ownership before runnable state: a new contender must not
+         * steal the lock while this waiter has yet to resume. IRQs stay off. */
         next->wait_next = 0; next->waiting_mutex = 0; attach(lock, next);
         restore_priority(next);
         scheduler_wake(next, scheduler_clock());
