@@ -62,7 +62,8 @@ KERNEL_C := \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
   src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c src/kernel/mutex.c \
   src/system/graphics/dialog/dialog.c src/apps/notepad/notepad.c \
-  src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c
+  src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c \
+  src/kernel/drivers/rtc.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm

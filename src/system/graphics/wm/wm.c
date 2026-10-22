@@ -7,6 +7,8 @@
 #include "../../loader/app_loader.h"
 #include "../widgets.h"
 #include "../../../kernel/drivers/display/font.h"
+#include "../../../kernel/drivers/rtc.h"
+#include "../../../kernel/drivers/serial.h"
 #include "../terminal/terminal.h"
 
 static Window* windows[WM_MAX_WINDOWS];
@@ -408,7 +410,12 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 5, 1, 22, COLOR_DARK_GRAY);
     wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 26, 58, 1, COLOR_WHITE);
     wm_api->graphics.fill_rect(SCREEN_WIDTH - 7, y + 5, 1, 22, COLOR_WHITE);
-    wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, "12:00", COLOR_BLACK);
+
+    /* render time from the rtc */
+    char time_str[6];
+    rtc_format_time_hm(time_str);
+    //wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, "12:00", COLOR_BLACK);
+    wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, time_str, COLOR_BLACK);
 
     if (!start_menu_open) return;
     int menu_x = 4, menu_y = y - 96, menu_w = 120, menu_h = 92;
@@ -965,6 +972,25 @@ uint8_t wm_start_menu_is_open(void) {
 void wm_poll(void) {
     MUTEX_GUARD(kernel_mutex);
     if (!wm_api) return;
+
+    static uint8_t last_min = 0xFF;
+    static uint32_t last_check = 0;
+
+    /* check time every 100 ticks (= 1second) */
+    if (wm_api->network.get_ticks) {
+        uint32_t ticks = wm_api->network.get_ticks();
+        if ((uint32_t)(ticks - last_check) >= 100u) {
+            last_check = ticks;
+            rtc_time_t t;
+            rtc_get_time(&t);
+            if (t.minute != last_min) {
+                last_min = t.minute;
+                redraw_pending = 1;
+            }
+        }
+    }
+
+
     os_input_event_t event;
     event.type = OS_INPUT_NONE;
     for (unsigned budget = 16; budget; budget--) {
