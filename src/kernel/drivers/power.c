@@ -8,6 +8,7 @@
 extern const uint8_t font_8x8[128][8];
 
 void power_shutdown(void) {
+    serial_enter_sync();
     debug_print("[POWER] Initiating system shutdown...\n");
     acpi_power_off();
     debug_print("[POWER] ACPI Failed - Does this system support ACPI?\n");
@@ -39,6 +40,7 @@ void power_shutdown(void) {
 }
 
 void power_reboot(void) {
+    serial_enter_sync();
     debug_print("[POWER] Initiating system reboot...\n");
 
     acpi_reboot();

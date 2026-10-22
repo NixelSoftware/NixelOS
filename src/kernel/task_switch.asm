@@ -3,6 +3,9 @@ section .text
 extern current_task
 extern task_schedule_next
 extern task_timer_tick
+%if STARTUP_TRACE
+extern startup_trace_timer
+%endif
 global irq0_timer_handler
 global task_yield
 
@@ -32,12 +35,22 @@ global task_yield
 
 irq0_timer_handler:
     SAVE_CONTEXT
+%if STARTUP_TRACE
+    push dword 1
+    call startup_trace_timer
+    add esp, 4
+%endif
     mov al, 0x20
     out 0x20, al
     ; 4 segments + pushad + EIP place interrupted CS at offset 52.
     push dword [esp + 52]
     call task_timer_tick
     add esp, 4
+%if STARTUP_TRACE
+    push dword 0
+    call startup_trace_timer
+    add esp, 4
+%endif
     jmp restore_context
 
 ; Build exactly the same ring-0 iret frame as an IRQ, retaining caller IF.

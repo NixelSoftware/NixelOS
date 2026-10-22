@@ -1,4 +1,5 @@
 #include "keyboard.h"
+#include "drivers/ps2.h"
 
 static uint8_t shift_held = 0;
 static uint8_t caps_lock = 0;
@@ -34,7 +35,7 @@ static const char shifted_map[128] = {
 
 static void ps2_kbd_wait_write(void) {
     for (volatile int i = 0; i < 10000; i++) {
-        if (!(inb(0x64) & 0x02)) {
+        if (!(ps2_controller_status() & 0x02)) {
             return;
         }
     }
@@ -43,8 +44,8 @@ static void ps2_kbd_wait_write(void) {
 
 static void ps2_kbd_wait_read(void) {
     for (volatile int i = 0; i < 10000; i++) {
-        if (inb(0x64) & 0x01) {
-            inb(0x60);
+        if (ps2_controller_status() & 0x01) {
+            ps2_controller_read_data();
             return;
         }
     }
@@ -53,7 +54,7 @@ static void ps2_kbd_wait_read(void) {
 
 static void update_keyboard_leds(void) {
     ps2_kbd_wait_write();
-    outb(0x60, 0xED);          
+    ps2_controller_write(0x60, 0xED);
     ps2_kbd_wait_read();       
 
     uint8_t led_status = 0;
@@ -62,7 +63,7 @@ static void update_keyboard_leds(void) {
     }
 
     ps2_kbd_wait_write();
-    outb(0x60, led_status);    
+    ps2_controller_write(0x60, led_status);
     ps2_kbd_wait_read();       
 }
 

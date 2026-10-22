@@ -6,10 +6,14 @@
 #include "../../../kernel/drivers/serial.h"
 
 wm_render_stats_t wm_render_stats;
+static uint64_t last_render_log;
 
 void wm_render_screen(void) {
-    MUTEX_GUARD(kernel_mutex);
     uint32_t flags = task_irq_save();
+    uint64_t requested = scheduler_clock();
+    task_irq_restore(flags);
+    mutex_lock(&kernel_mutex);
+    flags = task_irq_save();
     uint64_t started = scheduler_clock();
     task_irq_restore(flags);
     if (!wm_render_drag()) {
@@ -21,10 +25,13 @@ void wm_render_screen(void) {
         wm_cursor_draw();
     }
     flags = task_irq_save();
-    uint64_t elapsed = scheduler_clock() - started;
+    uint64_t finished = scheduler_clock();
+    uint64_t elapsed = finished - started;
     task_irq_restore(flags);
     wm_render_stats.total_ns += elapsed;
     if (elapsed > wm_render_stats.max_ns) wm_render_stats.max_ns = elapsed;
     if (elapsed > 16666667u) wm_render_stats.over_budget++;
     wm_render_stats.frames++;
+    mutex_unlock(&kernel_mutex);
+    debug_frame_timing("render", requested, started, finished, &last_render_log);
 }

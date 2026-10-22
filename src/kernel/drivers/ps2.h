@@ -7,4 +7,6 @@ uint8_t ps2_controller_status(void);
 uint8_t ps2_controller_read_data(void);
 void ps2_mouse_initialize(void);
 
+void ps2_controller_write(uint16_t port, uint8_t value);
+
 #endif

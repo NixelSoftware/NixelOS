@@ -1,16 +1,23 @@
 #include "rtc.h"
+#include "../startup_trace.h"
 
 #define CMOS_ADDRESS 0x70
 #define CMOS_DATA    0x71
 
 static inline uint8_t cmos_read(uint8_t reg) {
+    uint64_t began=startup_trace_now();
     outb(CMOS_ADDRESS, (inb(CMOS_ADDRESS) & 0x80) | (reg & 0x7F));
-    return inb(CMOS_DATA);
+    uint8_t value=inb(CMOS_DATA);
+    startup_trace_span(TR_RTC_IO,began,reg,value);
+    return value;
 }
 
 static inline int cmos_is_updating(void) {
+    uint64_t began=startup_trace_now();
     outb(CMOS_ADDRESS, 0x0A);
-    return (inb(CMOS_DATA) & 0x80);
+    uint8_t value=inb(CMOS_DATA);
+    startup_trace_span(TR_RTC_IO,began,0x0a,value);
+    return value & 0x80;
 }
 
 static uint8_t bcd_to_bin(uint8_t val) {

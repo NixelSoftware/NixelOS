@@ -2,6 +2,7 @@
 #define TASK_H
 #include "types.h"
 #include "scheduler.h"
+#include "startup_trace.h"
 #define MAX_TASKS 32
 #define TASK_STACK_SIZE 32768
 #define TASK_STATE_UNUSED 0
@@ -39,9 +40,11 @@ extern task_t* current_task;
 static inline uint32_t task_irq_save(void) {
     uint32_t flags;
     __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
+    if (flags & 0x200u) startup_trace_irq_begin((uint32_t)__builtin_return_address(0));
     return flags;
 }
 static inline void task_irq_restore(uint32_t flags) {
+    if (flags & 0x200u) startup_trace_irq_end();
     __asm__ volatile ("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
 }
 #endif
