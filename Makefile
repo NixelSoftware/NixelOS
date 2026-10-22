@@ -8,6 +8,7 @@ OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
 # Use QEMU_ACCEL=kvm on Linux hosts with an accessible /dev/kvm.
 QEMU_ACCEL ?= tcg
+QEMU_EXTRA ?=
 
 ENABLE_OOBE ?= 0
 
@@ -39,12 +40,21 @@ else
   OOBE_APP :=
 endif
 
-CFLAGS := -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
+STARTUP_TRACE ?= 0
+# 0=normal, 1=input-only runtime, 2=normal without audio, 3=idle runtime.
+STARTUP_PROFILE ?= 0
+ifneq ($(filter $(STARTUP_TRACE),0 1),$(STARTUP_TRACE))
+$(error STARTUP_TRACE must be 0 or 1)
+endif
+ifneq ($(filter $(STARTUP_PROFILE),0 1 2 3),$(STARTUP_PROFILE))
+$(error STARTUP_PROFILE must be 0, 1, 2 or 3)
+endif
+CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
           -mno-stack-arg-probe -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
-NASMFLAGS := -f $(NASM_FORMAT)
+NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
-  src/kernel/main.c src/system/shell/commands.c \
+  src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \
@@ -70,7 +80,7 @@ KERNEL_C := \
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
-$(KERNEL_OBJ): src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h
+$(KERNEL_OBJ): src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown userhello sound oobe sysdiag reboot
 # Temporary Fastfetch image inclusion for testing.
@@ -105,6 +115,9 @@ browser.bin: Makefile src/apps/browser/entry.o src/apps/browser/main.o
 src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/kernel/kernel.tmp $@
+ifeq ($(STARTUP_TRACE),1)
+	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.trace.elf').write_bytes(Path('src/kernel/kernel.tmp').read_bytes())"
+endif
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.tmp').unlink(missing_ok=True)"
 
 src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
@@ -119,7 +132,7 @@ os.img: $(RESOURCE_WAVS) resources Makefile src/boot.bin src/boot_stage2.bin src
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) -accel $(QEMU_ACCEL) -smp 1 -m 128M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -device sb16 -serial stdio -rtc base=localtime
+	$(QEMU) -accel $(QEMU_ACCEL) -smp 1 -m 128M -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=10.0.1.0/24,dhcpstart=10.0.1.227 -device e1000,netdev=net0 -device sb16 -serial stdio -rtc base=localtime $(QEMU_EXTRA)
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown userhello sound browser oobe sysdiag reboot'.split()]]"

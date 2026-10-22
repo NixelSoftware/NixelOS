@@ -970,8 +970,16 @@ uint8_t wm_start_menu_is_open(void) {
 }
 
 void wm_poll(void) {
-    MUTEX_GUARD(kernel_mutex);
-    if (!wm_api) return;
+    startup_trace_poll(1);
+    uint32_t clock_flags = task_irq_save();
+    uint64_t requested = scheduler_clock();
+    task_irq_restore(clock_flags);
+    mutex_lock(&kernel_mutex);
+    if (!wm_api) { mutex_unlock(&kernel_mutex); startup_trace_poll(0); return; }
+    clock_flags = task_irq_save();
+    uint64_t acquired = scheduler_clock();
+    task_irq_restore(clock_flags);
+    uint32_t keys = 0, mouse = 0;
 
     static uint8_t last_min = 0xFF;
     static uint32_t last_check = 0;
@@ -982,7 +990,9 @@ void wm_poll(void) {
         if ((uint32_t)(ticks - last_check) >= 100u) {
             last_check = ticks;
             rtc_time_t t;
+            startup_trace_event(TR_PHASE_IN,TR_PHASE_RTC,0,0);
             rtc_get_time(&t);
+            startup_trace_event(TR_PHASE_OUT,TR_PHASE_RTC,0,0);
             if (t.minute != last_min) {
                 last_min = t.minute;
                 redraw_pending = 1;
@@ -994,9 +1004,14 @@ void wm_poll(void) {
     os_input_event_t event;
     event.type = OS_INPUT_NONE;
     for (unsigned budget = 16; budget; budget--) {
-        if (!wm_api->input.poll_input || !wm_api->input.poll_input(&event)) break;
-        if (event.type == OS_INPUT_MOUSE) handle_mouse_event(&event);
-        else if (event.type == OS_INPUT_KEY) handle_key_event(&event);
+        startup_trace_event(TR_PHASE_IN,TR_PHASE_INPUT,0,0);
+        int available=wm_api->input.poll_input && wm_api->input.poll_input(&event);
+        startup_trace_event(TR_PHASE_OUT,TR_PHASE_INPUT,available,0);
+        if (!available) break;
+        startup_trace_event(TR_PHASE_IN,TR_PHASE_EVENT,event.type,0);
+        if (event.type == OS_INPUT_MOUSE) { mouse++; handle_mouse_event(&event); }
+        else if (event.type == OS_INPUT_KEY) { keys++; handle_key_event(&event); }
+        startup_trace_event(TR_PHASE_OUT,TR_PHASE_EVENT,event.type,0);
     }
     if (wm_api->graphics.take_redraw_request && wm_api->graphics.take_redraw_request()) {
         scene_generation++;
@@ -1009,7 +1024,15 @@ void wm_poll(void) {
     if (redraw_pending && now >= next_frame && wm_api->graphics.render_screen) {
         if (!next_frame || now - next_frame > 16666667u) next_frame = now + 16666667u;
         else next_frame += 16666667u;
+        startup_trace_event(TR_PHASE_IN,TR_PHASE_RENDER,0,0);
         wm_api->graphics.render_screen();
+        startup_trace_event(TR_PHASE_OUT,TR_PHASE_RENDER,0,0);
         redraw_pending = 0;
     }
+    clock_flags = task_irq_save();
+    uint64_t finished = scheduler_clock();
+    task_irq_restore(clock_flags);
+    mutex_unlock(&kernel_mutex);
+    startup_trace_poll(0);
+    debug_input_progress(requested, acquired, finished, keys, mouse);
 }

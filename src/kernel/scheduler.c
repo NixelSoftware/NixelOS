@@ -19,6 +19,7 @@ Good luck, soldier.
 
 #include "scheduler.h"
 #include "task.h"
+#include "startup_trace.h"
 
 /* CFS nice weights; nice 0 is the virtual-runtime reference weight (1024).
  * Keep policy independent of hardware clock/stack switching for validation. */
@@ -208,6 +209,17 @@ static uint64_t ideal_slice(sched_entity_t* se) {
     uint64_t slice = divide((uint64_t)period * se->weight, rq.load ? rq.load : se->weight);
     return slice < SCHED_MIN_GRANULARITY_NS ? SCHED_MIN_GRANULARITY_NS : slice;
 }
+/* Re-evaluate the running slice when runnable load changes, rather than
+ * waiting for the next timer IRQ. Callers still switch only at safe points. */
+static void check_preempt(task_t* arriving) {
+    if (rq.current == rq.idle) { rq.need_reschedule = 1; return; }
+    if (!rq.current || !rq.current->sched.runnable) return;
+    sched_entity_t* current = &rq.current->sched;
+    if (rq.now - current->slice_start >= ideal_slice(current) ||
+        current->vruntime > arriving->sched.vruntime +
+        virtual_delta(SCHED_WAKEUP_GRANULARITY_NS, current->weight))
+        rq.need_reschedule = 1;
+}
 void scheduler_init(task_t* boot, task_t* idle, uint64_t now) {
     rq.nil.left = rq.nil.right = rq.nil.parent = NIL; rq.nil.red = 0;
     rq.root = rq.leftmost = NIL;
@@ -233,7 +245,7 @@ void scheduler_enqueue(task_t* t, int nice, uint64_t now) {
     t->sched.runnable = 1; t->sched.in_tree = 0; t->sched.sleep_next = 0;
     t->state = TASK_STATE_READY;
     rq.nr_running++; rq.load += t->sched.weight; insert(&t->sched);
-    if (rq.current == rq.idle) rq.need_reschedule = 1;
+    check_preempt(t);
 }
 static void unlink_sleep(task_t* t) {
     task_t** link = &rq.sleepers;
@@ -249,22 +261,22 @@ void scheduler_wake(task_t* t, uint64_t now) {
     uint64_t floor = rq.min_vruntime > credit ? rq.min_vruntime - credit : 0;
     if (t->sched.vruntime < floor) t->sched.vruntime = floor;
     t->sched.runnable = 1; t->state = TASK_STATE_READY;
+    startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_READY, 0);
     rq.nr_running++; rq.load += t->sched.weight; insert(&t->sched);
-    if (rq.current == rq.idle || (rq.current &&
-        rq.current->sched.vruntime > t->sched.vruntime +
-        virtual_delta(SCHED_WAKEUP_GRANULARITY_NS, rq.current->sched.weight)))
-        rq.need_reschedule = 1;
+    check_preempt(t);
 }
 void scheduler_block(task_t* t, uint64_t now) {
     account(now);
     if (t->sched.in_tree) remove_entity(&t->sched);
     if (t->sched.runnable) { rq.nr_running--; rq.load -= t->sched.weight; }
     t->sched.runnable = 0; t->state = TASK_STATE_BLOCKED;
+    startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_BLOCKED, 0);
     if (t == rq.current) rq.need_reschedule = 1;
     update_min();
 }
 void scheduler_sleep(task_t* t, uint64_t deadline, uint64_t now) {
     scheduler_block(t, now); t->state = TASK_STATE_SLEEPING; t->sched.wake_at = deadline;
+    startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_SLEEPING, (uint32_t)(deadline-now));
     task_t** link = &rq.sleepers;
     while (*link && (*link)->sched.wake_at <= deadline) link = &(*link)->sched.sleep_next;
     t->sched.sleep_next = *link; *link = t;
@@ -272,6 +284,7 @@ void scheduler_sleep(task_t* t, uint64_t deadline, uint64_t now) {
 void scheduler_exit(task_t* t, uint64_t now) {
     if (t->state == TASK_STATE_SLEEPING) unlink_sleep(t);
     scheduler_block(t, now); t->state = TASK_STATE_TERMINATED;
+    startup_trace_event(TR_TASK_STATE,t->id,TASK_STATE_TERMINATED,0);
 }
 void scheduler_tick(uint64_t now) {
     account(now);
@@ -302,6 +315,12 @@ task_t* scheduler_pick_next(uint64_t now) {
     return rq.current;
 }
 int scheduler_need_reschedule(void) { return rq.need_reschedule; }
+uint64_t scheduler_current_runtime(uint64_t now) {
+    if (!rq.current || rq.current == rq.idle) return 0;
+    sched_entity_t* se = &rq.current->sched;
+    return se->sum_exec_runtime +
+        (se->runnable && now > se->exec_start ? now - se->exec_start : 0);
+}
 void scheduler_set_nice(task_t* t, int nice, uint64_t now) {
     if (nice < -20) nice = -20;
     if (nice > 19) nice = 19;
@@ -405,6 +424,7 @@ void scheduler_start(void) {
         outb(0x40, 1193u & 255u); outb(0x40, 1193u >> 8);
         outb(0x21, inb(0x21) & ~1u);
         started = 1;
+        startup_trace_clock(tsc_cycles_per_us ? 1u : 2u, tsc_cycles_per_us);
     }
     __asm__ volatile ("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
 }

@@ -13,6 +13,7 @@ void task_schedule_next(void) {
     task_t* previous = current_task;
     task_t* next = scheduler_pick_next(scheduler_clock());
     if (previous == next) return;
+    startup_trace_switch(previous->id, next->id);
     __asm__ volatile ("fnsave %0" : "=m"(previous->fpu_state));
     previous->directory = paging_current_directory();
     previous->user_kernel_esp = arch_user_kernel_esp;
@@ -106,6 +107,7 @@ int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice
         scheduler_enqueue(&task_list[slot], task_list[slot].base_nice, scheduler_clock());
     }
     task_irq_restore(flags);
+    task_preempt_point();
     return slot;
 }
 int task_create(void (*entry)(void*), void* arg, const char* name) {

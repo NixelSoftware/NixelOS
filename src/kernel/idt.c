@@ -73,6 +73,7 @@ static void u32_to_hex(uint32_t val, char* out) {
 
 static void kernel_panic(registers_t* regs) {
     __asm__ volatile ("cli");
+    serial_enter_sync();
 
     const char* reason = (regs->int_no < 32) ? exception_messages[regs->int_no] : "Hardware IRQ Exception";
     

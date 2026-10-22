@@ -5,7 +5,7 @@
 struct task;
 
 #define SCHED_HZ 1000u
-#define SCHED_LATENCY_NS 8000000u
+#define SCHED_LATENCY_NS 4000000u
 #define SCHED_MIN_GRANULARITY_NS 1000000u
 #define SCHED_WAKEUP_GRANULARITY_NS 500000u
 #define SCHED_SLEEPER_CREDIT_NS 1000000u
@@ -39,6 +39,8 @@ int scheduler_need_reschedule(void);
 void scheduler_set_nice(struct task* task, int nice, uint64_t now);
 void scheduler_get_info(scheduler_info_t* info);
 uint32_t scheduler_weight(int nice);
+/* With IRQs disabled, sample scheduled runtime at the supplied clock time. */
+uint64_t scheduler_current_runtime(uint64_t now);
 
 /* Platform integration: 1 kHz PIT, preserving the existing 100 Hz app clock. */
 uint64_t scheduler_clock(void);

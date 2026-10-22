@@ -1,6 +1,7 @@
 #include "../mutex.h"
 #include "display.h"
 #include "../paging.h"
+#include "serial.h"
 
 static uint32_t* const backbuffer = (uint32_t*)0x00A00000;
 static uint8_t* lfb_vram = 0;
@@ -10,6 +11,21 @@ static uint32_t screen_pitch = 3200;
 #define PRESENT_PAGES ((SCREEN_WIDTH * SCREEN_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE)
 static uint32_t present_pages[PRESENT_PAGES];
 static int async_display, damage_pending;
+static uint64_t damage_requested, last_present_log;
+
+static uint64_t display_clock(void) {
+    uint32_t flags = task_irq_save();
+    uint64_t now = scheduler_clock();
+    task_irq_restore(flags);
+    return now;
+}
+static void present_sample(debug_present_sample_t* sample, unsigned index) {
+    uint32_t flags = task_irq_save();
+    uint64_t now = scheduler_clock();
+    sample->wall[index] = now;
+    sample->runtime[index] = scheduler_current_runtime(now);
+    task_irq_restore(flags);
+}
 static int32_t damage_x, damage_y, damage_right, damage_bottom;
 static int32_t present_cursor_x, present_cursor_y;
 static const uint8_t (*present_cursor)[12];
@@ -17,6 +33,7 @@ static const uint8_t (*present_cursor)[12];
 /* Caller holds kernel_mutex; a single merged rectangle bounds queued work. */
 static void queue_damage(int32_t x, int32_t y, int32_t w, int32_t h) {
     if (!damage_pending) {
+        damage_requested = display_clock();
         damage_x = x; damage_y = y; damage_right = x + w; damage_bottom = y + h;
     } else {
         if (x < damage_x) damage_x = x;
@@ -35,8 +52,83 @@ static int can_queue(void) {
 static uint32_t* snapshot_pixel(uint32_t pixel) {
     return (uint32_t*)present_pages[pixel / (PAGE_SIZE / 4u)] + pixel % (PAGE_SIZE / 4u);
 }
+/* The worker owns the retained image. Compare only ordinary RAM, then send
+ * changed row spans to VRAM without holding the scene lock. */
+#define SNAPSHOT_BAND_ROWS 8
+static int present_valid;
+static void snapshot_rows(int32_t x, int32_t y, int32_t right, int32_t bottom,
+                          uint16_t* changed_left, uint16_t* changed_right) {
+    uint32_t row_pixels[SCREEN_WIDTH];
+    for (int32_t row = y; row < bottom; row++) {
+        uint32_t* dest = row_pixels + x;
+        const uint32_t* source = backbuffer + row * SCREEN_WIDTH + x;
+        uint32_t count = right - x;
+        __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(count) : : "memory");
+        int32_t cy = row - present_cursor_y;
+        if (present_cursor && cy >= 0 && cy < 19) {
+            for (int32_t cx = 0; cx < 12; cx++) {
+                int32_t px = present_cursor_x + cx;
+                uint8_t color = present_cursor[cy][cx];
+                if (color && px >= x && px < right)
+                    row_pixels[px] = color == 1 ? COLOR_BLACK : COLOR_WHITE;
+            }
+        }
+        changed_left[row] = right;
+        changed_right[row] = x;
+        for (int32_t col = x; col < right;) {
+            uint32_t pixel = row * SCREEN_WIDTH + col;
+            uint32_t span = PAGE_SIZE / 4u - pixel % (PAGE_SIZE / 4u);
+            if (span > 64u) span = 64u;
+            if (span > (uint32_t)(right - col)) span = right - col;
+            uint32_t* saved = snapshot_pixel(pixel);
+            source = row_pixels + col;
+            const uint32_t* old = saved;
+            count = span;
+            uint8_t equal;
+            __asm__ volatile ("cld; repe cmpsl; sete %0"
+                : "=qm"(equal), "+S"(source), "+D"(old), "+c"(count) : : "memory", "cc");
+            if (!present_valid || !equal) {
+                source = row_pixels + col;
+                count = span;
+                __asm__ volatile ("cld; rep movsl" : "+D"(saved), "+S"(source), "+c"(count) : : "memory");
+                if (changed_left[row] > col) changed_left[row] = col;
+                changed_right[row] = col + span;
+            }
+            col += span;
+        }
+    }
+}
+static uint32_t present_changed_rows(int32_t y, int32_t bottom,
+                                      const uint16_t* changed_left, const uint16_t* changed_right) {
+    uint32_t copied_pixels = 0;
+    for (int32_t row = y; row < bottom; row++) {
+        int32_t col = changed_left[row], end = changed_right[row];
+        if (col >= end) continue;
+        copied_pixels += end - col;
+        while (col < end) {
+            uint32_t pixel = row * SCREEN_WIDTH + col;
+            uint32_t count = PAGE_SIZE / 4u - pixel % (PAGE_SIZE / 4u);
+            if (count > (uint32_t)(end - col)) count = end - col;
+            const uint32_t* source = snapshot_pixel(pixel);
+            if (screen_bpp == 32) {
+                uint32_t* dest = (uint32_t*)(lfb_vram + row * screen_pitch + col * 4);
+                uint32_t copied = count;
+                __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(copied) : : "memory");
+            } else if (screen_bpp == 24) {
+                uint8_t* dest = lfb_vram + row * screen_pitch + col * 3;
+                for (uint32_t i = 0; i < count; i++) {
+                    uint32_t color = source[i];
+                    *dest++ = color; *dest++ = color >> 8; *dest++ = color >> 16;
+                }
+            }
+            col += count;
+        }
+    }
+    return copied_pixels;
+}
 static void present_worker(void* arg) {
     (void)arg;
+    uint16_t changed_left[SCREEN_HEIGHT], changed_right[SCREEN_HEIGHT];
     for (;;) {
         mutex_lock(&kernel_mutex);
         if (!damage_pending) {
@@ -45,52 +137,31 @@ static void present_worker(void* arg) {
             continue;
         }
         int32_t x = damage_x, y = damage_y, right = damage_right, bottom = damage_bottom;
+        uint64_t requested = damage_requested;
+        debug_present_sample_t sample;
+        sample.pixels = (uint32_t)(right - x) * (uint32_t)(bottom - y);
+        sample.copied_pixels = 0;
+        sample.max_lock_ns = 0;
+        present_sample(&sample, 0);
         damage_pending = 0;
-        /* Snapshot ordinary RAM while the scene is stable. Only this worker
-         * touches snapshot pages; no global lock is held during VRAM access. */
-        for (int32_t row = y; row < bottom; row++) {
-            int32_t col = x;
-            while (col < right) {
-                uint32_t pixel = row * SCREEN_WIDTH + col;
-                uint32_t count = PAGE_SIZE / 4u - pixel % (PAGE_SIZE / 4u);
-                if (count > (uint32_t)(right - col)) count = right - col;
-                uint32_t* dest = snapshot_pixel(pixel);
-                const uint32_t* source = backbuffer + pixel;
-                uint32_t copied = count;
-                __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(copied) : : "memory");
-                col += count;
-            }
+        /* New requests stay queued while we process this batch. Each band is
+         * a consistent scene snapshot; writers can progress between bands. */
+        for (int32_t band = y; band < bottom; band += SNAPSHOT_BAND_ROWS) {
+            if (band != y) mutex_lock(&kernel_mutex);
+            uint64_t locked_at = display_clock();
+            int32_t end = band + SNAPSHOT_BAND_ROWS;
+            if (end > bottom) end = bottom;
+            snapshot_rows(x, band, right, end, changed_left, changed_right);
+            uint64_t held = display_clock() - locked_at;
+            if (held > sample.max_lock_ns) sample.max_lock_ns = held;
+            if (end == bottom) present_sample(&sample, 1);
+            mutex_unlock(&kernel_mutex);
         }
-        if (present_cursor) {
-            for (int32_t cy = 0; cy < 19; cy++) for (int32_t cx = 0; cx < 12; cx++) {
-                int32_t px = present_cursor_x + cx, py = present_cursor_y + cy;
-                uint8_t color = present_cursor[cy][cx];
-                if (color && px >= x && px < right && py >= y && py < bottom)
-                    *snapshot_pixel(py * SCREEN_WIDTH + px) = color == 1 ? COLOR_BLACK : COLOR_WHITE;
-            }
-        }
-        mutex_unlock(&kernel_mutex);
-        for (int32_t row = y; row < bottom; row++) {
-            int32_t col = x;
-            while (col < right) {
-                uint32_t pixel = row * SCREEN_WIDTH + col;
-                uint32_t count = PAGE_SIZE / 4u - pixel % (PAGE_SIZE / 4u);
-                if (count > (uint32_t)(right - col)) count = right - col;
-                const uint32_t* source = snapshot_pixel(pixel);
-                if (screen_bpp == 32) {
-                    uint32_t* dest = (uint32_t*)(lfb_vram + row * screen_pitch + col * 4);
-                    uint32_t copied = count;
-                    __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(copied) : : "memory");
-                } else if (screen_bpp == 24) {
-                    uint8_t* dest = lfb_vram + row * screen_pitch + col * 3;
-                    for (uint32_t i = 0; i < count; i++) {
-                        uint32_t color = source[i];
-                        *dest++ = color; *dest++ = color >> 8; *dest++ = color >> 16;
-                    }
-                }
-                col += count;
-            }
-        }
+        present_sample(&sample, 2);
+        sample.copied_pixels = present_changed_rows(y, bottom, changed_left, changed_right);
+        present_valid = 1;
+        present_sample(&sample, 3);
+        debug_present_timing(requested, &sample, &last_present_log);
         task_sleep_ms(1);
     }
 }

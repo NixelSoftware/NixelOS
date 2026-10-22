@@ -30,17 +30,19 @@ static void detach(mutex_t* lock, task_t* owner) {
 void mutex_lock(mutex_t* lock) {
     if (!current_task) return; /* single-threaded early boot */
     uint32_t flags = task_irq_save();
-    if (lock->owner == current_task) { lock->depth++; task_irq_restore(flags); return; }
-    if (!lock->owner) { attach(lock, current_task); task_irq_restore(flags); return; }
+    if (lock->owner == current_task) { lock->depth++; startup_trace_event(TR_LOCK_ACQUIRE,(uint32_t)lock,current_task->id,lock->depth); task_irq_restore(flags); return; }
+    if (!lock->owner) { attach(lock, current_task); startup_trace_event(TR_LOCK_ACQUIRE,(uint32_t)lock,current_task->id,1); task_irq_restore(flags); return; }
     /* Enqueue atomically with blocking, so an unlock cannot lose a wakeup. */
     current_task->wait_next = 0;
     if (lock->tail) lock->tail->wait_next = current_task;
     else lock->head = current_task;
     lock->tail = current_task;
     current_task->waiting_mutex = lock;
+    startup_trace_event(TR_LOCK_WAIT,(uint32_t)lock,lock->owner->id,0);
     inherit(lock->owner, current_task->sched.nice);
     scheduler_block(current_task, scheduler_clock());
     task_yield();
+    startup_trace_event(TR_LOCK_RESUME,(uint32_t)lock,current_task->id,lock->depth);
     /* Unlock hands ownership directly to this waiter before waking it. */
     task_irq_restore(flags);
 }
@@ -48,6 +50,7 @@ void mutex_unlock(mutex_t* lock) {
     if (!current_task) return;
     uint32_t flags = task_irq_save();
     if (lock->owner != current_task || !lock->depth) { task_irq_restore(flags); return; }
+    startup_trace_event(TR_LOCK_RELEASE,(uint32_t)lock,current_task->id,lock->depth);
     if (--lock->depth) { task_irq_restore(flags); return; }
     detach(lock, current_task);
     task_t* next = lock->head;

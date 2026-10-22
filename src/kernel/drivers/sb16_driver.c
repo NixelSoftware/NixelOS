@@ -27,14 +27,8 @@ static volatile uint32_t read_slot, write_slot, queued_count;
 static uint32_t active_slot, auto_start_slot, first_queued;
 static int auto_dma, auto_exit_pending, draining;
 
-static uint32_t irq_save(void) {
-    uint32_t flags;
-    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-static void irq_restore(uint32_t flags) {
-    __asm__ volatile ("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
-}
+#define irq_save task_irq_save
+#define irq_restore task_irq_restore
 
 static uint8_t saved_irq_mask;
 
