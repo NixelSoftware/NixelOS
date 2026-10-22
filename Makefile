@@ -1,4 +1,3 @@
-# GNU Make is the single build entry point on Windows and Linux.
 .DEFAULT_GOAL := all
 PYTHON ?= python3
 NASM ?= nasm
@@ -6,7 +5,6 @@ CC ?= gcc
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
-# Use QEMU_ACCEL=kvm on Linux hosts with an accessible /dev/kvm.
 QEMU_ACCEL ?= tcg
 QEMU_EXTRA ?=
 
@@ -72,7 +70,8 @@ KERNEL_C := \
   src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
   src/system/graphics/wm/cursor.c src/kernel/drivers/display/font.c \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
-  src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c src/kernel/mutex.c \
+  src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c \
+  src/kernel/sched_policy.c src/kernel/sched_wide.c src/kernel/mutex.c \
   src/system/graphics/dialog/dialog.c src/apps/notepad/notepad.c \
   src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c
@@ -80,7 +79,8 @@ KERNEL_C := \
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
-$(KERNEL_OBJ): src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h
+$(KERNEL_OBJ): src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h \
+               src/kernel/sched_policy.h src/kernel/sched_wide.h
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown userhello sound oobe sysdiag reboot setwall
 # Temporary Fastfetch image inclusion for testing.

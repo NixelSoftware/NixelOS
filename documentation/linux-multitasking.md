@@ -108,12 +108,12 @@ new runtime testing has been performed.
 
 ### Phase 3: modern fair policy
 
-- [ ] Pin a Linux source version and document exact EEVDF eligibility/deadline/lag rules.
-- [ ] Specify integer arithmetic, overflow bounds, weight changes and sleeper placement.
-- [ ] Implement eligibility and virtual deadlines with a deterministic policy harness.
-- [ ] Cover equal/weighted fairness, short requests, sleep debt and wakeup latency.
-- [ ] Select and validate a queue representation before replacing CFS selection.
-- [ ] Compare mixed CPU, input, network and audio workloads against the CFS baseline.
+- [x] Pin a Linux source version and document exact EEVDF eligibility/deadline/lag rules.
+- [x] Specify integer arithmetic, overflow bounds, weight changes and sleeper placement.
+- [x] Implement eligibility and virtual deadlines with a deterministic policy harness.
+- [x] Cover equal/weighted fairness, short requests, sleep debt and wakeup latency.
+- [x] Select and validate a queue representation before replacing CFS selection.
+- [x] Compare mixed CPU, input, network and audio workloads against the CFS baseline.
 
 ### Phase 4: architecture and expansion
 
@@ -377,3 +377,251 @@ delivery, idle progress and deferred scheduling on one CPU, not user transitions
 CR3 isolation, other IRQ handlers, SMP or mixed-device workload latency.
 Phase 2 is complete; the next step is pinning and specifying the Phase 3 EEVDF
 policy before changing task selection.
+
+### Phase 3, increment 1 — pinned EEVDF policy — 2026-10-23
+
+Pinned upstream Linux `v6.12` and recorded the audited source hash, function
+references, default feature switches and exact policy behavior in
+[eevdf-policy.md](eevdf-policy.md). Covers weighted virtual time and eligibility,
+request renewal, current-request protection, shorter-request wakeup preemption,
+saved lag bounds, placement compensation, relative/initial deadlines and delayed
+sleep dequeue/wakeup. Distinguishes Linux voluntary yield from NixelOS's shared
+internal yield mechanism, and retained policy membership from executable tasks.
+
+Validation: inspected the pinned upstream `kernel/sched/fair.c` and
+`kernel/sched/features.h`, checked the arithmetic examples and local document
+links, and ran `git diff --check`. This increment changes documentation only;
+runtime CFS selection is unchanged. No new runtime test is claimed. Next is
+the i386 arithmetic, reweighting and sleeper-placement specification.
+
+### Phase 3, increment 2 — i386 arithmetic and sleeper contract — 2026-10-23
+
+Added [eevdf-arithmetic.md](eevdf-arithmetic.md) with the NixelOS implementation
+contract: checked signed coordinates and rebasing, wide integer intermediates,
+explicit division rounding, accounting remainders, bounded slice/weight domains,
+and overflow failure behavior. Defines participant and detached weight changes,
+including mutex inheritance/restoration, and placement with integer compensation.
+Separates executable tasks from retained delayed sleepers and specifies timeout
+cancellation, early wake of current, delayed cleanup, empty queues, exit and
+slot reuse. Records the NixelOS defaults and deviations from the pinned source.
+
+Validation: reviewed production scheduler, task and mutex call sites and the
+pinned source's `reweight_eevdf()`/`reweight_entity()` rules. An ad hoc Python
+arbitrary-precision check verified the stated numeric bounds and 10,000 seeded
+cases of partitioned accounting, fractional remainder rescaling, weighted-mean
+rebasing and eligibility preservation (`Random(23)`). Local document links and
+`git diff --check` passed. This is specification validation, not a production
+policy harness or runtime test; CFS remains unchanged. Next is implementing
+eligibility and virtual deadlines with a deterministic policy harness.
+
+### Phase 3, increment 3 — isolated EEVDF implementation — 2026-10-23
+
+Implemented [tools/eevdf-policy](../tools/eevdf-policy/README.md) separately from
+the production scheduler. The freestanding C policy uses checked signed
+magnitude limb arithmetic for weighted eligibility, virtual deadlines, rebasing,
+accounting remainders, placement and effective-weight changes. It implements
+protected current selection, shorter-request preemption, explicit voluntary
+yield, delayed sleeper retention/cleanup, timeout wakeups, current early wake,
+exit and relative deadline restoration. Failed transactions preserve the entire
+input queue. Repeated block/removal preserves a detached relative deadline.
+
+A Python integer/rational oracle compares all entity/queue fields and eligibility
+after every event. Linear scans are the harness reference, not the production
+queue choice. Mutex and timed-list integration are modeled through state/timeout
+events; no kernel call sites or Makefile sources change.
+
+Validation:
+
+- `python3 tools/eevdf-policy/test.py`: passed 20,000 random wide-arithmetic
+  vectors plus signed edges, overflow/narrowing failures and floor/truncation;
+  targeted eligibility/deadline/protection, overshoot, placement, inheritance,
+  delayed cleanup, timeout cancellation, slot reuse and rollback checks; and
+  10,000 mixed lifecycle events with seeds 12, 23, 612 and 20261023. Each event
+  compares C with the oracle and checks lifecycle invariants.
+- The same command passed 20,000 additional C events across all 32 slots under
+  ASan/UBSan, compiled freestanding i386 objects with warnings as errors, checked
+  the combined object has no undefined symbols, and checked individual stack
+  frames below 16 KiB.
+- Compiled `wide.c`, `policy.c`, and `native.c` with
+  `gcc -std=c11 -O2 -Wall -Wextra -Werror -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -static -no-pie -DEE_NATIVE`
+  into `/tmp/nixel-eevdf-native`, then executed `/tmp/nixel-eevdf-native`: passed
+  arithmetic edges and 20,000 lifecycle events on the i386 ABI. The sandbox
+  blocked its `int 0x80` exit; the authorized outside-sandbox run passed.
+  The runner's optional `--native` flag reproduces this build/execution check.
+- `git diff --check`: passed.
+
+The runtime kernel remains CFS. This validates isolated policy transitions and
+arithmetic, not real interrupt entry, device workloads or integrated mutex waits.
+Next is workload coverage for equal/weighted fairness, short requests, sleep debt
+and wakeup latency, followed by choosing and validating the production queue.
+
+### Phase 3, increment 4 — deterministic workload coverage — 2026-10-23
+
+Added [workloads.py](../tools/eevdf-policy/workloads.py) to the default harness
+command. Workloads check service against weighted fluid ideals independently
+of the transition oracle, including all 32 slots, extreme nice weights and
+effective-weight boost/restoration. Short-request tests distinguish renewal
+frequency from CPU share and contiguous execution. Debt tests cover repeated
+immediate sleeps, real sub-tick wait intervals, delayed cleanup and long sleep
+without credit. Periodic bursts measure deadline-to-dispatch latency across
+three timer phases and three background loads. Exact workloads and acceptance
+thresholds are recorded in the [harness README](../tools/eevdf-policy/README.md).
+
+The long-sleep regression reproduced a policy bug before the fix: with one
+executable peer and one delayed sleeper, renewal checked executable count only
+and never requested selection to complete delayed dequeue. The C implementation
+and oracle now count all policy participants for renewal/ineligibility reschedule
+checks. Voluntary yield still requires an executable competitor. Updated the
+arithmetic specification to make this distinction explicit. Production CFS is
+unchanged.
+
+Validation:
+
+- `python3 -u tools/eevdf-policy/test.py`: passed all previous arithmetic,
+  transition/oracle, sanitizer and freestanding i386 checks plus the workloads.
+  Equal-task maximum prefix service errors were 2.000/3.500/3.875 ms for
+  2/8/32 tasks. Weighted and extreme-weight maxima were 3.756/3.999 ms, within
+  the 5 ms budget. Boost/restore epochs passed their accumulated error budgets.
+- Equal-weight 1/16 ms requests received 5,000 ms each over 10 s and renewed
+  5,000/313 times. Both reached 16 ms contiguous runs, as permitted when a peer
+  is in debt. Prefix error and renewal/request assertions passed.
+- 100 immediate sleep/wake retries retained debt; 2,498 burst/sleep cycles stayed
+  within 5 ms of the available-task ideal. Long sleep completed delayed removal
+  without sleeper execution or positive wake credit.
+- 2,663 periodic burst dispatches passed the explicit workload envelopes.
+  Maximum deadline-to-dispatch latency was 2/4/18 ms with 1/4/16 CPU peers.
+  Nonzero timer phases and every still-pending wait were checked too.
+- Local document links and `git diff --check`: passed.
+
+These are simulated single-CPU policy results, not real interrupt, device or
+mixed-workload measurements. The next step is selecting and validating the queue
+representation before replacing production CFS selection.
+
+### Phase 3, increment 5 — kernel EEVDF integration — 2026-10-23
+
+The kernel now runs EEVDF. Moved the validated policy and wide arithmetic into
+`src/kernel/sched_policy.c` and `sched_wide.c` and added them to the kernel build.
+The harness compiles those production sources directly. Replaced the CFS tree
+and linked sleeper list in `scheduler.c` with the policy's fixed 32-slot queue
+and a task-state adapter. Ordinary selection takes one weighted snapshot then
+scans candidates, rather than recalculating the weighted sum for every candidate.
+At this fixed task limit the bounded scan avoids tree augmentation, dynamic
+allocation and separate sleeper-membership links. The oracle and full-slot
+workloads validate the scan's decisions; the real interrupt test exercises all
+31 executable kernel slots (boot plus 30 workers, with slot 31 reserved for idle).
+
+Timer accounting, deadline renewal, deferred selection, sleep/wake and task exit
+now use the production EEVDF state. Existing mutex inheritance and restoration
+calls reweight that state, including retained delayed sleepers. Published task
+state distinguishes executable from retained policy membership; only selection
+changes current context, through the existing assembly path. Slot reuse consults
+authoritative policy membership as well as lock/stack ownership. Sleep deadline
+addition is checked; expired absolute deadlines wake without advancing the clock.
+Idle/runtime/load diagnostics remain available; the obsolete CFS virtual-runtime
+floor field is removed from the internal scheduler-info structure. The boot log
+now identifies EEVDF.
+
+Validation:
+
+- `make -j4 src/kernel/kernel.bin` and `make -j4 os.img`: passed. The rebuilt
+  bootable image contains the production EEVDF kernel (154,020 bytes, within
+  the bootloader sector limit). Existing RWX linker warnings remain.
+- `python3 -u tools/eevdf-policy/test.py`: all policy/oracle/workload, ASan/UBSan
+  and freestanding i386 linkage/stack checks passed against the kernel sources.
+- `python3 -u tools/multitasking-boundary/run.py`: passed with TSC and PIT-only
+  clocks. Uses production task, scheduler, mutex and switch assembly with real
+  PIT interrupts. Covers nested preemption, IRQ-disabled boundaries, actual mutex
+  blocking/inherited weight/handoff/restoration, 30 preempted CPU workers,
+  slot exhaustion/reuse/exit, and 128 idle sleep/wake transitions.
+- A 15-second headless QEMU TCG boot of the rebuilt `os.img` used one CPU,
+  128 MiB, an e1000 device and SB16 with the silent audio backend. Snapshot disk
+  writes were temporary. Serial reached EEVDF startup, input polling continued
+  for over 13 guest seconds, and audio reported 33 completed blocks with zero
+  refill stalls. Log: `/tmp/nixel-eevdf-boot.log`. This checks real service
+  progress, not audible fidelity or a controlled CFS latency comparison.
+- Local document links and `git diff --check`: passed.
+
+Kernel integration is complete; remaining work includes controlled mixed
+CPU/input/network/audio comparison with the CFS
+baseline and the Phase 4 architecture audits. Those are not claimed complete.
+
+### Phase 3, increment 6 — mixed-load comparison and kernel tuning — 2026-10-23
+
+Compared the preceding CFS kernel at commit
+`2aac843df79d33feeb5f20b32587c0ee55599273` with the integrated EEVDF kernel in
+temporary source copies. The same temporary main.c workload added two always-
+runnable nice-0 CPU workers and an ICMP worker sending to the QEMU gateway every
+20 ms. Existing input, display, network and startup-audio services remained
+active. QMP injected relative mouse motion every 20 host ms and paired Shift
+events every tenth batch; actual input-consumption counters were checked.
+Benchmark workers/instrumentation were not added to the shipped kernel.
+
+Configuration: QEMU 10.2.1 TCG, one CPU, 128 MiB, e1000, private raw disk copies,
+SB16 with the silent backend, GCC 15.2.0, normal startup profile. Runs continued
+through at least 12.5 guest seconds. Three traced CFS/initial-EEVDF runs used
+alternating order. Subsequent tuning builds were measured separately, followed
+by two alternating tracing-disabled CFS/final-EEVDF pairs. Host/emulator pauses
+and run ordering limit conclusions; this is a regression comparison, not a
+hardware latency guarantee or proof that every workload improves.
+
+The measurements identified kernel overhead and request-size regressions:
+
+- Replaced the 128-step bit divider with at most four word divisions. i386 uses
+  DIVL with remainder below divisor, preserving signed floor/truncation and
+  narrowing checks without compiler runtime helpers.
+- Replaced wide-temporary construction for checked 64-bit coordinate add/subtract
+  with GCC overflow-checking operations. Rebase avoids subtracting a zero shift;
+  64x32 multiplication computes only the three possible result words.
+- Reduced the kernel's default request from 4 ms to one PIT tick (1 ms). Four-ms
+  requests could legally keep CPU work ahead of input deadlines. Added the
+  kernel-only `task_create_with_request()` path and explicit 1 ms desktop,
+  network and display requests. Nice weights and the 1–16 ms supported request
+  range are unchanged; a request is not a real-time guarantee. Applications
+  need no ABI change. The policy harness keeps its explicit longer workloads.
+
+Traced input polling gaps, including startup, use the full 12-second histogram
+with 100 us p99 bins:
+
+| Kernel | p99 gap in three runs (ms) | Maximum gap in three runs (ms) |
+| --- | --- | --- |
+| CFS baseline | 4.1 / 4.1 / 4.1 | 16.463 / 17.732 / 11.778 |
+| Initial EEVDF, 4 ms requests | 6.9 / 7.5 / 6.2 | 34.630 / 25.226 / 18.276 |
+| Final EEVDF, optimized arithmetic and 1 ms requests | 4.2 / 4.3 / 5.0 | 10.776 / 10.844 / 10.866 |
+
+Retained timer-handler median durations were 38–71 us for initial EEVDF and
+17–22 us after tuning (CFS: 3–5 us). These exclude selection after timer tracing
+ends and include instrumentation/emulator costs. The rolling record ring
+overwrote history; retained spans cannot classify all outliers, whereas the
+histogram covers the complete capture window.
+
+Tracing-disabled checks confirmed the remaining tail tradeoff. Maximum input
+gap among one-second windows after the first two windows was 4.117/4.393 ms for
+CFS and 5.082/5.065 ms for final EEVDF. These maxima are not p99 measurements.
+All four untraced runs consumed injected keys/mouse events, progressed both CPU
+workers and received all 608–616 recorded ICMP requests. Startup audio completed
+33 blocks, with accepted/completed bytes equal and zero refill stalls. One traced
+final run stopped with a single ICMP request outstanding; no loss rate is inferred.
+
+The initial EEVDF regressions are substantially reduced, but the final kernel is
+not uniformly faster than CFS: p99 input gaps and normal timer-handler cost still
+favor the baseline. Further tail-latency/overhead tuning remains open. Completing
+the comparison checkbox does not claim performance acceptance on physical hardware.
+
+Validation:
+
+- `python3 -u tools/eevdf-policy/test.py`: passed all arithmetic, oracle,
+  workload, sanitizer and freestanding i386 checks after the final code changes.
+- `python3 -u tools/multitasking-boundary/run.py`: passed TSC and PIT-only runs,
+  including actual multiword DIVL/signed-floor cases, invalid request rejection,
+  real mutex inheritance/handoff, 30 CPU workers and idle transitions.
+- `make -j4 os.img`: rebuilt the shipped image with the final kernel. Build log:
+  `/tmp/nixel-eevdf-final-build.log`. Existing RWX linker warnings remain.
+- `git diff --check` and local document-link checks: passed.
+
+Raw traces, JSON/CSV summaries, serial/audio counters, benchmark source copies
+and ELFs are retained in `/tmp/nixel-scheduler-compare/`. The exact temporary
+drivers are `/tmp/nixel-scheduler-compare.py`, `/tmp/nixel-scheduler-fast.py`, and
+`/tmp/nixel-scheduler-fast-off.py`; they build with `make -j4 STARTUP_TRACE=1 os.img`
+or `STARTUP_TRACE=0` and use `tools/startup_trace.py` to capture/analyze traces.
+QMP socket access required an authorized outside-sandbox run. These temporary
+artifacts are session-local and should be copied before relying on their retention.

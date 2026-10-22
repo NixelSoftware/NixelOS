@@ -1,5 +1,10 @@
 # CFS scheduler
 
+This document records the historical CFS baseline and its measurements. The
+kernel now uses EEVDF in `scheduler.c`/`sched_policy.c`; see
+[linux-multitasking.md](linux-multitasking.md) for the current implementation and
+validation. The results below do not validate the EEVDF replacement.
+
 The Linux reference model and staged implementation checklist are maintained in
 [Linux multitasking plan](linux-multitasking.md).
 

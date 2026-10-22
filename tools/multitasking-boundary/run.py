@@ -16,7 +16,8 @@ def main():
         objects = []
         for source in (here / "boot.asm", root / "src/kernel/task_switch.asm",
                        here / "test.c", root / "src/kernel/task.c",
-                       root / "src/kernel/scheduler.c"):
+                       root / "src/kernel/scheduler.c", root / "src/kernel/sched_policy.c",
+                       root / "src/kernel/sched_wide.c", root / "src/kernel/mutex.c"):
             obj = build / (source.stem + ".o")
             if source.suffix == ".asm":
                 command = ["nasm", "-f", "elf32", "-DSTARTUP_TRACE=1", str(source)]

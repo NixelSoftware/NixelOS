@@ -391,7 +391,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     /* Every service has its own schedulable context. Only the idle task halts;
      * ready applications never wait behind an unconditional HLT in the WM. */
 #if STARTUP_PROFILE == 0 || STARTUP_PROFILE == 2
-    if (task_create_nice(network_service, 0, "network", -2) < 0 ||
+    if (task_create_with_request(network_service, 0, "network", -2, SCHED_INTERACTIVE_REQUEST_NS) < 0 ||
 #if STARTUP_PROFILE == 0
         task_create_nice(audio_service, 0, "audio", -4) < 0 ||
 #endif
@@ -405,7 +405,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         for (;;) __asm__ volatile ("cli; hlt");
     }
     scheduler_start();
-    debug_print("[INIT] CFS scheduler started: 1000 Hz, independent services\n");
+    debug_print("[INIT] EEVDF scheduler started: 1000 Hz, independent services\n");
     for (;;) {
 #if STARTUP_PROFILE == 1
         startup_trace_poll(1);

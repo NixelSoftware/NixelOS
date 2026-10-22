@@ -1,52 +1,18 @@
-/*
-
-I may have spent 3 hours trying to get the scheduler operate smoothly. 
-I am not saying it doesn't work, rather I am saying it works, but not as 
-smooth as I would like it to be. When I wrote this code, only God and I knew 
-how it worked, I took a 1-hour break, and now only God knows how it works.
-This might cost you some of your sanity, and some part of your soul. 
-If you are not ready to lose your sanity, do not read this code. 
-If you are not ready to lose your soul, do not read this code.
-
-If you still wish to proceed after all these warnings, I wish you good luck. 
-You will need it.
-
-Good luck, soldier.
-
-- elyas-code
-*/
-
-
+/* Single-CPU EEVDF integration. Task/frame switching remains in task.c/ASM.
+ * The fixed slot queue is bounded by MAX_TASKS; the same policy is exercised by
+ * tools/eevdf-policy. All entry points require local IRQs disabled. */
 #include "scheduler.h"
 #include "task.h"
-#include "startup_trace.h"
+#include "sched_policy.h"
 
-/* CFS nice weights; nice 0 is the virtual-runtime reference weight (1024).
- * Keep policy independent of hardware clock/stack switching for validation. */
-static const uint32_t weights[40] = {
-    88761,71755,56483,46273,36291,29154,23254,18705,14949,11916,
-    9548,7620,6100,4904,3906,3121,2501,1991,1586,1277,
-    1024,820,655,526,423,335,272,215,172,137,
-    110,87,70,56,45,36,29,23,18,15
-};
-/* Account halted CPU time separately from runnable task execution. */
-static uint64_t scheduler_idle_time_ns;
-
+_Static_assert(MAX_TASKS == EE_TASKS, "policy/task slot count");
 static struct {
-    sched_entity_t nil, *root, *leftmost;
-    task_t *current, *idle, *sleepers;
-    uint64_t now, min_vruntime, sequence, switches;
-    uint32_t nr_running, load;
-    int need_reschedule;
+    ee_queue policy;
+    task_t *slots[MAX_TASKS], *current, *idle;
+    uint64_t switches, idle_time_ns;
 } rq;
-#define NIL (&rq.nil)
 
-uint32_t scheduler_weight(int nice) {
-    if (nice < -20) nice = -20;
-    if (nice > 19) nice = 19;
-    return weights[nice + 20];
-}
-/* Freestanding i386 has no libgcc 64-bit division runtime. */
+/* Hardware clock arithmetic also needs an i386 implementation without libgcc. */
 static uint64_t divide(uint64_t value, uint32_t divisor) {
 #if defined(__i386__)
     uint32_t high = (uint32_t)(value >> 32), low = (uint32_t)value;
@@ -58,300 +24,127 @@ static uint64_t divide(uint64_t value, uint32_t divisor) {
     return value / divisor;
 #endif
 }
-static uint64_t virtual_delta(uint64_t ns, uint32_t weight) {
-    return divide(ns * 1024u, weight);
+static int known(const task_t* t) {
+    return t && t != rq.idle && t->id < MAX_TASKS && rq.slots[t->id] == t;
 }
-static int before(sched_entity_t* a, sched_entity_t* b) {
-    return a->vruntime < b->vruntime ||
-        (a->vruntime == b->vruntime && a->sequence < b->sequence);
-}
-static sched_entity_t* minimum(sched_entity_t* n) {
-    if (n == NIL) return NIL;
-    while (n->left != NIL) n = n->left;
-    return n;
-}
-static void rotate_left(sched_entity_t* x) {
-    sched_entity_t* y = x->right;
-    x->right = y->left;
-    if (y->left != NIL) y->left->parent = x;
-    y->parent = x->parent;
-    if (x->parent == NIL) rq.root = y;
-    else if (x == x->parent->left) x->parent->left = y;
-    else x->parent->right = y;
-    y->left = x; x->parent = y;
-}
-static void rotate_right(sched_entity_t* x) {
-    sched_entity_t* y = x->left;
-    x->left = y->right;
-    if (y->right != NIL) y->right->parent = x;
-    y->parent = x->parent;
-    if (x->parent == NIL) rq.root = y;
-    else if (x == x->parent->right) x->parent->right = y;
-    else x->parent->left = y;
-    y->right = x; x->parent = y;
-}
-static void insert(sched_entity_t* z) {
-    sched_entity_t *p = NIL, *n = rq.root;
-    z->sequence = ++rq.sequence;
-    while (n != NIL) { p = n; n = before(z, n) ? n->left : n->right; }
-    z->parent = p; z->left = z->right = NIL; z->red = 1; z->in_tree = 1;
-    if (p == NIL) rq.root = z;
-    else if (before(z, p)) p->left = z;
-    else p->right = z;
-    while (z->parent->red) {
-        if (z->parent == z->parent->parent->left) {
-            sched_entity_t* uncle = z->parent->parent->right;
-            if (uncle->red) {
-                z->parent->red = uncle->red = 0;
-                z->parent->parent->red = 1; z = z->parent->parent;
-            } else {
-                if (z == z->parent->right) { z = z->parent; rotate_left(z); }
-                z->parent->red = 0; z->parent->parent->red = 1;
-                rotate_right(z->parent->parent);
-            }
-        } else {
-            sched_entity_t* uncle = z->parent->parent->left;
-            if (uncle->red) {
-                z->parent->red = uncle->red = 0;
-                z->parent->parent->red = 1; z = z->parent->parent;
-            } else {
-                if (z == z->parent->left) { z = z->parent; rotate_right(z); }
-                z->parent->red = 0; z->parent->parent->red = 1;
-                rotate_left(z->parent->parent);
-            }
-        }
+static uint32_t task_state(uint32_t state) {
+    switch (state) {
+    case EE_READY: return TASK_STATE_READY;
+    case EE_RUNNING: return TASK_STATE_RUNNING;
+    case EE_BLOCKED: return TASK_STATE_BLOCKED;
+    case EE_SLEEPING: return TASK_STATE_SLEEPING;
+    case EE_DEAD: return TASK_STATE_TERMINATED;
+    default: return TASK_STATE_UNUSED;
     }
-    rq.root->red = 0;
-    rq.leftmost = minimum(rq.root);
 }
-static void transplant(sched_entity_t* u, sched_entity_t* v) {
-    if (u->parent == NIL) rq.root = v;
-    else if (u == u->parent->left) u->parent->left = v;
-    else u->parent->right = v;
-    v->parent = u->parent;
-}
-static void remove_fixup(sched_entity_t* x) {
-    while (x != rq.root && !x->red) {
-        if (x == x->parent->left) {
-            sched_entity_t* w = x->parent->right;
-            if (w->red) {
-                w->red = 0; x->parent->red = 1; rotate_left(x->parent);
-                w = x->parent->right;
-            }
-            if (!w->left->red && !w->right->red) { w->red = 1; x = x->parent; }
-            else {
-                if (!w->right->red) {
-                    w->left->red = 0; w->red = 1; rotate_right(w); w = x->parent->right;
-                }
-                w->red = x->parent->red; x->parent->red = 0; w->right->red = 0;
-                rotate_left(x->parent); x = rq.root;
-            }
-        } else {
-            sched_entity_t* w = x->parent->left;
-            if (w->red) {
-                w->red = 0; x->parent->red = 1; rotate_right(x->parent);
-                w = x->parent->left;
-            }
-            if (!w->right->red && !w->left->red) { w->red = 1; x = x->parent; }
-            else {
-                if (!w->left->red) {
-                    w->right->red = 0; w->red = 1; rotate_left(w); w = x->parent->left;
-                }
-                w->red = x->parent->red; x->parent->red = 0; w->left->red = 0;
-                rotate_right(x->parent); x = rq.root;
-            }
-        }
+static void publish(void) {
+    for (unsigned i = 0; i < MAX_TASKS; ++i) {
+        task_t* t = rq.slots[i];
+        if (!t) continue;
+        const ee_entity* e = &rq.policy.task[i];
+        uint32_t state = task_state(e->state);
+        if (t->state != state) startup_trace_event(TR_TASK_STATE, t->id, state, 0);
+        t->state = state;
+        t->sched.weight = e->weight;
+        t->sched.runnable = e->state == EE_READY || e->state == EE_RUNNING;
+        t->sched.policy_member = e->member;
+        t->sched.delayed = e->delayed;
+        t->sched.queued = e->member && rq.policy.current != (int)i;
     }
-    x->red = 0;
+    rq.idle->state = rq.policy.current < 0 ? TASK_STATE_RUNNING : TASK_STATE_READY;
 }
-static void remove_entity(sched_entity_t* z) {
-    sched_entity_t *y = z, *x;
-    uint8_t red = y->red;
-    if (z->left == NIL) { x = z->right; transplant(z, z->right); }
-    else if (z->right == NIL) { x = z->left; transplant(z, z->left); }
-    else {
-        y = minimum(z->right); red = y->red; x = y->right;
-        if (y->parent == z) x->parent = y;
-        else { transplant(y, y->right); y->right = z->right; y->right->parent = y; }
-        transplant(z, y); y->left = z->left; y->left->parent = y; y->red = z->red;
-    }
-    if (!red) remove_fixup(x);
-    z->in_tree = 0; z->left = z->right = z->parent = NIL;
-    rq.leftmost = minimum(rq.root);
+static void apply(unsigned op, unsigned id, int arg, uint64_t value, uint64_t now) {
+    uint64_t elapsed = now > rq.policy.now ? now - rq.policy.now : 0;
+    if (rq.policy.current < 0 && elapsed > ~(uint64_t)0 - rq.idle_time_ns)
+        __builtin_trap();
+    if (ee_apply(&rq.policy, op, id, arg, value, now) != EE_OK) __builtin_trap();
+    if (rq.current == rq.idle) rq.idle_time_ns += elapsed;
+    publish();
 }
-static void update_min(void) {
-    uint64_t value = rq.min_vruntime;
-    int valid = 0;
-    if (rq.current && rq.current != rq.idle && rq.current->sched.runnable) {
-        value = rq.current->sched.vruntime; valid = 1;
-    }
-    if (rq.leftmost != NIL && (!valid || rq.leftmost->vruntime < value))
-        value = rq.leftmost->vruntime;
-    if (value > rq.min_vruntime) rq.min_vruntime = value;
-}
-static void account(uint64_t now) {
-    if (now < rq.now) now = rq.now;
-    rq.now = now;
-    if (!rq.current) return;
-    sched_entity_t* se = &rq.current->sched;
-    if (rq.current == rq.idle) scheduler_idle_time_ns += now - se->exec_start;
-    if (rq.current != rq.idle && se->runnable) {
-        uint64_t delta = now - se->exec_start;
-        se->sum_exec_runtime += delta;
-        se->vruntime += virtual_delta(delta, se->weight);
-    }
-    se->exec_start = now;
-    update_min();
-}
-static uint64_t ideal_slice(sched_entity_t* se) {
-    uint32_t period = rq.nr_running * SCHED_MIN_GRANULARITY_NS;
-    if (period < SCHED_LATENCY_NS) period = SCHED_LATENCY_NS;
-    uint64_t slice = divide((uint64_t)period * se->weight, rq.load ? rq.load : se->weight);
-    return slice < SCHED_MIN_GRANULARITY_NS ? SCHED_MIN_GRANULARITY_NS : slice;
-}
-/* Re-evaluate the running slice when runnable load changes, rather than
- * waiting for the next timer IRQ. Callers still switch only at safe points. */
-static void check_preempt(task_t* arriving) {
-    if (rq.current == rq.idle) { rq.need_reschedule = 1; return; }
-    if (!rq.current || !rq.current->sched.runnable) return;
-    sched_entity_t* current = &rq.current->sched;
-    if (rq.now - current->slice_start >= ideal_slice(current) ||
-        current->vruntime > arriving->sched.vruntime +
-        virtual_delta(SCHED_WAKEUP_GRANULARITY_NS, current->weight))
-        rq.need_reschedule = 1;
-}
+uint32_t scheduler_weight(int nice) { return ee_weight(nice); }
 void scheduler_init(task_t* boot, task_t* idle, uint64_t now) {
-    rq.nil.left = rq.nil.right = rq.nil.parent = NIL; rq.nil.red = 0;
-    rq.root = rq.leftmost = NIL;
-    rq.current = boot; rq.idle = idle; rq.sleepers = 0;
-    rq.now = now; rq.min_vruntime = rq.sequence = rq.switches = 0;
-    scheduler_idle_time_ns = 0;
-    rq.nr_running = 1; rq.load = 1024; rq.need_reschedule = 0;
-    boot->sched.task = boot; boot->sched.weight = 1024; boot->sched.nice = 0;
-    boot->sched.runnable = 1; boot->sched.in_tree = 0;
-    boot->sched.vruntime = boot->sched.sum_exec_runtime = 0;
-    boot->sched.exec_start = boot->sched.slice_start = now;
-    boot->state = TASK_STATE_RUNNING;
-    idle->sched.task = idle; idle->sched.runnable = idle->sched.in_tree = 0;
-    idle->state = TASK_STATE_READY;
+    rq = (__typeof__(rq)){0};
+    ee_init(&rq.policy);
+    rq.policy.now = now;
+    rq.idle = idle;
+    rq.current = idle;
+    idle->sched = (sched_entity_t){0};
+    rq.slots[boot->id] = boot;
+    boot->sched = (sched_entity_t){0};
+    apply(EE_CREATE, boot->id, 0, SCHED_INTERACTIVE_REQUEST_NS, now);
+    apply(EE_PICK, 0, 0, 0, now);
+    rq.current = boot;
+}
+int scheduler_can_reuse(const task_t* t) {
+    if (!t || t == rq.current || t == rq.idle || t->id >= MAX_TASKS) return 0;
+    const ee_entity* e = &rq.policy.task[t->id];
+    return (e->state == EE_UNUSED || e->state == EE_DEAD) &&
+        !e->member && !e->delayed && !e->relative_valid;
 }
 void scheduler_enqueue(task_t* t, int nice, uint64_t now) {
-    /* Creation/reuse only; waking an existing task must preserve its history. */
-    if (!t || t == rq.idle || t == rq.current ||
-        (t->state != TASK_STATE_UNUSED && t->state != TASK_STATE_TERMINATED)) return;
-    if (nice < -20) nice = -20;
-    if (nice > 19) nice = 19;
-    account(now);
-    t->sched.task = t; t->sched.weight = scheduler_weight(nice); t->sched.nice = nice;
-    t->sched.vruntime = rq.min_vruntime; t->sched.sum_exec_runtime = 0;
-    t->sched.exec_start = t->sched.slice_start = now;
-    t->sched.runnable = 1; t->sched.in_tree = 0; t->sched.sleep_next = 0;
-    t->state = TASK_STATE_READY;
-    rq.nr_running++; rq.load += t->sched.weight; insert(&t->sched);
-    check_preempt(t);
+    scheduler_enqueue_request(t, nice, SCHED_REQUEST_NS, now);
 }
-static void unlink_sleep(task_t* t) {
-    task_t** link = &rq.sleepers;
-    while (*link && *link != t) link = &(*link)->sched.sleep_next;
-    if (*link) *link = t->sched.sleep_next;
-    t->sched.sleep_next = 0;
+void scheduler_enqueue_request(task_t* t, int nice, uint32_t request_ns, uint64_t now) {
+    if (!scheduler_can_reuse(t) ||
+        (t->state != TASK_STATE_UNUSED && t->state != TASK_STATE_TERMINATED)) return;
+    if (rq.slots[t->id] && rq.slots[t->id] != t) __builtin_trap();
+    rq.slots[t->id] = t;
+    t->sched.nice = nice < -20 ? -20 : nice > 19 ? 19 : nice;
+    apply(EE_CREATE, t->id, t->sched.nice, request_ns, now);
 }
 void scheduler_wake(task_t* t, uint64_t now) {
-    if (!t || t == rq.idle || t->sched.runnable ||
-        (t->state != TASK_STATE_BLOCKED && t->state != TASK_STATE_SLEEPING)) return;
-    account(now);
-    if (t->state == TASK_STATE_SLEEPING) unlink_sleep(t);
-    uint64_t credit = virtual_delta(SCHED_SLEEPER_CREDIT_NS, t->sched.weight);
-    uint64_t floor = rq.min_vruntime > credit ? rq.min_vruntime - credit : 0;
-    if (t->sched.vruntime < floor) t->sched.vruntime = floor;
-    t->sched.runnable = 1;
-    /* A wake can cancel a wait before the task has scheduled away. Current
-     * stays outside the tree; pick_next will enqueue it exactly once. */
-    t->state = t == rq.current ? TASK_STATE_RUNNING : TASK_STATE_READY;
-    startup_trace_event(TR_TASK_STATE, t->id, t->state, 0);
-    rq.nr_running++; rq.load += t->sched.weight;
-    if (t != rq.current) insert(&t->sched);
-    check_preempt(t);
+    if (!known(t) || (t->state != TASK_STATE_SLEEPING && t->state != TASK_STATE_BLOCKED)) return;
+    apply(EE_WAKE, t->id, 0, 0, now);
 }
 void scheduler_block(task_t* t, uint64_t now) {
-    if (!t || t == rq.idle || t->state == TASK_STATE_UNUSED ||
-        t->state == TASK_STATE_TERMINATED) return;
-    account(now);
-    /* Remove before changing state: wake/tick identify timed waits by state.
-     * This also lets scheduler_sleep replace an existing deadline safely. */
-    if (t->state == TASK_STATE_SLEEPING) unlink_sleep(t);
-    if (t->sched.in_tree) remove_entity(&t->sched);
-    if (t->sched.runnable) { rq.nr_running--; rq.load -= t->sched.weight; }
-    t->sched.runnable = 0; t->state = TASK_STATE_BLOCKED;
-    startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_BLOCKED, 0);
-    if (t == rq.current) rq.need_reschedule = 1;
-    update_min();
+    if (!known(t) || t->state == TASK_STATE_UNUSED || t->state == TASK_STATE_TERMINATED) return;
+    apply(EE_BLOCK, t->id, 0, 0, now);
 }
 void scheduler_sleep(task_t* t, uint64_t deadline, uint64_t now) {
-    if (!t || t == rq.idle || t->state == TASK_STATE_UNUSED ||
-        t->state == TASK_STATE_TERMINATED) return;
-    scheduler_block(t, now); t->state = TASK_STATE_SLEEPING; t->sched.wake_at = deadline;
-    startup_trace_event(TR_TASK_STATE, t->id, TASK_STATE_SLEEPING, (uint32_t)(deadline-now));
-    task_t** link = &rq.sleepers;
-    while (*link && (*link)->sched.wake_at <= deadline) link = &(*link)->sched.sleep_next;
-    t->sched.sleep_next = *link; *link = t;
+    if (!known(t) || t->state == TASK_STATE_UNUSED || t->state == TASK_STATE_TERMINATED) return;
+    /* Kernel API supplies an absolute deadline. Normalize the clock before
+     * converting, including already-expired waits (which must not become 1ms). */
+    uint64_t effective = now > rq.policy.now ? now : rq.policy.now;
+    uint64_t duration = deadline > effective ? deadline - effective : 1;
+    apply(EE_SLEEP, t->id, 0, duration, effective);
+    if (deadline <= effective) apply(EE_WAKE, t->id, 0, 0, effective);
 }
 void scheduler_exit(task_t* t, uint64_t now) {
-    if (!t || t == rq.idle || t->state == TASK_STATE_UNUSED ||
-        t->state == TASK_STATE_TERMINATED) return;
-    scheduler_block(t, now); t->state = TASK_STATE_TERMINATED;
-    startup_trace_event(TR_TASK_STATE,t->id,TASK_STATE_TERMINATED,0);
+    if (!known(t) || t->state == TASK_STATE_UNUSED || t->state == TASK_STATE_TERMINATED) return;
+    apply(EE_EXIT, t->id, 0, 0, now);
 }
-void scheduler_tick(uint64_t now) {
-    account(now);
-    while (rq.sleepers && rq.sleepers->sched.wake_at <= now) scheduler_wake(rq.sleepers, now);
-    if (rq.current == rq.idle) { if (rq.nr_running) rq.need_reschedule = 1; return; }
-    if (!rq.current || !rq.current->sched.runnable) { rq.need_reschedule = 1; return; }
-    if (rq.leftmost == NIL) return;
-    sched_entity_t* se = &rq.current->sched;
-    uint64_t ran = now - se->slice_start;
-    if (ran >= ideal_slice(se) || (ran >= SCHED_MIN_GRANULARITY_NS &&
-        se->vruntime > rq.leftmost->vruntime + virtual_delta(SCHED_WAKEUP_GRANULARITY_NS, se->weight)))
-        rq.need_reschedule = 1;
-}
+void scheduler_tick(uint64_t now) { apply(EE_TICK, 0, 0, 0, now); }
 task_t* scheduler_pick_next(uint64_t now) {
-    account(now);
     task_t* previous = rq.current;
-    if (previous != rq.idle && previous->sched.runnable) {
-        previous->state = TASK_STATE_READY; insert(&previous->sched);
-    } else if (previous == rq.idle) previous->state = TASK_STATE_READY;
-    if (rq.leftmost != NIL) {
-        rq.current = rq.leftmost->task; remove_entity(&rq.current->sched);
-    } else rq.current = rq.idle;
-    rq.current->state = TASK_STATE_RUNNING;
-    rq.current->sched.exec_start = rq.current->sched.slice_start = now;
-    rq.need_reschedule = 0;
-    if (previous != rq.current) rq.switches++;
-    update_min();
+    apply(EE_PICK, 0, 0, 0, now);
+    rq.current = rq.policy.current < 0 ? rq.idle : rq.slots[rq.policy.current];
+    if (!rq.current) __builtin_trap();
+    if (rq.current != previous) rq.switches++;
     return rq.current;
 }
-int scheduler_need_reschedule(void) { return rq.need_reschedule; }
+int scheduler_need_reschedule(void) { return rq.policy.need_reschedule; }
 uint64_t scheduler_current_runtime(uint64_t now) {
-    if (!rq.current || rq.current == rq.idle) return 0;
-    sched_entity_t* se = &rq.current->sched;
-    return se->sum_exec_runtime +
-        (se->runnable && now > se->exec_start ? now - se->exec_start : 0);
+    if (!known(rq.current)) return 0;
+    const ee_entity* e = &rq.policy.task[rq.current->id];
+    uint64_t delta = e->state == EE_RUNNING && now > rq.policy.now ? now - rq.policy.now : 0;
+    if (delta > ~(uint64_t)0 - e->runtime) __builtin_trap();
+    return e->runtime + delta;
 }
 void scheduler_set_nice(task_t* t, int nice, uint64_t now) {
-    if (nice < -20) nice = -20;
-    if (nice > 19) nice = 19;
-    account(now);
-    if (t == rq.idle) return;
-    uint32_t weight = scheduler_weight(nice);
-    if (t->sched.runnable) rq.load = rq.load - t->sched.weight + weight;
-    t->sched.weight = weight; t->sched.nice = nice;
-    rq.need_reschedule = 1;
+    if (!known(t) || t->state == TASK_STATE_UNUSED || t->state == TASK_STATE_TERMINATED) return;
+    t->sched.nice = nice < -20 ? -20 : nice > 19 ? 19 : nice;
+    apply(EE_NICE, t->id, t->sched.nice, 0, now);
 }
 void scheduler_get_info(scheduler_info_t* info) {
     if (!info) return;
-    info->clock_ns = rq.now; info->min_vruntime = rq.min_vruntime;
-    info->idle_time_ns = scheduler_idle_time_ns;
-    info->switches = rq.switches; info->runnable = rq.nr_running; info->total_weight = rq.load;
+    *info = (scheduler_info_t){.clock_ns = rq.policy.now, .switches = rq.switches,
+        .idle_time_ns = rq.idle_time_ns};
+    for (unsigned i = 0; i < MAX_TASKS; ++i) {
+        const ee_entity* e = &rq.policy.task[i];
+        if (e->state == EE_READY || e->state == EE_RUNNING) {
+            info->runnable++; info->total_weight += e->weight;
+        }
+    }
 }
 
 #ifndef SCHEDULER_HOST_TEST

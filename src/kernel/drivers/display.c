@@ -174,7 +174,7 @@ int display_start_async(void) {
         present_pages[pages] = paging_frame_alloc();
         if (!present_pages[pages]) break;
     }
-    if (pages != PRESENT_PAGES || task_create_nice(present_worker, 0, "display", 0) < 0) {
+    if (pages != PRESENT_PAGES || task_create_with_request(present_worker, 0, "display", 0, SCHED_INTERACTIVE_REQUEST_NS) < 0) {
         while (pages) paging_frame_free(present_pages[--pages]);
         return -1;
     }

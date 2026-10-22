@@ -74,7 +74,9 @@ void task_sleep_ms(uint32_t milliseconds) {
     if (!current_task || !scheduler_running() || current_task->preempt_count) return;
     uint32_t flags = task_irq_save();
     uint64_t now = scheduler_clock();
-    scheduler_sleep(current_task, now + (uint64_t)(milliseconds ? milliseconds : 1u) * 1000000u, now);
+    uint64_t duration = (uint64_t)(milliseconds ? milliseconds : 1u) * 1000000u;
+    if (duration > ~(uint64_t)0 - now) __builtin_trap();
+    scheduler_sleep(current_task, now + duration, now);
     task_yield();
     task_irq_restore(flags);
 }
@@ -123,10 +125,15 @@ static int slot_reusable(const task_t* t) {
     return t != current_task &&
         (t->state == TASK_STATE_UNUSED || t->state == TASK_STATE_TERMINATED) &&
         !t->owned_mutexes && !t->waiting_mutex && !t->wait_next &&
-        !t->sched.runnable && !t->sched.in_tree && !t->sched.sleep_next;
+        !t->sched.runnable && !t->sched.queued && !t->sched.policy_member &&
+        !t->sched.delayed && scheduler_can_reuse(t);
 }
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice) {
-    if (!entry) return -1;
+    return task_create_with_request(entry, arg, name, nice, SCHED_REQUEST_NS);
+}
+int task_create_with_request(void (*entry)(void*), void* arg, const char* name,
+                             int nice, uint32_t request_ns) {
+    if (!entry || request_ns < 1000000u || request_ns > 16000000u) return -1;
     uint32_t flags = task_irq_save();
     int slot = -1;
     for (int i = 1; i < MAX_TASKS - 1; i++) {
@@ -137,7 +144,8 @@ int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice
     if (slot >= 0) {
         setup(&task_list[slot], entry, arg, name);
         task_list[slot].base_nice = nice < -20 ? -20 : nice > 19 ? 19 : nice;
-        scheduler_enqueue(&task_list[slot], task_list[slot].base_nice, scheduler_clock());
+        scheduler_enqueue_request(&task_list[slot], task_list[slot].base_nice,
+                                  request_ns, scheduler_clock());
     }
     task_irq_restore(flags);
     task_preempt_point();
