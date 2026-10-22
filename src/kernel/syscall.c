@@ -19,12 +19,14 @@ static unsigned int audio_owner;
 #include "../system/graphics/wm/wm.h"
 
 #define SYS_WRITE_MAX 256u
-#define SYS_FS_READ_MAX 16384u
+//#define SYS_FS_READ_MAX 16384u
+#define SYS_FS_READ_MAX 2097152u
 #define FLOPPY_SECTOR_COUNT 2880u
 #define FLOPPY_SECTOR_SIZE 512u
 #define USER_TCP_SOCKET_MAX 8u
 #define USER_TCP_QUEUE_SIZE 131072u
-#define SYS_FS_WRITE_MAX 65536u
+//#define SYS_FS_WRITE_MAX 65536u
+#define SYS_FS_WRITE_MAX 2097152u
 #define SYS_TCP_SEND_MAX TCP_MAX_PAYLOAD
 #define SYS_TCP_READ_MAX 4096u
 #define SYS_WINDOW_IMAGE_MAX 32768u
