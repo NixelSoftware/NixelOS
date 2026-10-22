@@ -25,6 +25,7 @@ typedef struct {
     uint32_t entry, user_stack;
     os_api_t* api;
     uint16_t window_references;
+    uint32_t context_references;
 } app_instance_t;
 
 static app_instance_t app_instances[APP_INSTANCE_MAX];
@@ -36,6 +37,25 @@ static int app_instance_find(uint32_t directory_address) {
             return i;
     }
     return -1;
+}
+
+uint32_t app_loader_context_enter(uint32_t directory) {
+    MUTEX_GUARD(kernel_mutex);
+    uint32_t previous = paging_current_directory();
+    int index = app_instance_find(previous);
+    /* The previous mapping lives on the caller's stack until leave, including
+     * across nested callbacks and sleeps in a different address space. */
+    if (index >= 0) app_instances[index].context_references++;
+    paging_activate_directory(directory ? directory : paging_kernel_directory());
+    return previous;
+}
+
+void app_loader_context_leave(uint32_t previous) {
+    MUTEX_GUARD(kernel_mutex);
+    paging_activate_directory(previous);
+    int index = app_instance_find(previous);
+    if (index >= 0 && app_instances[index].context_references)
+        app_instances[index].context_references--;
 }
 
 void app_loader_window_attached(uint32_t directory_address) {
@@ -57,7 +77,8 @@ void app_loader_collect(void) {
     MUTEX_GUARD(kernel_mutex);
     for (int i = 0; i < APP_INSTANCE_MAX; i++) {
         app_instance_t* instance = &app_instances[i];
-        if (!instance->active || instance->running || !instance->pending_release || instance->window_references)
+        if (!instance->active || instance->running || !instance->pending_release ||
+            instance->window_references || instance->context_references)
             continue;
         /* kernel_mutex serializes app lifecycle/callback dispatch. Also retain
          * mappings referenced by a suspended task, not just the active CR3. */
@@ -78,6 +99,7 @@ static int app_instance_reserve(void) {
             app_instances[i].pending_release = 0;
             app_instances[i].running = 0;
             app_instances[i].window_references = 0;
+            app_instances[i].context_references = 0;
             return i;
         }
     }
@@ -151,9 +173,8 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
     }
 
     char filename[FS_MAX_FILENAME];
-    uint32_t previous_directory = paging_current_directory();
     debug_print("[APP] activating address space\n");
-    paging_activate(&instance->address_space);
+    uint32_t previous_directory = app_loader_context_enter((uint32_t)instance->address_space.directory);
     debug_print("[APP] reading executable\n");
     /* Hold no core/WM lock across disk access. This private mapping belongs
      * to the loader task; reaping is excluded until preparation completes. */
@@ -162,7 +183,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
     mutex_lock(&kernel_mutex);
     debug_print("[APP] executable read returned\n");
     if (bytes <= (int)sizeof(app_header_t)) {
-        paging_activate_directory(previous_directory);
+        app_loader_context_leave(previous_directory);
         instance->pending_release = 1;
         app_loader_collect();
         return -1;
@@ -172,7 +193,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
     if (header->magic != APP_HEADER_MAGIC ||
         (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE &&
          header->type != APP_TYPE_USER)) {
-        paging_activate_directory(previous_directory);
+        app_loader_context_leave(previous_directory);
         instance->pending_release = 1;
         app_loader_collect();
         return -2;
@@ -188,7 +209,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
         while (source[argument_length] && argument_length < APP_ARGUMENT_MAX - 1u)
             argument_length++;
         if (source[argument_length]) {
-            paging_activate_directory(previous_directory);
+            app_loader_context_leave(previous_directory);
             instance->pending_release = 1;
             app_loader_collect();
             return -1;
@@ -205,7 +226,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
         *(uint32_t*)(user_stack + sizeof(uint32_t)) = user_arguments;
         instance->user_stack = user_stack;
     }
-    paging_activate_directory(previous_directory);
+    app_loader_context_leave(previous_directory);
     instance->running = 1;
     if (task_create(app_run, instance, name) < 0) {
         instance->running = 0;

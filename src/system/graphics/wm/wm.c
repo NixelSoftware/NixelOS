@@ -202,15 +202,11 @@ void wm_invalidate(void) {
 }
 
 static uint32_t window_context_enter(int index) {
-    uint32_t previous = paging_current_directory();
-    uint32_t desired = window_directories[index];
-    if (!desired) desired = paging_kernel_directory();
-    if (previous != desired) paging_activate_directory(desired);
-    return previous;
+    return app_loader_context_enter(window_directories[index]);
 }
 
 static void window_context_leave(uint32_t previous) {
-    if (paging_current_directory() != previous) paging_activate_directory(previous);
+    app_loader_context_leave(previous);
 }
 
 static int find_window_index(const char* title) {
@@ -881,10 +877,9 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     uint32_t owner_directory = window_directories[i];
                     uint32_t caller_directory = previous;
                     window_context_leave(previous);
-                    paging_activate_directory(owner_directory ? owner_directory
-                                                               : paging_kernel_directory());
+                    caller_directory = app_loader_context_enter(owner_directory);
                     wm_bring_to_front(window);
-                    paging_activate_directory(caller_directory);
+                    app_loader_context_leave(caller_directory);
                     dragging_window = window;
                     dragging_directory = owner_directory;
                     request_redraw();
@@ -896,15 +891,12 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     uint32_t owner_directory = window_directories[i];
                     uint32_t caller_directory = previous;
                     window_context_leave(previous);
-                    paging_activate_directory(owner_directory ? owner_directory
-                                                               : paging_kernel_directory());
+                    caller_directory = app_loader_context_enter(owner_directory);
                     wm_bring_to_front(window);
-                    paging_activate_directory(caller_directory);
+                    app_loader_context_leave(caller_directory);
                     request_redraw();
                     handled = 1;
-                    previous = paging_current_directory();
-                    paging_activate_directory(owner_directory ? owner_directory
-                                                               : paging_kernel_directory());
+                    previous = app_loader_context_enter(owner_directory);
                     user_window_slot_t* user_slot = user_slot_for_window(window);
                     if (user_slot) {
                         user_window_event_t queued = {0};

@@ -10,5 +10,9 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments);
 void app_loader_window_attached(uint32_t directory_address);
 void app_loader_window_detached(uint32_t directory_address);
 void app_loader_collect(void);
+/* Balanced temporary mapping scope. Pins the saved return mapping through
+ * nested dispatch/sleep; leave restores it before dropping the reference. */
+uint32_t app_loader_context_enter(uint32_t directory);
+void app_loader_context_leave(uint32_t previous);
 
 #endif

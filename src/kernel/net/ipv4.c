@@ -5,6 +5,7 @@
 #include "../kernel_net.h"
 #include "../drivers/serial.h"
 #include "../paging.h"
+#include "../../system/loader/app_loader.h"
 
 #define IPV4_ETHERNET_HEADER_SIZE 14
 #define IPV4_MAX_FRAME_SIZE (IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + IPV4_MAX_PAYLOAD)
@@ -255,7 +256,6 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
         debug_print("\n");
     }
     if (handler) {
-        uint32_t previous_directory = paging_current_directory();
         uint32_t handler_directory = protocol_handler_directories[header->protocol];
         uint8_t app_handler = handler_directory &&
                               handler_directory != paging_kernel_directory();
@@ -264,15 +264,14 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
             debug_hex(header->protocol);
             debug_print(" to app\n");
         }
-        if (handler_directory && handler_directory != previous_directory)
-            paging_activate_directory(handler_directory);
+        uint32_t previous_directory = app_loader_context_enter(
+            handler_directory ? handler_directory : paging_current_directory());
         handler(
             read_be32((const uint8_t*)&header->source_ip),
             read_be32((const uint8_t*)&header->destination_ip),
             frame + header_length,
             payload_length);
-        if (paging_current_directory() != previous_directory)
-            paging_activate_directory(previous_directory);
+        app_loader_context_leave(previous_directory);
         if (app_handler) debug_print("[APP NET] app packet handler returned\n");
     }
     return 0;

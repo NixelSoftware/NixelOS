@@ -103,8 +103,8 @@ new runtime testing has been performed.
 - [x] Audit condition/wait publication against IRQ and task wakeups; exercise lost-wakeup boundaries.
 - [x] Guard task-slot reuse and enforce the current-task exit ownership contract.
 - [x] Defer collection while active or suspended live task contexts reference the directory.
-- [ ] Complete temporary/nested callback mapping and reclamation failure-path checks.
-- [ ] Validate idle transitions and nested preemption/IRQ-disabled boundaries in QEMU.
+- [x] Complete temporary/nested callback mapping and reclamation failure-path checks.
+- [ ] Validate idle transitions and nested preemption/IRQ-disabled boundaries under timer interrupts.
 
 ### Phase 3: modern fair policy
 
@@ -157,7 +157,7 @@ A headless one-CPU QEMU TCG smoke test used a temporary disk snapshot, 128 MiB,
 e1000 and SB16 with the silent audio backend. Serial output reached scheduler
 startup and repeated input polling. This checks boot and scheduled service
 progress, not graphical interaction, user-mode isolation, audio fidelity or
-mixed-workload latency. Those broader checks remain open above. The linker
+mixed-workload latency. The linker
 continues to report executable-stack/RWX warnings.
 
 ### Phase 2, increment 1 — task transitions and sleeper membership
@@ -189,8 +189,8 @@ Validation:
 - `make -j4 src/kernel/kernel.bin`: passed; existing linker warnings remain.
 - `git diff --check`: passed.
 
-This increment changes scheduler lifecycle bookkeeping only. No new QEMU run
-was performed. Wait publication/lost-wakeup boundaries, task-slot resource
+This increment changes scheduler lifecycle bookkeeping only.
+Wait publication/lost-wakeup boundaries, task-slot resource
 ownership and deferred reclamation remain the next audit steps; guarding enqueue
 does not by itself make caller-side stack reuse safe.
 
@@ -233,7 +233,7 @@ Validation:
 - `make -j4 src/kernel/kernel.bin` and `git diff --check`: passed.
 
 These deterministic host checks model interleavings; they do not execute real
-interrupt entry/return. 
+interrupt entry/return.
 
 ### Phase 2, increment 3 — task-slot reuse and exit ownership
 
@@ -269,8 +269,6 @@ Validation:
 - Previous wakeup/transition, wait-publication and mutex harnesses passed.
 - `make -j4 src/kernel/kernel.bin` and `git diff --check`: passed.
 
-
-
 ### Phase 2, increment 4 — suspended address-space references
 
 Collection previously checked only the collector CPU's active directory after
@@ -303,3 +301,39 @@ This is one reclamation safeguard, not the completed audit. Temporary callback
 contexts can also retain a previous directory on a kernel stack, especially
 with nested dispatch. Those saved return mappings and loader failure paths are
 next.
+
+### Phase 2, increment 5 — nested callback mappings and loader failures
+
+Added balanced `app_loader_context_enter/leave` mapping scopes. Enter retains
+an app-owned return directory before switching away; leave restores it before
+dropping that reference. Collection now also requires zero context references.
+This covers return directories held only in kernel stack locals during nested
+callbacks, including repeated entry into the same directory. The active/suspended
+task checks continue to protect the current execution mapping. Scope reference
+updates and collection share kernel_mutex.
+
+Window callback scopes, mouse/focus dispatch, IPv4 protocol callbacks and loader
+preparation now use these helpers. IPv4 handlers without an explicit owner keep
+the caller's mapping, preserving their previous behavior. Loader preparation
+retains its return directory across disk reads with the core lock released.
+Read/header/argument failures restore it before collecting the failed instance;
+task-creation failure occurs after restoration. Allocation failures happen
+before entering a mapping scope and release their partial address space directly.
+Successful preparation publishes the running pin before queuing execution.
+
+Validation:
+
+- `python3 /tmp/nixel-phase2-contexts.py`: production scope helpers, query and
+  collector with host platform stubs; nested app-to-app-to-kernel scopes,
+  same-directory nesting, balanced references, restoration and delayed cleanup.
+- `python3 /tmp/nixel-phase2-loader-failures.py`: production preparation control
+  flow with injected directory/page allocation, read, header, argument and
+  task-creation failures. Checks return codes, mapping restoration, balanced
+  scope references, cleanup and successful running-pin publication. Reentrant
+  collection during simulated disk reads retains the caller's return mapping.
+- Existing task reuse, wakeup, wait publication and mutex checks passed.
+- `make -j4 src/kernel/kernel.bin` and `git diff --check`: passed.
+
+These scopes must be balanced in LIFO order. They protect managed app directories;
+they do not introduce asynchronous task cancellation or recover abandoned kernel
+call chains. The next Phase 2 step is idle and nested preemption boundary validation.
