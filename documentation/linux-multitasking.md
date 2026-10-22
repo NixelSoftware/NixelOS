@@ -102,7 +102,8 @@ new runtime testing has been performed.
 - [x] Audit duplicate enqueue/block/sleep transitions and sleeper-list membership.
 - [x] Audit condition/wait publication against IRQ and task wakeups; exercise lost-wakeup boundaries.
 - [x] Guard task-slot reuse and enforce the current-task exit ownership contract.
-- [ ] Complete the deferred address-space reclamation audit and regression checks.
+- [x] Defer collection while active or suspended live task contexts reference the directory.
+- [ ] Complete temporary/nested callback mapping and reclamation failure-path checks.
 - [ ] Validate idle transitions and nested preemption/IRQ-disabled boundaries in QEMU.
 
 ### Phase 3: modern fair policy
@@ -126,8 +127,7 @@ new runtime testing has been performed.
 
 Implementation results and exact commands belong here as work proceeds. Temporary
 harnesses may live in /tmp, consistent with the existing scheduler workflow.
-A successful compile is not proof of correct user/kernel context switching;
-QEMU mixed-workload validation remains a separate checklist requirement.
+A successful compile is not proof of correct user/kernel context switching.
 
 ### First increment — 2026-10-22
 
@@ -233,8 +233,7 @@ Validation:
 - `make -j4 src/kernel/kernel.bin` and `git diff --check`: passed.
 
 These deterministic host checks model interleavings; they do not execute real
-interrupt entry/return. QEMU validation remains unchecked. Next is slot reuse,
-exit, mutex ownership and deferred address-space reclamation.
+interrupt entry/return. 
 
 ### Phase 2, increment 3 — task-slot reuse and exit ownership
 
@@ -270,5 +269,37 @@ Validation:
 - Previous wakeup/transition, wait-publication and mutex harnesses passed.
 - `make -j4 src/kernel/kernel.bin` and `git diff --check`: passed.
 
-No new QEMU run in this increment. Deferred reclamation is next; the Phase 2
-QEMU boundary checks remain outstanding as well.
+
+
+### Phase 2, increment 4 — suspended address-space references
+
+Collection previously checked only the collector CPU's active directory after
+checking the app running/window pins. Added `task_address_space_in_use()` to
+sample active CR3's software mirror and every suspended live task directory
+with local IRQs disabled. The collector now defers cleanup for those references
+before forgetting syscalls/handlers or freeing pages. READY, RUNNING, BLOCKED
+and SLEEPING contexts count; UNUSED/TERMINATED contexts cannot resume and do
+not count. Current's saved directory may be stale after an explicit mapping
+switch, so current is checked through the actual active directory instead.
+The helper preserves the caller's interrupt state, including an already-masked
+caller. It is a snapshot, not a reference acquisition API.
+
+The collector retains kernel_mutex while checking and destroying. That lock
+serializes the existing app lifecycle/callback operations; the helper alone
+must not be used to justify freeing mappings without serializing new references.
+Task stacks remain static and are not freed by this collector.
+
+Validation:
+
+- `python3 /tmp/nixel-phase2-address-space.py`: production query and collector
+  control flow with simulated tasks, IRQ flags, mutex scope and paging cleanup.
+  Covers active CR3, suspended task states, dead/unused references, stale current
+  metadata, running/window/release pins, cleanup after the last context clears,
+  exactly-once destruction and interrupt-state preservation.
+- Previous reuse/exit, wakeup/transition, publication and mutex harnesses passed.
+- `make -j4 src/kernel/kernel.bin` and `git diff --check`: passed.
+
+This is one reclamation safeguard, not the completed audit. Temporary callback
+contexts can also retain a previous directory on a kernel stack, especially
+with nested dispatch. Those saved return mappings and loader failure paths are
+next.

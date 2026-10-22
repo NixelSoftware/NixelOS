@@ -54,6 +54,9 @@ void task_timer_tick(void);
 /* Timer return only: saved frame exists and local IRQs remain disabled. */
 void task_timer_irq_exit(void);
 void task_schedule_next(void);
+/* Snapshot of active CR3 and suspended live task contexts. Callers must also
+ * serialize creation of new references for the duration of reclamation. */
+int task_address_space_in_use(uint32_t directory);
 extern task_t* current_task;
 static inline uint32_t task_irq_save(void) {
     uint32_t flags;

@@ -59,7 +59,9 @@ void app_loader_collect(void) {
         app_instance_t* instance = &app_instances[i];
         if (!instance->active || instance->running || !instance->pending_release || instance->window_references)
             continue;
-        if (paging_current_directory() == (uint32_t)instance->address_space.directory)
+        /* kernel_mutex serializes app lifecycle/callback dispatch. Also retain
+         * mappings referenced by a suspended task, not just the active CR3. */
+        if (task_address_space_in_use((uint32_t)instance->address_space.directory))
             continue;
         syscall_forget_address_space((uint32_t)instance->address_space.directory);
         ipv4_clear_handlers_for_directory((uint32_t)instance->address_space.directory);

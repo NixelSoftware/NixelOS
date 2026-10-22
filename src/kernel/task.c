@@ -7,6 +7,22 @@ static task_t task_list[MAX_TASKS];
 task_t* current_task;
 static uint8_t initial_fpu_state[108] __attribute__((aligned(16)));
 
+int task_address_space_in_use(uint32_t directory) {
+    if (!directory) return 0;
+    uint32_t flags = task_irq_save();
+    int used = paging_current_directory() == directory;
+    for (int i = 0; !used && i < MAX_TASKS; i++) {
+        const task_t* t = &task_list[i];
+        /* Current's saved directory can be stale after an explicit CR3 change;
+         * its actual directory was checked above. Dead tasks cannot resume. */
+        if (t != current_task && t->state != TASK_STATE_UNUSED &&
+            t->state != TASK_STATE_TERMINATED && t->directory == directory)
+            used = 1;
+    }
+    task_irq_restore(flags);
+    return used;
+}
+
 /* IRQs are disabled by the assembly switch. Policy lives in scheduler.c. */
 void task_schedule_next(void) {
     if (!current_task || !scheduler_running()) return;
