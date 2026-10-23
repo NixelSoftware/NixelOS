@@ -12,6 +12,7 @@
 #include "../../../kernel/drivers/serial.h"
 #include "../terminal/terminal.h"
 #include "../../icons/network.h"
+#include "../../icons/sound.h"
 #include "../../../kernel/kernel_net.h"
 
 static Window* windows[WM_MAX_WINDOWS];
@@ -411,8 +412,8 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 26, 58, 1, COLOR_WHITE);
     wm_api->graphics.fill_rect(SCREEN_WIDTH - 7, y + 5, 1, 22, COLOR_WHITE);
 
-    const int tray_w = 80;
-    const int tray_x = SCREEN_WIDTH - tray_w - 6; // 714
+    const int tray_w = 100;
+    const int tray_x = SCREEN_WIDTH - tray_w - 6; // 694
     const int tray_y = y + 5;
     const int tray_h = 22;
 
@@ -422,9 +423,22 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     wm_api->graphics.fill_rect(tray_x, tray_y + tray_h - 1, tray_w, 1, COLOR_WHITE);
     wm_api->graphics.fill_rect(tray_x + tray_w - 1, tray_y, 1, tray_h, COLOR_WHITE);
 
+    const int sound_x = tray_x + 4;
+    const int sound_y = tray_y + 3;
+    for (int r = 0; r < SOUND_ICON_H; r++) {
+        for (int c = 0; c < SOUND_ICON_W; c++) {
+            uint8_t val = icon_sound[r][c];
+            if (val != 0) {
+                wm_api->graphics.put_pixel(sound_x + c, sound_y + r, sound_icon_color(val));
+            }
+        }
+    }
+
     uint8_t net_ok = sys_net_is_ready();
     const uint8_t (*net_sprite)[NET_ICON_W] = net_ok ? icon_net_ok : icon_net_err;
-    const int icon_x = tray_x + 4;
+    //const int icon_x = tray_x + 4;
+    //const int icon_x = tray_x + 18;
+    const int icon_x = tray_x + 26;
     const int icon_y = tray_y + 3;
 
     for (int r = 0; r < NET_ICON_H; r++) {
