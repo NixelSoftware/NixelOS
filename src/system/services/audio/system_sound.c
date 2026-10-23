@@ -1,9 +1,9 @@
 #include "system_sound.h"
 #include "../../../kernel/fs.h"
-#include "../../../kernel/drivers/sb16_driver.h"
+#include "../../../kernel/hal/audio.h"
 
 extern volatile uint32_t frame_timer;
-static uint8_t buffer[SB16_BUFFER_SIZE];
+static uint8_t buffer[AUDIO_BUFFER_CHUNK_SIZE];
 static uint32_t offset, remaining, pending, last_progress;
 static int active;
 static uint32_t channels, bits, frame_size, pending_source;
@@ -17,7 +17,7 @@ static int tag(const uint8_t* p, const char* s) {
     return 1;
 }
 static void stop(void) {
-    sb16_shutdown();
+    audio_shutdown();
     active = 0;
     pending = 0;
 }
@@ -54,7 +54,7 @@ void system_sound_start(void) {
         if (length == end-pos) break;
         pos += length + (length & 1u);
     }
-    if (!rate || !offset || !remaining || (remaining % frame_size) || sb16_init(rate) < 0) return;
+    if (!rate || !offset || !remaining || (remaining % frame_size) || audio_init(rate) < 0) return;
     active = 1;
     last_progress = frame_timer;
     system_sound_poll();
@@ -65,11 +65,11 @@ void system_sound_start(void) {
  */
 void system_sound_poll(void) {
     if (!active) return;
-    if (sb16_status() < 0 || (uint32_t)(frame_timer-last_progress) > 300u) {
+    if (audio_status() < 0 || (uint32_t)(frame_timer-last_progress) > 300u) {
         stop(); return;
     }
     if (!remaining && !pending) {
-        if (sb16_drain() < 0 || sb16_status() == 0) stop();
+        if (audio_drain() < 0 || audio_status() == 0) stop();
         return;
     }
     if (!pending) {
@@ -95,7 +95,7 @@ void system_sound_poll(void) {
         }
         pending = frames * 4u;
     }
-    int32_t written = sb16_write(buffer, pending);
+    int32_t written = audio_write(buffer, pending);
     if (written == 0) return;
     if (written != (int32_t)pending) { stop(); return; }
     offset += pending_source;

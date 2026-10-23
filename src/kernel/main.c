@@ -11,7 +11,7 @@
 #include "drivers/power.h"
 #include "drivers/acpi.h"
 #include "drivers/ps2.h"
-#include "drivers/sb16_driver.h"
+//#include "drivers/sb16_driver.h"
 #include "idt.h"
 #include "fs.h" 
 #include "os_api.h"
@@ -21,6 +21,7 @@
 #include "paging.h"
 #include "arch_i386.h"
 #include "syscall.h"
+#include "hal/audio.h"
 #include "kernel_net.h"
 #include "drivers/net.h"
 #include "net/arp.h"
@@ -338,10 +339,11 @@ static void network_service(void* arg) {
     (void)arg;
     for (;;) { sys_net_poll(); task_sleep_ms(2); }
 }
-static void audio_service(void* arg) {
+static void audio_task(void* arg) {
     (void)arg;
     system_sound_start();
-    for (;;) { system_sound_poll(); sb16_service(); task_sleep_ms(2); }
+    for (;;) { system_sound_poll(); audio_service(); task_sleep_ms(2);
+    }
 }
 static void cleanup_service(void* arg) {
     (void)arg;
@@ -378,6 +380,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         .initialize_input = kernel_initialize_input,
         .finish_boot = kernel_finish_boot
     };
+    audio_hal_init();
     nixinit_start(&init_services);
 
     #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
@@ -393,7 +396,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 #if STARTUP_PROFILE == 0 || STARTUP_PROFILE == 2
     if (task_create_with_request(network_service, 0, "network", -2, SCHED_INTERACTIVE_REQUEST_NS) < 0 ||
 #if STARTUP_PROFILE == 0
-        task_create_nice(audio_service, 0, "audio", -4) < 0 ||
+        task_create_nice(audio_task, 0, "audio", -4) < 0 ||
 #endif
         task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
         task_create_nice(shell_service, 0, "shell", 0) < 0 ||

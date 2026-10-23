@@ -3,6 +3,8 @@
 
 #include "../types.h"
 
+#define AUDIO_BUFFER_CHUNK_SIZE 16384u
+
 typedef struct {
     const char* name;
     int32_t (*init)(uint32_t sample_rate);

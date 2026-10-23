@@ -3,7 +3,7 @@
 #include "drivers/display.h"
 #include "drivers/serial.h"
 #include "syscall.h"
-#include "drivers/sb16_driver.h"
+#include "hal/audio.h"
 #include "arch_i386.h"
 
 static idt_entry_t idt_entries[256];
@@ -196,7 +196,7 @@ static void kernel_panic(registers_t* regs) {
 }
 
 void isr_handler(registers_t* regs) {
-    if (regs && regs->int_no == 37) { sb16_interrupt(); return; }
+    if (regs && regs->int_no == 37) { audio_interrupt((uint8_t)regs->int_no); return; }
     if (regs && regs->int_no < 32 && (regs->cs & 3u) == 3u) {
         debug_print("[USER] exception ");
         debug_hex(regs->int_no);
