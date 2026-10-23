@@ -1,0 +1,7 @@
+os.img
+OperatingSys.code-workspace
+*.bin
+*.o
+*.img
+*.so
+*.elf
