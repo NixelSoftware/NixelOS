@@ -856,20 +856,16 @@ static void handle_mouse_event(const os_input_event_t* event) {
 
     if (click_down) {
     int handled = 0;
-
-        /* 1. Delegate to the new Start Menu first if it is open and handles the click */
         if (start_menu_is_open() && start_menu_handle_mouse(mouse_x, mouse_y, click_down)) {
             handled = 1;
         }
-        /* 2. Start Button click */
+
         else if (mouse_x >= 4 && mouse_x <= 64 && mouse_y >= WM_TASKBAR_Y + 4 && mouse_y <= WM_TASKBAR_Y + 28) {
             start_menu_toggle();
             handled = 1;
             request_redraw();
         }
-        /* 3. Taskbar App Buttons */
         else if (mouse_y >= WM_TASKBAR_Y + 4 && mouse_y <= WM_TASKBAR_Y + 28) {
-            /* Close start menu if clicking an app button */
             if (start_menu_is_open()) {
                 start_menu_close();
             }
@@ -880,7 +876,6 @@ static void handle_mouse_event(const os_input_event_t* event) {
             else if (mouse_x >= 320 && mouse_x <= 400) { toggle_window("Files"); handled = 1; }
         }
 
-        /* 4. If the click fell outside the taskbar and outside the start menu, dismiss the menu */
         if (!handled && start_menu_is_open()) {
             start_menu_close();
             request_redraw();
