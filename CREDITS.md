@@ -17,7 +17,8 @@ Thank you to everyone who contributed to the development of this project!
 
 Special thanks to all the individuals who helped submit wallpapers for this project:
 
-- [@avathesamoyed0](https://x.com/CelesteDorsal) – United States, Canada, and Italy
+- [@avathesamoyed0](https://github.com/avathesamoyed0) – United States, Dominican Republic, Canada, and Italy
+- [@elyas-code](https://github.com/elyas-code) – Bahrain, Kyrgyzstan, Oman, Qatar
 
 *(See the full list of git contributors on [GitHub Contributors Page](https://github.com/NixelSoftware/NixelOS/graphs/contributors).)
 
