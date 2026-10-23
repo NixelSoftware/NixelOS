@@ -235,6 +235,7 @@ print_string:
     popa
     ret
 
+msg_thx  db "R.I.P Sudaox, 2001 - 2025", 13, 10, 0
 msg_stage2  db "Stage 2 OK", 13, 10, 0
 msg_a20     db "A20 OK", 13, 10, 0
 msg_kok     db "Kernel Loaded", 13, 10, 0
