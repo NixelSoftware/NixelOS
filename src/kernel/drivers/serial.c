@@ -72,21 +72,24 @@ void debug_putc(char c) {
     if (startup_trace_quiet() || (serial_async && scheduler_running())) {
         uint32_t flags = task_irq_save();
         uint32_t next = (serial_head + 1u) % SERIAL_QUEUE_SIZE;
-        if (next == serial_tail) serial_dropped_bytes++;
-        else { serial_queue[serial_head] = c; serial_head = next; }
-        startup_trace_event(TR_UART_QUEUE,(uint8_t)c,next==serial_tail,0);
+        if (next == serial_tail) {
+            serial_dropped_bytes++;
+        } else {
+            serial_queue[serial_head] = c;
+            serial_head = next;
+        }
+        startup_trace_event(TR_UART_QUEUE, (uint8_t)c, next == serial_tail, 0);
         task_irq_restore(flags);
         return;
     }
+
     uint64_t began = startup_trace_now();
-    for (unsigned budget = 256; budget; budget--) {
-        if (is_transmit_empty()) {
-            outb(COM1_PORT, c);
-            startup_trace_span(TR_UART_TX,began,(uint8_t)c,0);
-            return;
-        }
+    while (!is_transmit_empty()) {
         __asm__ volatile ("pause");
     }
+
+    outb(COM1_PORT, c);
+    startup_trace_span(TR_UART_TX, began, (uint8_t)c, 0);
 }
 
 void debug_print(const char* str) {
@@ -153,10 +156,9 @@ static uint64_t mean_time(uint64_t value, uint32_t divisor) {
 }
 static void report_frames(const char* stage, frame_summary_t* stats,
                            uint64_t finished, uint64_t* last_log, int present) {
+    /*
     if (!*last_log) { *last_log = finished; return; }
     if (finished - *last_log < 1000000000u) return;
-    /* Never hold IRQs off while transmitting or wait on a logging lock.
-     * Concurrent frame loggers retain their counters for the next attempt. */
     uint32_t flags = task_irq_save();
     if (frame_log_busy) { task_irq_restore(flags); return; }
     frame_log_busy = 1;
@@ -186,6 +188,7 @@ static void report_frames(const char* stage, frame_summary_t* stats,
     flags = task_irq_save();
     frame_log_busy = 0;
     task_irq_restore(flags);
+    */
 }
 void debug_frame_timing(const char* stage, uint64_t requested,
                         uint64_t started, uint64_t finished, uint64_t* last_log) {
@@ -215,6 +218,7 @@ void debug_present_timing(uint64_t requested, const debug_present_sample_t* s,
  * Track every poll, including polls without events or a requested repaint. */
 void debug_input_progress(uint64_t requested, uint64_t acquired, uint64_t finished,
                           uint32_t keys, uint32_t mouse) {
+    /*
     static uint64_t previous, last_log, max_gap, max_work, max_wait;
     static uint32_t polls, key_count, mouse_count;
     if (!scheduler_running()) return;
@@ -229,6 +233,7 @@ void debug_input_progress(uint64_t requested, uint64_t acquired, uint64_t finish
     if (frame_log_busy) { task_irq_restore(flags); return; }
     frame_log_busy = 1;
     task_irq_restore(flags);
+    
     debug_print("[INPUT] at_ns="); debug_decimal64(finished);
     debug_print(" polls="); debug_decimal64(polls);
     debug_print(" keys="); debug_decimal64(key_count);
@@ -241,4 +246,5 @@ void debug_input_progress(uint64_t requested, uint64_t acquired, uint64_t finish
     max_gap = max_work = max_wait = 0;
     last_log = finished;
     flags = task_irq_save(); frame_log_busy = 0; task_irq_restore(flags);
+    */
 }

@@ -1,5 +1,6 @@
 #include "../../../kernel/mutex.h"
 #include "wm.h"
+#include "start.h"
 #include "desktop.h"
 #include "desktop_wallpaper.h"
 #include "cursor.h"
@@ -193,7 +194,7 @@ static void user_surface_release(user_window_slot_t* slot) {
     slot->surface_page_count = 0;
 }
 
-static void request_redraw(void) {
+void request_redraw(void) {
     scene_generation++;
     redraw_pending = 1;
     if (invalidate) invalidate();
@@ -262,6 +263,7 @@ void wm_initialize(os_api_t* api, void (*invalidate_callback)(void)) {
     MUTEX_GUARD(kernel_mutex);
     wm_api = api;
     invalidate = invalidate_callback;
+    start_menu_init(api);
 }
 
 static void draw_window_frame(Window* window) {
@@ -391,7 +393,8 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     const int y = WM_TASKBAR_Y;
     wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, WM_TASKBAR_HEIGHT, COLOR_WIN_BG);
     wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, 1, COLOR_WHITE);
-    wm_api->graphics.draw_button(4, y + 4, 60, 24, "Start", start_menu_open);
+    //wm_api->graphics.draw_button(4, y + 4, 60, 24, "Start", start_menu_open);
+    wm_api->graphics.draw_button(4, y + 4, 60, 24, "Start", start_menu_is_open());
 
     int terminal = find_window_index("Terminal");
     int notepad = find_window_index("Notepad");
@@ -457,6 +460,8 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, time_str, COLOR_BLACK);
 
     if (!start_menu_open) return;
+    start_menu_draw();
+    /*
     int menu_x = 4, menu_y = y - 96, menu_w = 120, menu_h = 92;
     wm_api->graphics.fill_rect(menu_x, menu_y, menu_w, menu_h, COLOR_WIN_BG);
     wm_api->graphics.fill_rect(menu_x, menu_y, menu_w, 1, COLOR_WHITE);
@@ -470,6 +475,7 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     wm_api->graphics.fill_rect(menu_x + 6, menu_y + 56, menu_w - 12, 1, COLOR_DARK_GRAY);
     wm_api->graphics.fill_rect(menu_x + 6, menu_y + 57, menu_w - 12, 1, COLOR_WHITE);
     wm_api->graphics.draw_string(menu_x + 12, menu_y + 66, "Viewer", COLOR_BLACK);
+    */
 }
 
 Window* wm_get_window(int index) {
@@ -778,7 +784,7 @@ static void show_window(const char* title) {
     request_redraw();
 }
 
-static void toggle_window(const char* title) {
+void toggle_window(const char* title) {
     int index = find_window_index(title);
     if (index < 0) return;
     uint32_t previous = window_context_enter(index);
@@ -849,23 +855,35 @@ static void handle_mouse_event(const os_input_event_t* event) {
     }
 
     if (click_down) {
-        int handled = 0;
-        if (mouse_x >= 4 && mouse_x <= 64 && mouse_y >= WM_TASKBAR_Y + 4 && mouse_y <= WM_TASKBAR_Y + 28) {
-            start_menu_open = !start_menu_open;
+    int handled = 0;
+
+        /* 1. Delegate to the new Start Menu first if it is open and handles the click */
+        if (start_menu_is_open() && start_menu_handle_mouse(mouse_x, mouse_y, click_down)) {
+            handled = 1;
+        }
+        /* 2. Start Button click */
+        else if (mouse_x >= 4 && mouse_x <= 64 && mouse_y >= WM_TASKBAR_Y + 4 && mouse_y <= WM_TASKBAR_Y + 28) {
+            start_menu_toggle();
             handled = 1;
             request_redraw();
-        } else if (mouse_y >= WM_TASKBAR_Y + 4 && mouse_y <= WM_TASKBAR_Y + 28) {
+        }
+        /* 3. Taskbar App Buttons */
+        else if (mouse_y >= WM_TASKBAR_Y + 4 && mouse_y <= WM_TASKBAR_Y + 28) {
+            /* Close start menu if clicking an app button */
+            if (start_menu_is_open()) {
+                start_menu_close();
+            }
+
             if (mouse_x >= 68 && mouse_x <= 148) { toggle_window("Terminal"); handled = 1; }
             else if (mouse_x >= 152 && mouse_x <= 232) { toggle_window("Notepad"); handled = 1; }
             else if (mouse_x >= 236 && mouse_x <= 316) { toggle_window("Viewer"); handled = 1; }
             else if (mouse_x >= 320 && mouse_x <= 400) { toggle_window("Files"); handled = 1; }
-        } else if (start_menu_open && mouse_x >= 4 && mouse_x <= 124 &&
-                   mouse_y >= WM_TASKBAR_Y - 96 && mouse_y < WM_TASKBAR_Y) {
-            if (mouse_y < WM_TASKBAR_Y - 64) show_window("Terminal");
-            else if (mouse_y < WM_TASKBAR_Y - 32) show_window("Notepad");
-            else show_window("Viewer");
-            start_menu_open = 0;
-            handled = 1;
+        }
+
+        /* 4. If the click fell outside the taskbar and outside the start menu, dismiss the menu */
+        if (!handled && start_menu_is_open()) {
+            start_menu_close();
+            request_redraw();
         }
 
         if (!handled) {
@@ -1001,7 +1019,7 @@ static void handle_key_event(const os_input_event_t* event) {
 
 uint8_t wm_start_menu_is_open(void) {
     MUTEX_GUARD(kernel_mutex);
-    return start_menu_open;
+    return start_menu_is_open();
 }
 
 void wm_poll(void) {

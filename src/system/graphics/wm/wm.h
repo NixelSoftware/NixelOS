@@ -36,5 +36,7 @@ int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
 int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory);
 int32_t wm_user_window_close(uint32_t handle, uint32_t owner_directory);
 void wm_user_close_address_space(uint32_t owner_directory);
+void request_redraw(void);
+void toggle_window(const char* title);
 
 #endif
