@@ -1,6 +1,8 @@
 #include "../../kernel/mutex.h"
 #include "commands.h"
 #include "network_commands.h"
+#include "../loader/app_loader.h"
+#include "../graphics/terminal/terminal.h"
 
 static os_api_t* shell_api;
 static shell_output_fn shell_output;
@@ -63,6 +65,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
 
     if (has_prefix(command, "help")) {
         print("Commands:\n"
+                    " ps              Show processes and parent PIDs\n"
                     " ls              List files\n"
                     " rm              Remove files\n"
                     " cat <file>      Read file\n"
@@ -72,6 +75,15 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ifconfig        Show network configuration\n"
                     " netdev          Show detected network hardware\n"
                     " clear           Clear screen\n");
+    } else if (has_prefix(command, "ps")) {
+        task_info_t processes[MAX_TASKS];
+        int count = task_snapshot(processes, MAX_TASKS);
+        print("PID  PPID  NAME\n");
+        for (int i = 0; i < count; i++) {
+            print_u32(processes[i].pid); print("  ");
+            print_u32(processes[i].ppid); print("  ");
+            print(processes[i].name); print("\n");
+        }
     } else if (has_prefix(command, "clear")) {
         if (shell_clear) shell_clear();
     } else if (has_prefix(command, "rm ")) {
@@ -156,8 +168,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         while (command[length] && out < SHELL_ARGUMENT_MAX - 1)
             shell_args[out++] = command[length++];
         shell_args[out] = '\0';
-        int result = shell_api->shell.launch_app ?
-            shell_api->shell.launch_app(name, shell_args) : -1;
+        int result = app_loader_launch_wait(shell_api, name, shell_args);
         if (result == 0) return;
         if (result == -2) print("Invalid executable format.\n");
         else print("Unknown cmd. Type 'help'\n");
@@ -179,6 +190,12 @@ typedef struct {
 } shell_request_t;
 static shell_request_t shell_queue[SHELL_QUEUE_SIZE];
 static uint32_t shell_head, shell_count;
+static task_t* terminal_task;
+void shell_close_terminal(void) {
+    MUTEX_GUARD(kernel_mutex);
+    shell_count = 0;
+    if (terminal_task) task_terminate_children(terminal_task->id);
+}
 
 int shell_submit_command(const char* command, shell_output_fn output, shell_clear_fn clear) {
     MUTEX_GUARD(kernel_mutex);
@@ -186,7 +203,7 @@ int shell_submit_command(const char* command, shell_output_fn output, shell_clea
     uint32_t length = 0;
     while (command[length] && length < SHELL_ARGUMENT_MAX) length++;
     if (length == SHELL_ARGUMENT_MAX || shell_count == SHELL_QUEUE_SIZE) return 0;
-    if (!length) return 1;
+
     shell_request_t* request = &shell_queue[(shell_head + shell_count) % SHELL_QUEUE_SIZE];
     for (uint32_t i = 0; i <= length; i++) request->command[i] = command[i];
     request->output = output; request->clear = clear;
@@ -196,6 +213,7 @@ int shell_submit_command(const char* command, shell_output_fn output, shell_clea
 
 void shell_service(void* argument) {
     (void)argument;
+    terminal_task = current_task;
     for (;;) {
         shell_request_t request;
         mutex_lock(&kernel_mutex);
@@ -209,5 +227,6 @@ void shell_service(void* argument) {
         shell_count--;
         mutex_unlock(&kernel_mutex);
         shell_execute_command(request.command, request.output, request.clear);
+        terminal_command_done();
     }
 }

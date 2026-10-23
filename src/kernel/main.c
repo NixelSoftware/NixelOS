@@ -350,6 +350,25 @@ static void cleanup_service(void* arg) {
     for (;;) { app_loader_collect(); task_sleep_ms(20); }
 }
 
+static void desktop_service(void* arg) {
+    (void)arg;
+    for (;;) {
+#if STARTUP_PROFILE == 1
+        startup_trace_poll(1);
+        os_input_event_t event;
+        for (unsigned budget=16; budget && input_poll_event(&event); budget--) { }
+        startup_trace_poll(0);
+#elif STARTUP_PROFILE == 3
+        /* Idle heartbeat has the same sleep/wake cadence as the input loop. */
+        startup_trace_poll(1);
+        startup_trace_poll(0);
+#else
+        wm_poll();
+#endif
+        task_sleep_ms(2);
+    }
+}
+
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     __asm__ volatile ("cli");
 
@@ -399,7 +418,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         task_create_nice(audio_task, 0, "audio", -4) < 0 ||
 #endif
         task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
-        task_create_nice(shell_service, 0, "shell", 0) < 0 ||
+        task_create_nice(shell_service, 0, "terminal", 0) < 0 ||
         display_start_async() < 0 || serial_start_async() < 0) {
 #else
     if (serial_start_async() < 0) {
@@ -409,19 +428,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     }
     scheduler_start();
     debug_print("[INIT] EEVDF scheduler started: 1000 Hz, independent services\n");
-    for (;;) {
-#if STARTUP_PROFILE == 1
-        startup_trace_poll(1);
-        os_input_event_t event;
-        for (unsigned budget=16; budget && input_poll_event(&event); budget--) { }
-        startup_trace_poll(0);
-#elif STARTUP_PROFILE == 3
-        /* Idle heartbeat has the same sleep/wake cadence as the input loop. */
-        startup_trace_poll(1);
-        startup_trace_poll(0);
-#else
-        wm_poll();
-#endif
-        task_sleep_ms(2);
-    }
+    if (task_create(desktop_service, 0, "wm") < 0) __builtin_trap();
+    for (;;) task_sleep_ms(1000);
 }

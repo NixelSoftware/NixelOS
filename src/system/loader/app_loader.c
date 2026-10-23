@@ -137,6 +137,17 @@ static void app_run(void* argument) {
         wm_user_close_address_space((uint32_t)instance->address_space.directory);
     } else {
         ((app_entry_fn)instance->entry)(instance->api);
+        /* Legacy GUI entry points return after registering callbacks. Keep
+         * their process alive for the windows' lifetime as well. */
+        for (;;) {
+            mutex_lock(&kernel_mutex);
+            int alive = instance->window_references != 0;
+            mutex_unlock(&kernel_mutex);
+            if (!alive || current_task->terminate_requested) break;
+            task_sleep_ms(1);
+        }
+        if (current_task->terminate_requested)
+            wm_user_close_address_space((uint32_t)instance->address_space.directory);
     }
     debug_print("[APP] executable returned\n");
     paging_activate_kernel();
@@ -228,14 +239,13 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
     }
     app_loader_context_leave(previous_directory);
     instance->running = 1;
-    if (task_create(app_run, instance, name) < 0) {
+    if (current_task->terminate_requested) {
         instance->running = 0;
         instance->pending_release = 1;
         app_loader_collect();
         return -3;
     }
-    debug_print("[APP] queued executable task\n");
-    return 0;
+    return slot;
 }
 
 #define APP_LAUNCH_QUEUE 8u
@@ -258,8 +268,9 @@ static void app_load_worker(void* argument) {
     mutex_lock(&kernel_mutex);
     request->active = 0;
     mutex_unlock(&kernel_mutex);
+    if (result >= 0) app_run(&app_instances[result]);
 }
-int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
+static int app_loader_queue(os_api_t* api, const char* name, const char* arguments) {
     if (!api || !api->fs.read || !name || !*name) return -1;
     MUTEX_GUARD(kernel_mutex);
     launch_request_t* request = 0;
@@ -276,6 +287,17 @@ int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
     if (source[n]) return -1;
     request->arguments[n] = 0;
     request->api = api; request->active = 1;
-    if (task_create(app_load_worker, request, "app-loader") < 0) { request->active = 0; return -3; }
-    return 0;
+    int pid = task_create(app_load_worker, request, name);
+    if (pid < 0) { request->active = 0; return -3; }
+    return pid;
+}
+
+int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
+    int pid = app_loader_queue(api, name, arguments);
+    return pid < 0 ? pid : 0;
+}
+int app_loader_launch_wait(os_api_t* api, const char* name, const char* arguments) {
+    int pid = app_loader_queue(api, name, arguments);
+    if (pid < 0) return pid;
+    return task_wait(pid);
 }

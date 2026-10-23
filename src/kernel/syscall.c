@@ -205,7 +205,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 return;
             }
             const char* text = (const char*)address;
-            kernel_user_write(text, length);
+            if (!current_task->detached) kernel_user_write(text, length);
             regs->eax = length;
             return;
         }
@@ -560,6 +560,15 @@ static void syscall_dispatch_impl(registers_t* regs) {
         case SYS_WINDOW_CLOSE:
             regs->eax = (uint32_t)wm_user_window_close(
                 regs->ebx, paging_current_directory());
+            return;
+        case SYS_DETACH:
+            regs->eax = task_detach();
+            return;
+        case SYS_GETPID:
+            regs->eax = current_task->id;
+            return;
+        case SYS_GETPPID:
+            regs->eax = task_parent_id();
             return;
         case SYS_EXIT:
             arch_user_exit_requested = 1;

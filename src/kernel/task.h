@@ -35,6 +35,7 @@ _Static_assert(__builtin_offsetof(task_user_switch_frame_t, useresp) == 60, "use
 typedef struct task {
     uint32_t id, state, esp; /* esp at offset 8 is shared with task_switch.asm. */
     uint32_t directory, user_kernel_esp, user_exit_requested;
+    uint32_t parent_id, generation, terminate_requested, detached;
     uint32_t preempt_count;
     int base_nice;
     struct mutex *owned_mutexes, *waiting_mutex;
@@ -57,6 +58,15 @@ int task_create_with_request(void (*entry)(void*), void* arg, const char* name,
  * must be cleared by the caller. Violations trap rather than abandon locks. */
 void task_exit(void) __attribute__((noreturn));
 void task_yield(void);
+int task_wait(int pid); /* waits until child exits or detaches; no locks held */
+int task_detach(void); /* current process reparents itself to init */
+void task_terminate_children(uint32_t parent);
+uint32_t task_parent_id(void);
+typedef struct {
+    uint32_t pid, ppid, state;
+    char name[16];
+} task_info_t;
+int task_snapshot(task_info_t* output, int capacity);
 void task_sleep(uint32_t legacy_ticks);
 void task_sleep_ms(uint32_t milliseconds);
 void task_preempt_disable(void);

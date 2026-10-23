@@ -114,6 +114,29 @@ static void integration_checks(task_t* boot) {
         while (cpu_tasks[i]->state != TASK_STATE_TERMINATED) task_sleep_ms(1);
     print("PASS 30 preempted CPU workers, exit and slot reuse\n");
 }
+static volatile uint32_t tree_parent, tree_child_ready, tree_detached, tree_release, tree_child_done, tree_detached_done;
+static void tree_child(void* arg) {
+    check(task_parent_id() == tree_parent, "child inherits creator PID");
+    if (arg) {
+        check(task_detach() == 0 && task_parent_id() == 0, "detach reparents to init");
+        tree_detached = 1;
+        while (!tree_release) task_sleep_ms(1);
+        tree_detached_done = 1;
+    } else {
+        tree_child_ready = 1;
+        while (!current_task->terminate_requested) task_sleep_ms(1);
+        tree_child_done = 1;
+    }
+}
+static void tree_worker(void* arg) {
+    (void)arg;
+    tree_parent = current_task->id;
+    check(task_create(tree_child, (void*)1, "detached") > 0, "detached creation");
+    while (!tree_detached) task_sleep_ms(1);
+    check(task_create(tree_child, 0, "attached") > 0, "attached creation");
+    while (!tree_child_ready) task_sleep_ms(1);
+    /* Returning must cancel the attached child and wait for its cleanup. */
+}
 void test_main(void) {
     print("Starting multitasking boundary tests\n");
     int64_t quotient;
@@ -175,6 +198,13 @@ void test_main(void) {
     /* Completion is published before exit; wait for actual retirement. */
     while (worker_task->state != TASK_STATE_TERMINATED) task_sleep_ms(1);
     integration_checks(boot);
+    int parent_pid = task_create(tree_worker, 0, "tree-parent");
+    check(parent_pid > 0 && task_wait(parent_pid) == 0, "wait for parent and descendant retirement");
+    check(tree_child_done && tree_detached && !tree_detached_done, "detached child survives parent exit");
+    tree_release = 1;
+    while (!tree_detached_done) task_sleep_ms(1);
+    task_sleep_ms(2);
+    print("PASS process ancestry, cascade, wait and detach\n");
     /* A voluntary sleep may start masked and must resume with that same IF. */
     uint32_t masked = task_irq_save();
     uint64_t expired = scheduler_clock();
