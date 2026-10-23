@@ -64,4 +64,9 @@ remove generated build artifacts.
 | Argument | Value | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `DEBUG_SUBSYSTEMS` | `1` | `0` | Enable verbose subsystem traces |
-| `ENABLE_OOBE` | `1` | `0` | Enable the Work In Progress OOBE |
+| `ENABLE_OOBE` | `any` | `0` | Enable the Work In Progress OOBE |
+| `QEMU_ACCEL` | `any` | `tcg` | Set the mode of acceleration for QEMU |
+| `QEMU_NETCARD` | `any` | `e1000` | Set the network adapter emulated in QEMU |
+| `QEMU_MEMORY` | `any` | `128M` | Set the amount of RAM in QEMU |
+| `QEMU_DHCP` | `any` | `10.0.1.0/24,dhcpstart=10.0.1.227` | DHCP Range for QEMU VM |
+| `QEMU_EXTRA` | `any` | `null` | Extra arguments to pass to QEMU |
