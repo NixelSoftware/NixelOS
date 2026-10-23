@@ -118,7 +118,7 @@ new runtime testing has been performed.
 ### Phase 4: architecture and expansion
 
 - [x] Audit user/kernel frame transitions, TSS/CR3 state and private-memory isolation.
-- [ ] Decide supported extended CPU state and implement feature-gated save/restore.
+- [x] Decide supported extended CPU state and implement feature-gated save/restore.
 - [ ] Specify process/thread resource ownership before introducing clone/fork semantics.
 - [ ] Add real-time classes only with explicit starvation/budget behavior.
 - [ ] Design per-CPU state, IRQ-safe locks, migration and balancing before enabling SMP.
@@ -666,3 +666,60 @@ handlers; it does not claim full application-loader or paging-allocator coverage
 Extended-state feature detection/save/restore, resource-sharing semantics,
 real-time classes and SMP remain separate Phase 4 tasks. Next is the supported
 extended CPU-state contract and feature-gated save/restore.
+
+### Phase 4, increment 2 — feature-gated floating-point/SIMD state — 2026-10-23
+
+Replaced the fixed 108-byte task FPU buffer with an aligned 512-byte architecture
+state. `arch_fpu.c` checks CPUID availability and capabilities, configures CR0 for
+eager hardware FPU use, and selects the save format. CPUs with both FXSR and SSE
+use FXSAVE/FXRSTOR, preserving x87/MMX, XMM0..7 and MXCSR. Other CPUs use the
+legacy FNSAVE/FRSTOR format for x87/MMX, including the FXSR-only case that needs
+no XMM state. CPUID instruction support does not imply SSE or FXSR support.
+CPUID-reported absence of hardware x87 is rejected; there is no FPU emulator.
+The pre-CPUID path retains the existing hardware-x87 requirement; the tested
+kernel CPU baseline is i686-class, not a new claim of whole-kernel 386 support.
+
+The implementation configures CR0.MP/NE, clears EM/TS, and enables OSFXSR and
+OSXMMEXCPT only on the extended path. OSXSAVE stays clear: AVX/YMM, AVX-512 and
+other XSAVE components remain unsupported. Applications must still check their
+instruction-specific CPU capabilities; the SSE-state path does not promise SSE2
+on a Pentium III. No lazy switching or shared live FPU ownership is introduced.
+See the [Intel architecture manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+for the FXSAVE/FXRSTOR formats and CR0/CR4 enabling requirements.
+
+Boot constructs a clean canonical state with empty x87 tags, default control
+word, zero register payloads and default MXCSR. This avoids copying firmware or
+previous-task register contents into new/reused slots. Boot clears pending x87
+exceptions before restoring that template. Task switch saves/restores the
+selected format with IRQs disabled. Task initialization copies the entire clean
+template; size, alignment and per-task offset have compile-time checks.
+
+Kernel C compilation now explicitly disables generated SSE/SSE2/MMX. The current
+kernel/system sources contain no floating-point C arithmetic or other explicit
+SIMD use. IRQ handlers must not borrow application FP/SIMD registers; adding
+kernel vector arithmetic would require a separate save/restore ownership API.
+Preserving state between tasks is not permission for interrupt handlers to use
+those registers without preserving the interrupted state.
+
+Validation:
+
+- `python3 tools/architecture-boundary/run.py`: passed eight CPU configurations:
+  default and TSC-disabled qemu32, two masked FXSR/SSE combinations, Pentium II,
+  Pentium III, AVX-capable max and a no-FPU model. Checks CR0/CR4 gates and selected
+  format. Two rounds of three user tasks verify clean/reused slots, x87 values
+  and rounding, all eight MMX and XMM register payloads, MXCSR, user/kernel timer
+  preemption and suspended syscalls. The no-FPU model is rejected before use;
+  VZEROUPPER faults even on max because AVX has not been OS-enabled.
+- `python3 tools/multitasking-boundary/run.py`: passed both clock paths with the
+  production FPU module linked, including mutex, nested preemption, idle and reuse.
+  Worker completion flags precede actual exit, so the harness now waits for
+  TERMINATED state before checking reuse. It also accepts a short sleep expiring
+  before selection while requiring all actual idle entries/exits to balance and
+  idle runtime to advance. The architecture harness likewise waits for actual
+  retirement before its second initialization round.
+- `python3 tools/eevdf-policy/test.py`: policy/oracle, arithmetic, workload,
+  sanitizer and freestanding i386 checks passed.
+- `make -j4 os.img` and `git diff --check`: passed.
+
+The next Phase 4 item is explicit process/thread resource ownership before
+introducing clone/fork semantics.

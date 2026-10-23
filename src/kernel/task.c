@@ -5,7 +5,7 @@
 extern uint32_t arch_user_kernel_esp;
 static task_t task_list[MAX_TASKS];
 task_t* current_task;
-static uint8_t initial_fpu_state[108] __attribute__((aligned(16)));
+static arch_fpu_state_t initial_fpu_state;
 
 int task_address_space_in_use(uint32_t directory) {
     if (!directory) return 0;
@@ -30,12 +30,12 @@ void task_schedule_next(void) {
     task_t* next = scheduler_pick_next(scheduler_clock());
     if (previous == next) return;
     startup_trace_switch(previous->id, next->id);
-    __asm__ volatile ("fnsave %0" : "=m"(previous->fpu_state));
+    arch_fpu_save(&previous->fpu_state);
     previous->directory = paging_current_directory();
     previous->user_kernel_esp = arch_user_kernel_esp;
     previous->user_exit_requested = arch_user_exit_requested;
     current_task = next;
-    __asm__ volatile ("frstor %0" : : "m"(next->fpu_state));
+    arch_fpu_restore(&next->fpu_state);
     arch_user_kernel_esp = next->user_kernel_esp;
     arch_user_exit_requested = next->user_exit_requested;
     arch_i386_set_kernel_stack(arch_user_kernel_esp ? arch_user_kernel_esp :
@@ -114,7 +114,7 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
     t->wait_next = 0;
     t->owned_mutexes = t->waiting_mutex = 0;
     t->base_nice = 0;
-    for (uint32_t i = 0; i < sizeof(initial_fpu_state); i++) t->fpu_state[i] = initial_fpu_state[i];
+    t->fpu_state = initial_fpu_state;
     int n = 0;
     while (name && name[n] && n < 15) { t->name[n] = name[n]; n++; }
     t->name[n] = 0;
@@ -164,8 +164,7 @@ int task_create(void (*entry)(void*), void* arg, const char* name) {
     return task_create_nice(entry, arg, name, 0);
 }
 void tasking_init(void) {
-    __asm__ volatile ("fninit; fnsave %0" : "=m"(initial_fpu_state));
-    __asm__ volatile ("frstor %0" : : "m"(initial_fpu_state));
+    if (!arch_fpu_init(&initial_fpu_state)) __builtin_trap();
     for (int i = 0; i < MAX_TASKS; i++) { task_list[i].state = TASK_STATE_UNUSED; task_list[i].id = i; }
     current_task = &task_list[0];
     setup(current_task, idle_main, 0, "desktop");

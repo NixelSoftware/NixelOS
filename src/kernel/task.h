@@ -2,6 +2,7 @@
 #define TASK_H
 #include "types.h"
 #include "scheduler.h"
+#include "arch_fpu.h"
 #include "startup_trace.h"
 #define MAX_TASKS 32
 #define TASK_STACK_SIZE 32768
@@ -39,11 +40,12 @@ typedef struct task {
     struct mutex *owned_mutexes, *waiting_mutex;
     struct task* wait_next;
     sched_entity_t sched;
-    uint8_t fpu_state[108] __attribute__((aligned(16)));
+    arch_fpu_state_t fpu_state;
     uint8_t stack[TASK_STACK_SIZE] __attribute__((aligned(16)));
     char name[16];
 } task_t;
 _Static_assert(__builtin_offsetof(task_t, esp) == 8, "assembly task ESP offset");
+_Static_assert(__builtin_offsetof(task_t, fpu_state) % 16 == 0, "task FPU alignment");
 void tasking_init(void);
 int task_create(void (*entry)(void*), void* arg, const char* name);
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice);

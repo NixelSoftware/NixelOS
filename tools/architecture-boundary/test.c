@@ -15,6 +15,7 @@ static uint32_t data[3][1024] __attribute__((aligned(4096)));
 static uint8_t stacks[3][4096] __attribute__((aligned(4096)));
 static uint32_t active, done, faults[3], calls[3], user_irqs, switches, kernel_irqs;
 static volatile uint32_t timer_ticks;
+static task_t* volatile user_tasks[3];
 static idt_entry_t idt[256];
 static void print(const char* s) { while (*s) outb(0xe9, *s++); }
 static void check(int ok, const char* message) {
@@ -75,6 +76,8 @@ void syscall_dispatch(registers_t* r) {
         /* Suspend within a syscall, preserving its kernel chain and user frame. */
         task_sleep_ms(2);check(current_index()==i,"syscall CR3 restore");
         r->eax=0xabcdef01;
+    } else if(r->eax==3) {
+        task_sleep_ms(2);r->eax=0xabcdef01;
     } else if(r->eax==2) arch_user_exit_requested=1;
     else check(0,"user register/return corruption");
 }
@@ -86,6 +89,7 @@ void isr_handler(registers_t* r) {
 }
 static void user_task(void* arg) {
     unsigned i=(uint32_t)arg;
+    user_tasks[i]=current_task;
     paging_activate_directory((uint32_t)dirs[i+1]);
     arch_i386_enter_user(0xc00000,0xc02ff0);
     check(!arch_user_kernel_esp && !arch_user_exit_requested,"return flags cleared");
@@ -99,6 +103,11 @@ static void gate(unsigned n,void (*entry)(void),unsigned type) {
 }
 void test_main(void) {
     arch_i386_init();
+    arch_fpu_state_t initial;
+    if (!arch_fpu_init(&initial)) {
+        print("PASS hardware FPU absence rejected\n");outb(0xf4,0);
+        for(;;)__asm__ volatile("cli;hlt");
+    }
     gate(32,irq0_timer_handler,0x8e);gate(128,syscall_entry,0xef);
     gate(6,isr6,0x8e);gate(14,isr14,0x8e);
     idt_ptr_t p={sizeof(idt)-1,(uint32_t)idt};__asm__ volatile("lidt %0"::"m"(p));
@@ -118,14 +127,36 @@ void test_main(void) {
     __asm__ volatile("mov %%cr0,%0":"=r"(cr));cr|=0x80010000;
     __asm__ volatile("mov %0,%%cr0"::"r"(cr):"memory");
     tasking_init();scheduler_start();
-    for(unsigned i=0;i<3;i++)check(task_create(user_task,(void*)i,"user")>0,"create user context");
-    __asm__ volatile("sti");
-    while(done<3)task_sleep_ms(1);
-    check(calls[0]==32 && calls[1]==32 && calls[2]==32,"all syscalls completed");
-    check(!faults[0] && faults[1]==1 && faults[2]==1,"fault isolation");
+    uint32_t features=arch_fpu_features(), cr0, cr4;
+    __asm__ volatile("mov %%cr0,%0":"=r"(cr0));
+    __asm__ volatile("mov %%cr4,%0":"=r"(cr4));
+    check((cr0 & 0x2e)==0x22, "FPU CR0 eager configuration");
+    check(!(cr4 & (1u<<18)), "OSXSAVE disabled");
+    check(!!(cr4 & (1u<<9))==!!(features&ARCH_FPU_FXSR), "OSFXSR gate");
+    check(!!(cr4 & (1u<<10))==!!(features&ARCH_FPU_SSE), "SSE exception gate");
+    print(features&ARCH_FPU_FXSR ? "State: FXSAVE\n" : "State: x87\n");
+    print(features&ARCH_FPU_SSE ? "SIMD: SSE\n" : "SIMD: disabled\n");
+    for (unsigned round=0;round<2;round++) {
+        done=0;
+        for(unsigned i=0;i<3;i++) {
+            calls[i]=faults[i]=data[i][1]=0;
+            data[i][2]=!!(features&ARCH_FPU_SSE);
+            data[i][3]=123+i;data[i][4]=0x037f|(i<<10);
+            data[i][5]=0x1f80|(i<<13);data[i][6]=!!(features&ARCH_FPU_MMX);
+            for(unsigned j=0;j<32;j++)data[i][16+j]=0x10000000*(i+1)+0x1111*j;
+        }
+        for(unsigned i=0;i<3;i++)check(task_create(user_task,(void*)i,"user")>0,"create user context");
+        __asm__ volatile("sti");
+        while(done<3)task_sleep_ms(1);
+        check(calls[0]==32 && calls[1]==32 && calls[2]==32,"all syscalls completed");
+        check(!faults[0] && faults[1]==1 && faults[2]==1,"fault isolation");
+        for(unsigned i=0;i<3;i++)
+            while(user_tasks[i]->state!=TASK_STATE_TERMINATED)task_sleep_ms(1);
+    }
     check(user_irqs>3 && kernel_irqs>3 && switches>30,"real user IRQ preemption");
     print("PASS user IRQ frames, TSS stacks, CR3 and private mappings\n");
     print("PASS syscall suspension, normal exit and user fault returns\n");
+    print("PASS clean/reused x87/MMX/XMM/MXCSR state across user and syscall preemption\n");
     print("PASS architecture boundaries\n");outb(0xf4,0);
     for(;;)__asm__ volatile("cli;hlt");
 }
