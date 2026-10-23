@@ -5,7 +5,7 @@ CC ?= gcc
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
-
+ 
 # Customizable QEMU Settings
 QEMU_ACCEL ?= tcg
 QEMU_NETCARD ?= e1000
