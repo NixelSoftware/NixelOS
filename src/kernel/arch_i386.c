@@ -21,6 +21,9 @@ typedef struct {
     uint32_t es, cs, ss, ds, fs, gs, ldt;
     uint16_t trap, iomap_base;
 } __attribute__((packed)) tss_t;
+_Static_assert(sizeof(tss_t) == 104, "i386 TSS size");
+_Static_assert(__builtin_offsetof(tss_t, esp0) == 4, "TSS ESP0 offset");
+_Static_assert(__builtin_offsetof(tss_t, iomap_base) == 102, "TSS I/O map offset");
 
 extern void gdt_load(const gdt_pointer_t* pointer);
 extern void tss_load(void);

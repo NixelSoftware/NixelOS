@@ -24,6 +24,12 @@ _Static_assert(__builtin_offsetof(task_switch_frame_t, edi) == 16, "PUSHAD offse
 _Static_assert(__builtin_offsetof(task_switch_frame_t, eip) == 48, "IRET offset");
 _Static_assert(__builtin_offsetof(task_switch_frame_t, cs) == 52, "saved CS offset");
 _Static_assert(__builtin_offsetof(task_switch_frame_t, eflags) == 56, "saved flags offset");
+typedef struct {
+    task_switch_frame_t kernel;
+    uint32_t useresp, ss;
+} task_user_switch_frame_t;
+_Static_assert(sizeof(task_user_switch_frame_t) == 68, "user switch frame size");
+_Static_assert(__builtin_offsetof(task_user_switch_frame_t, useresp) == 60, "user ESP offset");
 
 typedef struct task {
     uint32_t id, state, esp; /* esp at offset 8 is shared with task_switch.asm. */

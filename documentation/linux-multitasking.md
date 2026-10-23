@@ -117,7 +117,7 @@ new runtime testing has been performed.
 
 ### Phase 4: architecture and expansion
 
-- [ ] Audit user/kernel frame transitions, TSS/CR3 state and private-memory isolation.
+- [x] Audit user/kernel frame transitions, TSS/CR3 state and private-memory isolation.
 - [ ] Decide supported extended CPU state and implement feature-gated save/restore.
 - [ ] Specify process/thread resource ownership before introducing clone/fork semantics.
 - [ ] Add real-time classes only with explicit starvation/budget behavior.
@@ -625,3 +625,44 @@ drivers are `/tmp/nixel-scheduler-compare.py`, `/tmp/nixel-scheduler-fast.py`, a
 or `STARTUP_TRACE=0` and use `tools/startup_trace.py` to capture/analyze traces.
 QMP socket access required an authorized outside-sandbox run. These temporary
 artifacts are session-local and should be copied before relying on their retention.
+
+### Phase 4, increment 1 — architecture audit and prior-change review — 2026-10-23
+
+The current workspace already contains the completed Phase 3 EEVDF integration;
+this increment starts with architecture validation rather than replacing that
+policy again. Reviewed task creation/reuse, context save/restore, temporary mapping
+references, timer-return selection and the earlier validation claims.
+
+Earlier boundary tests explicitly stubbed paging and TSS. They were not evidence
+for private address spaces or ring-3 transitions. Added the reproducible
+[architecture harness](../tools/architecture-boundary/README.md) to close that
+coverage gap. It links production arch_i386.c, gdt_asm.asm, idt_asm.asm,
+task_switch.asm, task.c and the EEVDF policy. Test-owned page tables and service
+handlers isolate the architecture mechanisms from loader/allocator concerns.
+
+Added compile-time contracts for the privilege-changing timer frame, the distinct
+exception/syscall frame (including its vector/error slots), and the 104-byte TSS
+with ESP0 and I/O-map offsets. Kernel-only interrupts have no hardware user ESP/SS
+tail; consumers must inspect saved CS before reading those fields. The optional
+tail is also explicit in [Linux v6.12's x86 register definitions](https://github.com/torvalds/linux/blob/v6.12/arch/x86/include/asm/ptrace.h),
+although NixelOS uses its own entry ABI and cannot cast Linux register structures.
+
+Validation:
+
+- `python3 tools/architecture-boundary/run.py`: passed on qemu32 with TSC and
+  with TSC disabled. Three ring-3 tasks share code but have independent data and
+  stack pages at the same virtual addresses. Each completes 32 syscalls while
+  timer IRQs preempt both user execution and interrupt-enabled syscall work.
+  Checks actual CR3 against its mirror, per-task TSS kernel-stack delivery,
+  user return frames, register preservation, user DF versus kernel DF, IOPL,
+  syscall sleep/resume, normal exit, supervisor-write page faults and UD2 return.
+- `python3 tools/multitasking-boundary/run.py`: passed both clock configurations.
+- `python3 tools/eevdf-policy/test.py`: passed policy/oracle, arithmetic,
+  workloads, sanitizer and freestanding i386 checks.
+- `make -j4 src/kernel/kernel.bin`, `make -j4 os.img` and `git diff --check`: passed.
+
+The architecture test uses the real assembly return paths with validating C
+handlers; it does not claim full application-loader or paging-allocator coverage.
+Extended-state feature detection/save/restore, resource-sharing semantics,
+real-time classes and SMP remain separate Phase 4 tasks. Next is the supported
+extended CPU-state contract and feature-gated save/restore.

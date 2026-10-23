@@ -5,3 +5,6 @@ OperatingSys.code-workspace
 *.img
 *.so
 *.elf
+os
+struct
+.gitignore

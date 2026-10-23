@@ -97,7 +97,16 @@ void task_exit(void) {
 static void task_return_stub(void) { task_exit(); }
 static void idle_main(void* arg) {
     (void)arg;
-    for (;;) __asm__ volatile ("sti; hlt" : : : "memory");
+    for (;;) {
+        __asm__ volatile ("cli" : : : "memory");
+        if (scheduler_need_reschedule()) {
+            task_yield();
+            __asm__ volatile ("sti" : : : "memory");
+        } else {
+            /* STI's interrupt shadow keeps the check-to-halt boundary safe. */
+            __asm__ volatile ("sti; hlt" : : : "memory");
+        }
+    }
 }
 static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) {
     t->directory = paging_kernel_directory();
