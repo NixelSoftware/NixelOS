@@ -157,13 +157,17 @@ static void set_cluster_entry(uint32_t cluster, uint32_t value) {
 static uint32_t allocate_free_cluster(void) {
     uint32_t total_clusters = (bpb.total_sectors_32 - (cluster_begin_lba - bpb.hidden_sectors)) / sectors_per_cluster;
     uint32_t start_cluster = last_alloc_cluster;
+    uint32_t scanned_sector = 0xFFFFFFFFu;
 
     for (uint32_t clus = start_cluster; clus < total_clusters; clus++) {
         uint32_t fat_offset = clus * 4;
         uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
         uint32_t entry_offset = fat_offset % 512;
 
-        if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0;
+        if (scanned_sector != fat_sector) {
+            if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0;
+            scanned_sector = fat_sector;
+        }
         uint32_t val = *(uint32_t*)&sector_buffer[entry_offset];
 
         if ((val & 0x0FFFFFFF) == 0) {
@@ -178,7 +182,10 @@ static uint32_t allocate_free_cluster(void) {
         uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
         uint32_t entry_offset = fat_offset % 512;
 
-        if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0;
+        if (scanned_sector != fat_sector) {
+            if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0;
+            scanned_sector = fat_sector;
+        }
         uint32_t val = *(uint32_t*)&sector_buffer[entry_offset];
 
         if ((val & 0x0FFFFFFF) == 0) {
@@ -216,7 +223,7 @@ static int find_in_directory(uint32_t dir_cluster, const char target_83[11],
 
                 int match = 1;
                 for (int c = 0; c < 11; c++) {
-                    if (entries[i].name[c] != target_83[c]) { match = 0; break; }
+                    if (to_upper(entries[i].name[c]) != target_83[c]) { match = 0; break; }
                 }
                 if (match) {
                     if (out_entry) *out_entry = entries[i];
@@ -577,7 +584,22 @@ int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes)
     
     if (!ata_read_sectors(dir_lba, 1, sector_buffer)) return -1;
     fat32_dir_entry_t* dir_ptr = (fat32_dir_entry_t*)&sector_buffer[dir_offset];
-    for (int i = 0; i < 11; i++) dir_ptr->name[i] = target_83[i];
+    /* Preserve the spelling of new short names; legacy callers may still
+     * look them up using FAT's case-insensitive matching. */
+    if (exists) {
+        for (int i = 0; i < 11; i++) dir_ptr->name[i] = entry.name[i];
+    } else {
+        const char* base = filename;
+        for (const char* p = filename; *p; p++) if (*p == '/') base = p + 1;
+        for (int i = 0; i < 11; i++) dir_ptr->name[i] = ' ';
+        int i = 0;
+        while (*base && *base != '.' && i < 8) dir_ptr->name[i++] = *base++;
+        while (*base && *base != '.') base++;
+        if (*base == '.') {
+            base++; i = 8;
+            while (*base && i < 11) dir_ptr->name[i++] = *base++;
+        }
+    }
     dir_ptr->attr = FAT_ATTR_ARCHIVE;
     entry_set_stat(dir_ptr, metadata);
     dir_ptr->first_cluster_hi = (uint16_t)(first_cluster >> 16);
@@ -586,4 +608,40 @@ int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes)
 
     ata_write_sectors(dir_lba, 1, sector_buffer);
     return (int)size_bytes;
+}
+
+/* Kernel desktop/browser helpers; keep directory metadata under the FS lock. */
+int fs_is_directory(const char* path) {
+    MUTEX_GUARD(filesystem_mutex);
+    fat32_dir_entry_t e;
+    return fs_ready && lookup(path, &e, 0, 0) &&
+        (e.attr & FAT_ATTR_DIRECTORY) && entry_allowed(&e, FS_ACCESS_READ | FS_ACCESS_EXEC);
+}
+
+int fs_mkdir(const char* path) {
+    MUTEX_GUARD(filesystem_mutex);
+    fat32_dir_entry_t e;
+    uint32_t lba, offset;
+    if (!fs_ready || !path) return -1;
+    if (lookup(path, &e, &lba, &offset))
+        return (e.attr & FAT_ATTR_DIRECTORY) && entry_allowed(&e, FS_ACCESS_READ | FS_ACCESS_EXEC) ? 0 : -1;
+    if (fs_write_file(path, 0, 0) < 0 || !lookup(path, &e, &lba, &offset)) return -1;
+    uint32_t cluster = ((uint32_t)e.first_cluster_hi << 16) | e.first_cluster_lo;
+    uint32_t parent; char name[11];
+    if (!resolve_path(path, &parent, name)) return -1;
+    for (unsigned i = 0; i < sizeof(sector_buffer); i++) sector_buffer[i] = 0;
+    for (uint32_t i = 0; i < sectors_per_cluster; i++)
+        if (!ata_write_sectors(cluster_to_lba(cluster) + i, 1, sector_buffer)) return -1;
+    fat32_dir_entry_t* dots = (fat32_dir_entry_t*)sector_buffer;
+    for (int i = 0; i < 11; i++) dots[0].name[i] = dots[1].name[i] = ' ';
+    dots[0].name[0] = dots[1].name[0] = '.'; dots[1].name[1] = '.';
+    dots[0].attr = dots[1].attr = FAT_ATTR_DIRECTORY;
+    dots[0].first_cluster_hi = cluster >> 16; dots[0].first_cluster_lo = cluster;
+    dots[1].first_cluster_hi = parent >> 16; dots[1].first_cluster_lo = parent;
+    if (!ata_write_sectors(cluster_to_lba(cluster), 1, sector_buffer)) return -1;
+    if (!ata_read_sectors(lba, 1, sector_buffer)) return -1;
+    fat32_dir_entry_t* entry = (fat32_dir_entry_t*)(sector_buffer + offset);
+    entry->attr = FAT_ATTR_DIRECTORY;
+    entry_set_stat(entry, (fs_stat_t){user_uid(), user_gid(), 0755});
+    return ata_write_sectors(lba, 1, sector_buffer) ? 0 : -1;
 }

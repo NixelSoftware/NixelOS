@@ -109,7 +109,7 @@ static int app_instance_reserve(void) {
 
 static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
     int length = 0;
-    while (name[length] && length < FS_MAX_FILENAME - 1) {
+    while (name[length] && length < FS_MAX_PATH - 1) {
         destination[length] = (uint8_t)name[length];
         length++;
     }
@@ -119,7 +119,7 @@ static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
         api->fs.read(name, (uint8_t*)APP_VIRTUAL_BASE, APP_LOAD_LIMIT) : -1;
     if (bytes > 0) return bytes;
 
-    if (length >= FS_MAX_FILENAME - 5) return bytes;
+    if (length >= FS_MAX_PATH - 5) return bytes;
     destination[length++] = '.';
     destination[length++] = 'b';
     destination[length++] = 'i';
@@ -186,7 +186,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
         }
     }
 
-    char filename[FS_MAX_FILENAME];
+    char filename[FS_MAX_PATH];
     debug_print("[APP] activating address space\n");
     uint32_t previous_directory = app_loader_context_enter((uint32_t)instance->address_space.directory);
     debug_print("[APP] reading executable\n");
@@ -254,7 +254,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
 #define APP_LAUNCH_QUEUE 8u
 typedef struct {
     os_api_t* api;
-    char name[FS_MAX_FILENAME];
+    char name[FS_MAX_PATH];
     char arguments[APP_ARGUMENT_MAX];
     uint8_t active;
 } launch_request_t;

@@ -76,6 +76,8 @@ int fs_chmod(const char* path, uint16_t mode);
 int fs_chown(const char* path, uint16_t uid);
 
 int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity, uint32_t offset);
+int fs_mkdir(const char* path);
+int fs_is_directory(const char* path);
 void fs_init(void);
 int  fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]);
 int  fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes);

@@ -14,7 +14,7 @@ struct terminal {
     char title[24];
     char term_lines[TERM_MAX_LINES][TERM_MAX_COLS + 1];
     int term_cursor_col, term_cursor_row;
-    char term_input[TERM_MAX_COLS - 1];
+    char term_input[256];
     int term_input_length, term_editing;
     int term_output_row, term_output_col;
     uint8_t term_fg[TERM_MAX_LINES][TERM_MAX_COLS];
@@ -169,11 +169,13 @@ static void terminal_show_input(terminal_t* t) {
         if (t->term_cursor_row < TERM_MAX_LINES - 1) t->term_cursor_row++;
         else { terminal_scroll(t); t->term_output_row--; }
     }
-    t->term_lines[t->term_cursor_row][0] = '>';
-    t->term_lines[t->term_cursor_row][1] = ' ';
+    char prompt[96];
+    shell_format_prompt(t, prompt, sizeof(prompt));
+    int prefix = 0;
+    while (prompt[prefix]) { t->term_lines[t->term_cursor_row][prefix] = prompt[prefix]; prefix++; }
     for (int i = 0; i < t->term_input_length; i++)
-        t->term_lines[t->term_cursor_row][i + 2] = t->term_input[i];
-    t->term_cursor_col = t->term_input_length + 2;
+        t->term_lines[t->term_cursor_row][i + prefix] = t->term_input[i];
+    t->term_cursor_col = t->term_input_length + prefix;
     t->term_lines[t->term_cursor_row][t->term_cursor_col] = 0;
     for (int i = 0; i < t->term_cursor_col; i++) {
         t->term_fg[t->term_cursor_row][i] = 7;
@@ -347,7 +349,7 @@ static void terminal_handle_key(Window* win, char c) {
             terminal_append_output(t, "Command queue is full.\n");
             terminal_prompt(t);
         }
-    } else if (c >= ' ' && c <= '~' && t->term_cursor_col < TERM_MAX_COLS) {
+    } else if (c >= ' ' && c <= '~' && t->term_cursor_col < TERM_MAX_COLS && t->term_input_length < sizeof(t->term_input) - 1) {
         t->term_input[t->term_input_length++] = c;
         t->term_input[t->term_input_length] = 0;
         t->term_fg[t->term_cursor_row][t->term_cursor_col] = 7;

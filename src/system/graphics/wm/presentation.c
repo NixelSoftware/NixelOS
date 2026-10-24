@@ -23,6 +23,7 @@ void wm_render_screen(void) {
         desktop_draw();
         wm_draw_windows();
         wm_draw_taskbar(wm_start_menu_is_open());
+        desktop_draw_overlay();
         display_blit();
         wm_cursor_draw();
     }

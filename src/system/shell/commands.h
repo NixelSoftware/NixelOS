@@ -7,6 +7,7 @@
 void shell_execute_command(const char* command, shell_output_fn output,
                            shell_clear_fn clear);
 const char* shell_command_args(void);
+void shell_format_prompt(terminal_t* terminal, char* out, unsigned capacity);
 void shell_initialize(os_api_t* api);
 int shell_submit_command(terminal_t* terminal, const char* command, shell_output_fn output, shell_clear_fn clear);
 int shell_open_terminal(terminal_t* terminal);

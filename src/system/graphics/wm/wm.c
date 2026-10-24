@@ -821,8 +821,31 @@ static void handle_mouse_event(const os_input_event_t* event) {
     if (mouse_y < 0) mouse_y = 0;
     if (mouse_y > SCREEN_HEIGHT - 19) mouse_y = SCREEN_HEIGHT - 19;
 
+    static uint8_t previous_right;
+    uint8_t right = (event->mouse_buttons & 2) != 0;
+    uint8_t right_down = right && !previous_right;
+    previous_right = right;
     uint8_t left = event->mouse_buttons & 1;
     uint8_t click_down = left && !previous_left_button;
+    uint8_t desktop_right = right_down && mouse_y < WM_TASKBAR_Y && !start_menu_is_open();
+    if (desktop_right) {
+        for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+            if (!windows[i]) continue;
+            uint32_t previous = window_context_enter(i);
+            Window* w = windows[i];
+            if (w->visible && mouse_x >= w->x && mouse_x < w->x+w->w &&
+                mouse_y >= w->y && mouse_y < w->y+w->h) desktop_right = 0;
+            window_context_leave(previous);
+        }
+    }
+    if ((desktop_overlay_active() || desktop_right) &&
+        desktop_mouse(mouse_x, mouse_y, left, click_down, desktop_right)) {
+        if (wm_api->input.move_cursor) wm_api->input.move_cursor(mouse_x, mouse_y, 1);
+        previous_left_button = left;
+        request_redraw();
+        return;
+    }
+
     if (event->mouse_dx || event->mouse_dy) {
         if (resizing_terminal && left) {
             int w = mouse_x - resizing_terminal->x + 1;
@@ -1030,6 +1053,7 @@ static void handle_key_event(const os_input_event_t* event) {
     char key = (scancode == 0x3C || scancode == 0x3D || scancode == 0x48 ||
                 scancode == 0x50 || scancode == 0x01) ? (char)scancode : translated;
     if (!key) return;
+    if (desktop_key(key)) { request_redraw(); return; }
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         Window* window = windows[i];
         if (!window) continue;

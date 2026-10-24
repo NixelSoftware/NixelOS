@@ -28,7 +28,7 @@ ROOT_FILES = [
 OUTPUT_IMAGE = "disk.img" if len(sys.argv) < 2 else sys.argv[1]
 
 def to_83_name(filename):
-    parts = filename.upper().split('.')
+    parts = filename.split('.')
     name = parts[0][:8].ljust(8)
     ext = parts[1][:3].ljust(3) if len(parts) > 1 else "   "
     return (name + ext).encode('ascii')
@@ -110,12 +110,12 @@ def main():
     names = set()
     for p in files:
         name = to_83_name(p.name)
-        if name in names:
+        if name.upper() in names:
             raise ValueError(f"Duplicate FAT 8.3 filename: {p}")
-        names.add(name)
+        names.add(name.upper())
 
     # Reserve enough root-directory clusters, including the end marker.
-    root_clusters = max(1, math.ceil((len(files) + 1) * 32 / SECTOR_SIZE))
+    root_clusters = max(1, math.ceil((len(files) + 2) * 32 / SECTOR_SIZE))
     if root_clusters > total_clusters:
         raise ValueError("Root directory exceeds image capacity")
     for i in range(root_clusters):
@@ -152,6 +152,32 @@ def main():
         struct.pack_into("<I", entry, 28, file_size)
         root_dir_entries.extend(entry)
         print(f"  + Injected: {p} -> {to_83_name(fname).decode().strip()} ({file_size} bytes)")
+
+    # Include /Desktop in every new image, owned by the interactive user.
+    if b"DESKTOP    " in names:
+        raise ValueError("Root file conflicts with the Desktop directory")
+    if current_cluster >= total_clusters + 2:
+        raise ValueError("Not enough image space for /Desktop")
+    desktop_cluster = current_cluster
+    struct.pack_into("<I", fat, desktop_cluster * 4, 0x0FFFFFFF)
+    entry = bytearray(32)
+    entry[:11] = to_83_name("Desktop")
+    entry[11] = 0x10
+    entry[12:14] = bytes((0xA5, 0xD1))
+    struct.pack_into("<HHH", entry, 14, 1000, 1000, 0o755)
+    struct.pack_into("<H", entry, 20, desktop_cluster >> 16)
+    struct.pack_into("<H", entry, 26, desktop_cluster & 0xFFFF)
+    root_dir_entries.extend(entry)
+    directory = bytearray(SECTOR_SIZE)
+    for offset, name, cluster in ((0, b".          ", desktop_cluster),
+                                  (32, b"..         ", root_cluster)):
+        directory[offset:offset+11] = name
+        directory[offset+11] = 0x10
+        struct.pack_into("<H", directory, offset+20, cluster >> 16)
+        struct.pack_into("<H", directory, offset+26, cluster & 0xFFFF)
+    desktop_lba = cluster_begin_lba + (desktop_cluster - 2) * SECTORS_PER_CLUSTER
+    disk[desktop_lba*SECTOR_SIZE:(desktop_lba+1)*SECTOR_SIZE] = directory
+    print("  + Created: /Desktop")
 
     fat1_offset = fat_begin_lba * SECTOR_SIZE
     fat2_offset = (fat_begin_lba + sectors_per_fat) * SECTOR_SIZE

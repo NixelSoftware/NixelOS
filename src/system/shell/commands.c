@@ -12,6 +12,101 @@ static os_api_t* shell_api;
 #define SHELL_ARGUMENT_MAX 256
 #define shell_args (current_task->command_args)
 
+/* Each terminal owns a queue and shell task; no command state is shared. */
+typedef struct {
+    terminal_t* terminal;
+    task_t* task;
+    char command[SHELL_ARGUMENT_MAX];
+    char cwd[FS_MAX_PATH];
+    shell_output_fn output;
+    shell_clear_fn clear;
+    uint8_t allocated, pending, active, closing;
+} shell_session_t;
+static shell_session_t sessions[TERMINAL_MAX_INSTANCES];
+static shell_session_t* session_for(terminal_t* terminal) {
+    for (int i = 0; i < TERMINAL_MAX_INSTANCES; i++)
+        if (sessions[i].allocated && sessions[i].terminal == terminal) return &sessions[i];
+    return 0;
+}
+
+static void copy_text(char* out, const char* in, unsigned capacity) {
+    unsigned i = 0;
+    while (in[i] && i + 1 < capacity) { out[i] = in[i]; i++; }
+    out[i] = 0;
+}
+static int equal(const char* a, const char* b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+static shell_session_t* active_session(void) {
+    return current_task ? session_for(current_task->terminal) : 0;
+}
+/* Resolve relative paths and dot segments, requiring exact directory-entry
+ * spelling. FAT remains compatible with existing applications. */
+static int resolve_path(const char* input, char out[FS_MAX_PATH], int create) {
+    shell_session_t* session = active_session();
+    copy_text(out, input[0] == '/' ? "/" : session ? session->cwd : "/", FS_MAX_PATH);
+    if (!out[0]) copy_text(out, "/", FS_MAX_PATH);
+    unsigned length = 0; while (out[length]) length++;
+    const char* scan = input;
+    while (*scan) {
+        while (*scan == '/') scan++;
+        if (!*scan) break;
+        char part[FS_MAX_FILENAME]; unsigned n = 0;
+        while (*scan && *scan != '/') {
+            if (n + 1 >= sizeof(part)) return 0;
+            part[n++] = *scan++;
+        }
+        part[n] = 0;
+        if (equal(part, ".")) continue;
+        if (equal(part, "..")) {
+            while (length > 1 && out[length-1] != '/') length--;
+            if (length > 1) length--;
+            out[length] = 0; continue;
+        }
+        char names[FS_MAX_FILES][FS_MAX_FILENAME];
+        int count = fs_list_dir(out, names), found = 0;
+        for (int i = 0; i < count; i++) if (equal(part, names[i])) { found = 1; break; }
+        const char* rest = scan; while (*rest == '/') rest++;
+        if (!found && (!create || *rest)) return 0;
+        /* Refuse a differently-cased alias when creating a file. */
+        if (!found && create) {
+            unsigned base = 0, extension = 0; int dot = 0;
+            for (unsigned i = 0; i < n; i++) {
+                if (part[i] == '.') { if (dot || !base) return 0; dot = 1; }
+                else {
+                    if (part[i] <= ' ' || part[i] == ':' || part[i] == '*' || part[i] == '?') return 0;
+                    if (dot) extension++; else base++;
+                }
+            }
+            if (!base || base > 8 || extension > 3 || (dot && !extension)) return 0;
+            char candidate[FS_MAX_PATH];
+            copy_text(candidate, out, sizeof(candidate)); unsigned k = length;
+            if (k > 1) candidate[k++] = '/';
+            if (k + n >= sizeof(candidate)) return 0;
+            copy_text(candidate+k, part, sizeof(candidate)-k);
+            fs_stat_t st; if (fs_stat(candidate, &st)) return 0;
+        }
+        if (length + n + 1 >= FS_MAX_PATH) return 0;
+        if (length > 1) out[length++] = '/';
+        copy_text(out+length, part, FS_MAX_PATH-length); length += n;
+        if ((*rest || *scan == '/') && !fs_is_directory(out)) return 0;
+    }
+    return 1;
+}
+void shell_format_prompt(terminal_t* terminal, char* out, unsigned capacity) {
+    shell_session_t* session = session_for(terminal);
+    const user_t* user = user_by_id(session && session->task ? session->task->uid : USER_REGULAR);
+    const char* cwd = session && session->cwd[0] ? session->cwd : "/";
+    unsigned length = 0; while (cwd[length]) length++;
+    /* Keep the directory tail and prompt marker visible for deep paths. */
+    if (length > 64) cwd += length - 64;
+    const char* parts[] = {user ? user->name : "unknown", "@nixel ", cwd, " > "};
+    unsigned n = 0;
+    for (unsigned p = 0; p < 4; p++) for (unsigned i = 0; parts[p][i] && n+1 < capacity; i++) out[n++] = parts[p][i];
+    if (capacity) out[n] = 0;
+}
+
 static void print(const char* text) {
     if (shell_output) shell_output(text);
 }
@@ -65,7 +160,8 @@ static int account_command(const char* command) {
         if (!user_switch(command + 3)) print("Cannot switch user (root required; account must exist).\n");
     } else if (has_prefix(command, "stat ")) {
         fs_stat_t st;
-        if (!fs_stat(command + 5, &st)) print("Cannot stat path.\n");
+        char path[FS_MAX_PATH];
+        if (!resolve_path(command + 5, path, 0) || !fs_stat(path, &st)) print("Cannot stat path.\n");
         else {
             const user_t* u = user_by_id(st.uid);
             print("owner="); print(u ? u->name : "unknown");
@@ -83,14 +179,16 @@ static int account_command(const char* command) {
         int ok = 0;
         if (owner) {
             const user_t* u = user_by_name(token);
-            if (u && *arg) ok = fs_chown(arg, u->uid);
+            char path[FS_MAX_PATH];
+            if (u && *arg && resolve_path(arg, path, 0)) ok = fs_chown(path, u->uid);
         } else {
             unsigned mode = 0; int valid = n == 3 || (n == 4 && token[0] == '0');
             for (int i = 0; i < n; i++) {
                 if (token[i] < '0' || token[i] > '7') valid = 0;
                 mode = (mode << 3) | (token[i] - '0');
             }
-            if (valid && *arg) ok = fs_chmod(arg, mode);
+            char path[FS_MAX_PATH];
+            if (valid && *arg && resolve_path(arg, path, 0)) ok = fs_chmod(path, mode);
         }
         if (!ok) print("Operation failed: check arguments, ownership and permissions.\n");
     } else return 0;
@@ -106,6 +204,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
 
     if (command[0] == '>' && command[1] == ' ') command += 2;
     while (*command == ' ') command++;
+    char path[FS_MAX_PATH];
     shell_args[0] = '\0';
     if (*command == '\0') return;
 
@@ -129,7 +228,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         return;
     }
     if (account_command(command)) return;
-    if (has_prefix(command, "help")) {
+    if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
         print("Commands:\n"
                     " users / whoami / id   Show accounts or identity\n"
                     " sudo <command>  Run as root (password required)\n"
@@ -138,7 +237,10 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " chmod <octal> <path>  Set permissions\n"
                     " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
-                    " ls              List files\n"
+                    " ls [path]       List directory or file (exact case)\n"
+                    " cd [dir]        Change directory (default /)\n"
+                    " mkdir <dir>     Create a directory\n"
+                    " pwd             Show current directory\n"
                     " rm              Remove files\n"
                     " cat <file>      Read file\n"
                     " echo <t>><file> Write file\n"
@@ -147,7 +249,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ifconfig        Show network configuration\n"
                     " netdev          Show detected network hardware\n"
                     " clear           Clear screen\n");
-    } else if (has_prefix(command, "ps")) {
+    } else if ((has_prefix(command, "ps") && (!command[2] || command[2] == ' '))) {
         task_info_t processes[MAX_TASKS];
         int count = task_snapshot(processes, MAX_TASKS);
         print("PID  PPID  NAME\n");
@@ -156,24 +258,54 @@ void shell_execute_command(const char* command, shell_output_fn output,
             print_u32(processes[i].ppid); print("  ");
             print(processes[i].name); print("\n");
         }
-    } else if (has_prefix(command, "clear")) {
+    } else if ((has_prefix(command, "clear") && (!command[5] || command[5] == ' '))) {
         if (shell_clear) shell_clear();
     } else if (has_prefix(command, "rm ")) {
         const char* filename = command + 3;
         while (*filename == ' ') filename++;
-        print(shell_api->fs.delete_file(filename) ? "File deleted.\n" : "Failed to delete file.\n");
-    } else if (has_prefix(command, "ls") || has_prefix(command, "dir")) {
-        char files[FS_MAX_FILES][FS_MAX_FILENAME];
-        int count = shell_api->fs.list(files);
-        if (count == 0) print("No files found.\n");
-        else for (int i = 0; i < count; i++) { print(files[i]); print("\n"); }
+        print(resolve_path(filename, path, 0) && shell_api->fs.delete_file(path) ? "File deleted.\n" : "Failed to delete file.\n");
+    } else if ((has_prefix(command, "ls") && (!command[2] || command[2] == ' ')) ||
+               (has_prefix(command, "dir") && (!command[3] || command[3] == ' '))) {
+        const char* arg = command + (command[0] == 'l' ? 2 : 3);
+        while (*arg == ' ') arg++;
+        fs_stat_t st;
+        if (!resolve_path(arg, path, 0) || !fs_stat(path, &st) || !fs_access(path, FS_ACCESS_READ))
+            print("ls: path not found or permission denied.\n");
+        else if (equal(path, "/") || fs_is_directory(path)) {
+            char files[FS_MAX_FILES][FS_MAX_FILENAME]; int count = fs_list_dir(path, files);
+            if (!count) print("No files found.\n");
+            for (int i = 0; i < count; i++) { print(files[i]); print("\n"); }
+        } else { print(path); print("\n"); }
+    } else if (has_prefix(command, "mkdir") && (!command[5] || command[5] == ' ')) {
+        const char* arg = command + 5; while (*arg == ' ') arg++;
+        char directory[FS_MAX_PATH]; copy_text(directory, arg, sizeof(directory));
+        unsigned length = 0; while (directory[length]) length++;
+        while (length && directory[length-1] == ' ') directory[--length] = 0;
+        while (length > 1 && directory[length-1] == '/') directory[--length] = 0;
+        fs_stat_t st;
+        if (!length) print("Usage: mkdir <directory>\n");
+        else if (!resolve_path(directory, path, 1))
+            print("mkdir: invalid name, missing parent, case mismatch, or permission denied.\n");
+        else if (fs_stat(path, &st)) print("mkdir: path already exists.\n");
+        else if (fs_mkdir(path) < 0) print("mkdir: cannot create directory (permission denied or disk error).\n");
+        else { print("Created "); print(path); print("\n"); }
+    } else if (has_prefix(command, "cd") && (!command[2] || command[2] == ' ')) {
+        const char* arg = command + 2; while (*arg == ' ') arg++;
+        shell_session_t* session = active_session();
+        if (!*arg) arg = "/";
+        if (!session || !resolve_path(arg, path, 0) ||
+            (!equal(path, "/") && !fs_is_directory(path)) || !fs_access(path, FS_ACCESS_EXEC))
+            print("cd: directory not found (case sensitive) or permission denied.\n");
+        else copy_text(session->cwd, path, sizeof(session->cwd));
+    } else if (equal(command, "pwd")) {
+        shell_session_t* session = active_session(); print(session ? session->cwd : "/"); print("\n");
     } else if (has_prefix(command, "cat ")) {
         const char* filename = command + 4;
         while (*filename == ' ') filename++;
         if (*filename == '\0') print("Usage: cat <filename>\n");
         else {
             char buffer[512];
-            int bytes = shell_api->fs.read(filename, (uint8_t*)buffer, 511);
+            int bytes = resolve_path(filename, path, 0) ? shell_api->fs.read(path, (uint8_t*)buffer, 511) : -1;
             if (bytes < 0) print("Cannot read file (missing or permission denied).\n");
             else { buffer[bytes] = '\0'; print(buffer); print("\n"); }
         }
@@ -181,12 +313,12 @@ void shell_execute_command(const char* command, shell_output_fn output,
         const char* filename = command + 5;
         while (*filename == ' ') filename++;
         if (*filename == '\0') print("Usage: view <filename.bmp>\n");
-        else if (shell_api->shell.shell_open_viewer(filename)) {
+        else if (resolve_path(filename, path, 0) && shell_api->shell.shell_open_viewer(path)) {
             print("Loaded "); print(filename); print(" in Viewer\n");
         } else print("Failed to load BMP!\n");
-    } else if (has_prefix(command, "ifconfig")) {
+    } else if ((has_prefix(command, "ifconfig") && (!command[8] || command[8] == ' '))) {
         shell_network_ifconfig(shell_output);
-    } else if (has_prefix(command, "netdev")) {
+    } else if ((has_prefix(command, "netdev") && (!command[6] || command[6] == ' '))) {
         if (!shell_api || !shell_api->network.get_device_info) {
             print("Network API unavailable.\n");
             return;
@@ -223,14 +355,14 @@ void shell_execute_command(const char* command, shell_output_fn output,
             const char* filename = redirect + 1;
             while (*filename == ' ') filename++;
             if (*filename == '\0') print("Usage: echo <text> > <file>\n");
-            else if (shell_api->fs.write(filename, (const uint8_t*)contents, length) >= 0) {
+            else if (resolve_path(filename, path, 1) && shell_api->fs.write(path, (const uint8_t*)contents, length) >= 0) {
                 print("Saved to "); print(filename); print("\n");
             } else print("Write failed!\n");
         }
     } else {
-        char name[FS_MAX_FILENAME];
+        char name[FS_MAX_PATH];
         int length = 0;
-        while (command[length] && command[length] != ' ' && length < FS_MAX_FILENAME - 1) {
+        while (command[length] && command[length] != ' ' && length < FS_MAX_PATH - 1) {
             name[length] = command[length];
             length++;
         }
@@ -240,7 +372,22 @@ void shell_execute_command(const char* command, shell_output_fn output,
         while (command[length] && out < SHELL_ARGUMENT_MAX - 1)
             shell_args[out++] = command[length++];
         shell_args[out] = '\0';
-        int result = app_loader_launch_wait(shell_api, name, shell_args);
+        int found = resolve_path(name, path, 0);
+        char candidate[FS_MAX_PATH];
+        unsigned n = 0; while (name[n]) n++;
+        const char* extensions[] = {"", ".bin", ".BIN"};
+        for (int root = 0; root < 2 && !found; root++) {
+            if (root && name[0] == '/') break;
+            for (int ext = 0; ext < 3 && !found; ext++) {
+                unsigned prefix = root ? 1 : 0;
+                if (n + prefix + (ext ? 4 : 0) >= sizeof(candidate)) continue;
+                if (root) candidate[0] = '/';
+                copy_text(candidate+prefix, name, sizeof(candidate)-prefix);
+                copy_text(candidate+prefix+n, extensions[ext], sizeof(candidate)-prefix-n);
+                found = resolve_path(candidate, path, 0);
+            }
+        }
+        int result = found ? app_loader_launch_wait(shell_api, path, shell_args) : -1;
         if (result == 0) return;
         if (result == -2) print("Invalid executable format.\n");
         else print("Unknown cmd. Type 'help'\n");
@@ -252,27 +399,12 @@ void shell_initialize(os_api_t* api) {
     shell_network_initialize(api);
 }
 
-/* Each terminal owns a queue and shell task; no command state is shared. */
-typedef struct {
-    terminal_t* terminal;
-    task_t* task;
-    char command[SHELL_ARGUMENT_MAX];
-    shell_output_fn output;
-    shell_clear_fn clear;
-    uint8_t allocated, pending, active, closing;
-} shell_session_t;
-static shell_session_t sessions[TERMINAL_MAX_INSTANCES];
-static shell_session_t* session_for(terminal_t* terminal) {
-    for (int i = 0; i < TERMINAL_MAX_INSTANCES; i++)
-        if (sessions[i].allocated && sessions[i].terminal == terminal) return &sessions[i];
-    return 0;
-}
 int shell_open_terminal(terminal_t* terminal) {
     MUTEX_GUARD(kernel_mutex);
     for (int i = 0; i < TERMINAL_MAX_INSTANCES; i++) {
         shell_session_t* s = &sessions[i];
         if (s->allocated) continue;
-        *s = (shell_session_t){.terminal = terminal, .allocated = 1};
+        *s = (shell_session_t){.terminal = terminal, .allocated = 1, .cwd = "/"};
         if (task_create(shell_service, s, "terminal") < 0) { s->allocated = 0; return -1; }
         return 0;
     }
