@@ -109,10 +109,30 @@ void shell_execute_command(const char* command, shell_output_fn output,
     shell_args[0] = '\0';
     if (*command == '\0') return;
 
+    if (has_prefix(command, "sudo") && (!command[4] || command[4] == ' ')) {
+        const char* elevated = command + 4;
+        while (*elevated == ' ') elevated++;
+        if (!*elevated) { print("Usage: sudo <command>\n"); return; }
+        uint16_t uid = user_uid(), gid = user_gid();
+        if (uid != USER_ROOT) {
+            if (uid != USER_REGULAR) { print("sudo: this account is not allowed.\n"); return; }
+            char password[64] = {0};
+            print("[sudo] root password: ");
+            int entered = terminal_read_password(password, sizeof(password));
+            int authenticated = entered && user_sudo_begin(password);
+            for (unsigned i = 0; i < sizeof(password); i++) ((volatile char*)password)[i] = 0;
+            if (!authenticated) { print("sudo: authentication failed or cancelled.\n"); return; }
+        }
+        shell_execute_command(elevated, output, clear);
+        current_task->uid = uid;
+        current_task->gid = gid;
+        return;
+    }
     if (account_command(command)) return;
     if (has_prefix(command, "help")) {
         print("Commands:\n"
                     " users / whoami / id   Show accounts or identity\n"
+                    " sudo <command>  Run as root (password required)\n"
                     " su <account>    Switch identity (root only)\n"
                     " stat <path>     Show ownership and mode\n"
                     " chmod <octal> <path>  Set permissions\n"
@@ -293,6 +313,8 @@ void shell_service(void* argument) {
     mutex_lock(&kernel_mutex);
     s->task = current_task;
     current_task->terminal = s->terminal;
+    current_task->uid = USER_REGULAR;
+    current_task->gid = USER_REGULAR;
     /* A new shell is independent of the terminal that launched it. */
     current_task->detached = 0;
     mutex_unlock(&kernel_mutex);

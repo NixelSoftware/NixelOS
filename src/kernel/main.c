@@ -1,5 +1,6 @@
 #include "../system/services/audio/system_sound.h"
 #include "types.h"
+#include "users.h"
 #include "../system/graphics/wm/cursor.h"
 #include "drivers/display/font.h"
 #include "keyboard.h"
@@ -362,6 +363,8 @@ static void cleanup_service(void* arg) {
 
 static void desktop_service(void* arg) {
     (void)arg;
+    current_task->uid = USER_REGULAR;
+    current_task->gid = USER_REGULAR;
     for (;;) {
 #if STARTUP_PROFILE == 1
         startup_trace_poll(1);

@@ -71,3 +71,24 @@ remove generated build artifacts.
 | `QEMU_MEMORY` | `any` | `128M` | Set the amount of RAM in QEMU |
 | `QEMU_DHCP` | `any` | `10.0.1.0/24,dhcpstart=10.0.1.227` | DHCP Range for QEMU VM |
 | `QEMU_EXTRA` | `any` | `null` | Extra arguments to pass to QEMU |
+
+# Default account and sudo
+
+The desktop and new terminals start as `user` (UID/GID 1000). Boot services
+retain their privileged identity. The fixed accounts are `root`, `user`,
+`system`, and `nobody`.
+
+Use `sudo <command>` to run one command as root. Enter the default root password
+`banana` at the hidden password prompt; the terminal returns to its previous
+identity after the command. For example, `sudo whoami` prints `root`, and the
+following `whoami` prints `user`. Press Ctrl+C to cancel the password prompt.
+Only `user` and `root` may use sudo. Account creation and password changes are
+not implemented yet. Kernel-mode applications still share kernel privileges;
+this does not provide full application isolation.
+
+Run the authentication and terminal password-input regression checks with:
+
+```sh
+gcc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-pointer-to-int-cast tools/users/sudo_test.c -o /tmp/nixel-sudo-test
+/tmp/nixel-sudo-test
+```

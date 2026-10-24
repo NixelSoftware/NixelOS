@@ -26,3 +26,19 @@ int user_switch(const char* name) {
     current_task->gid = user->gid;
     return 1;
 }
+
+/* Initial fixed root password; only the interactive user may use sudo. */
+int user_sudo_begin(const char* password) {
+    static const char expected[] = "banana";
+    if (!current_task || !password ||
+        (user_uid() != USER_REGULAR && user_uid() != USER_ROOT)) return 0;
+    unsigned difference = 0, i = 0;
+    while (i < sizeof(expected) - 1 && password[i]) {
+        difference |= (unsigned char)password[i] ^ (unsigned char)expected[i];
+        i++;
+    }
+    if (i != sizeof(expected) - 1 || password[i] || difference) return 0;
+    current_task->uid = USER_ROOT;
+    current_task->gid = USER_ROOT;
+    return 1;
+}

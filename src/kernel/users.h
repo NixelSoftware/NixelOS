@@ -11,5 +11,6 @@ const user_t* user_by_name(const char* name);
 const user_t* user_by_id(uint16_t uid);
 uint16_t user_uid(void);
 uint16_t user_gid(void);
+int user_sudo_begin(const char* password);
 int user_switch(const char* name);
 #endif

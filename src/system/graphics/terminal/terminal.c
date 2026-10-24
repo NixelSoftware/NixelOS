@@ -19,6 +19,9 @@ struct terminal {
     int term_output_row, term_output_col;
     uint8_t term_fg[TERM_MAX_LINES][TERM_MAX_COLS];
     uint8_t term_bg[TERM_MAX_LINES][TERM_MAX_COLS];
+    char password[64];
+    unsigned password_length;
+    int password_pending, password_done;
     unsigned ansi_fg, ansi_bg, ansi_bold, ansi_inverse;
     unsigned ansi_state, ansi_count, ansi_params[16], ansi_invalid;
 };
@@ -298,6 +301,20 @@ static void terminal_shell_clear(void) {
 static void terminal_handle_key(Window* win, char c) {
     terminal_t* t = terminal_for_window(win);
     if (!t) return;
+    if (t->password_pending) {
+        if (c == '\n' || (uint8_t)c == 3) {
+            t->password_done = (uint8_t)c == 3 ? -1 : 1;
+            t->password_pending = 0;
+            terminal_append_output(t, (uint8_t)c == 3 ? "^C\n" : "\n");
+        } else if (c == '\b') {
+            if (t->password_length) t->password[--t->password_length] = 0;
+        } else if (c >= ' ' && c <= '~' && t->password_length < sizeof(t->password) - 1) {
+            t->password[t->password_length++] = c;
+            t->password[t->password_length] = 0;
+        }
+        wm_invalidate();
+        return;
+    }
     if ((uint8_t)c == 3) {
         int was_editing = t->term_editing;
         t->term_editing = 0;
@@ -392,4 +409,32 @@ void terminal_command_done(terminal_t* t) {
     MUTEX_GUARD(kernel_mutex);
     terminal_prompt(t);
     wm_invalidate();
+}
+
+/* The shell sleeps while the window task collects input without echo. */
+int terminal_read_password(char* output, uint32_t capacity) {
+    mutex_lock(&kernel_mutex);
+    terminal_t* t = current_task ? current_task->terminal : 0;
+    if (!t || !t->active || !output || capacity < sizeof(t->password)) {
+        mutex_unlock(&kernel_mutex);
+        return 0;
+    }
+    t->password_length = 0;
+    t->password[0] = 0;
+    t->password_done = 0;
+    t->password_pending = 1;
+    while (!t->password_done && t->active && !current_task->terminate_requested) {
+        mutex_unlock(&kernel_mutex);
+        task_sleep_ms(1);
+        mutex_lock(&kernel_mutex);
+    }
+    int ok = t->password_done == 1 && t->active && !current_task->terminate_requested;
+    for (unsigned i = 0; i < sizeof(t->password); i++) {
+        output[i] = ok ? t->password[i] : 0;
+        ((volatile char*)t->password)[i] = 0;
+    }
+    t->password_pending = t->password_done = 0;
+    t->password_length = 0;
+    mutex_unlock(&kernel_mutex);
+    return ok;
 }
