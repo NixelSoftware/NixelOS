@@ -12,6 +12,7 @@
 #include "../../../kernel/drivers/rtc.h"
 #include "../../../kernel/drivers/serial.h"
 #include "../terminal/terminal.h"
+#include "../../shell/commands.h"
 #include "../../icons/network.h"
 #include "../../icons/sound.h"
 #include "../../../kernel/kernel_net.h"
@@ -753,6 +754,14 @@ void wm_user_close_address_space(uint32_t owner_directory) {
             user_window_slots[i].owner_directory == owner_directory)
             user_window_remove_slot(&user_window_slots[i]);
     }
+    /* Legacy callback windows also belong to the executable's process. */
+    if (paging_current_directory() == owner_directory) {
+        for (int i = 0; i < WM_MAX_WINDOWS;) {
+            if (windows[i] && window_directories[i] == owner_directory)
+                wm_unregister_window(windows[i]);
+            else i++;
+        }
+    }
 }
 
 void wm_unregister_window(Window* window) {
@@ -907,6 +916,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 }
                 if (mouse_x >= close_x && mouse_x <= close_x + 13 &&
                     mouse_y >= close_y && mouse_y <= close_y + 13) {
+                    if (window == &terminal_window) shell_close_terminal();
                     uint32_t owner_directory = window_directories[i];
                     if (owner_directory) {
                         user_window_slot_t* user_slot = user_slot_for_window(window);
@@ -928,6 +938,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 }
                 if (mouse_x >= window->x && mouse_x <= window->x + window->w &&
                     mouse_y >= window->y && mouse_y <= window->y + 18) {
+                    if (window == &terminal_window) shell_close_terminal();
                     uint32_t owner_directory = window_directories[i];
                     uint32_t caller_directory = previous;
                     window_context_leave(previous);
@@ -942,6 +953,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 }
                 if (mouse_x >= window->x && mouse_x <= window->x + window->w &&
                     mouse_y >= window->y && mouse_y <= window->y + window->h) {
+                    if (window == &terminal_window) shell_close_terminal();
                     uint32_t owner_directory = window_directories[i];
                     uint32_t caller_directory = previous;
                     window_context_leave(previous);

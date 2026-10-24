@@ -54,7 +54,7 @@ ifneq ($(filter $(STARTUP_PROFILE),0 1 2 3),$(STARTUP_PROFILE))
 $(error STARTUP_PROFILE must be 0, 1, 2 or 3)
 endif
 CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
-          -mno-stack-arg-probe -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
+          -mno-stack-arg-probe -mno-sse -mno-sse2 -mno-mmx -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
@@ -63,7 +63,7 @@ KERNEL_C := \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/loader/app_loader.c \
-  src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
+  src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \
   src/kernel/drivers/ata.c src/kernel/drivers/net.c \
@@ -88,7 +88,7 @@ KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 $(KERNEL_OBJ): src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h \
-               src/kernel/sched_policy.h src/kernel/sched_wide.h
+               src/kernel/sched_policy.h src/kernel/sched_wide.h src/kernel/arch_fpu.h
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
         shutdlg

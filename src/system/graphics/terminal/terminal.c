@@ -275,13 +275,13 @@ static void terminal_shell_clear(void) {
     terminal_clear_output();
     for (int i = 0; i <= length; i++) term_input[i] = input[i];
     term_input_length = length;
-    term_editing = 1;
     terminal_show_input();
     wm_invalidate();
 }
 
 static void terminal_handle_key(Window* win, char c) {
     (void)win;
+    if (!term_editing) return;
     if (c == '\b') {
         if (term_input_length) {
             term_input[--term_input_length] = 0;
@@ -295,9 +295,10 @@ static void terminal_handle_key(Window* win, char c) {
         if (term_cursor_row < TERM_MAX_LINES - 1) term_cursor_row++;
         else terminal_scroll();
         term_lines[term_cursor_row][0] = 0;
-        if (!shell_submit_command(command, terminal_shell_output, terminal_shell_clear))
+        if (!shell_submit_command(command, terminal_shell_output, terminal_shell_clear)) {
             terminal_append_output("Command queue is full.\n");
-        terminal_prompt();
+            terminal_prompt();
+        }
     } else if (c >= ' ' && c <= '~' && term_cursor_col < TERM_MAX_COLS) {
         term_input[term_input_length++] = c;
         term_input[term_input_length] = 0;
@@ -323,4 +324,10 @@ void terminal_init(os_api_t* api) {
 
     terminal_clear_output();
     terminal_prompt();
+}
+
+void terminal_command_done(void) {
+    MUTEX_GUARD(kernel_mutex);
+    terminal_prompt();
+    wm_invalidate();
 }

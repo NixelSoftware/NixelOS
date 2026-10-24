@@ -15,7 +15,7 @@ def main():
         build = Path(directory)
         objects = []
         for source in (here / "boot.asm", root / "src/kernel/task_switch.asm",
-                       here / "test.c", root / "src/kernel/task.c",
+                       here / "test.c", root / "src/kernel/task.c", root / "src/kernel/arch_fpu.c",
                        root / "src/kernel/scheduler.c", root / "src/kernel/sched_policy.c",
                        root / "src/kernel/sched_wide.c", root / "src/kernel/mutex.c"):
             obj = build / (source.stem + ".o")
@@ -23,7 +23,7 @@ def main():
                 command = ["nasm", "-f", "elf32", "-DSTARTUP_TRACE=1", str(source)]
             else:
                 command = ["gcc", "-O2", "-m32", "-ffreestanding", "-fno-pie",
-                           "-fno-stack-protector", "-DSTARTUP_TRACE=1",
+                           "-fno-stack-protector", "-mno-sse", "-mno-sse2", "-mno-mmx", "-DSTARTUP_TRACE=1",
                            "-I" + str(root / "src/kernel"), "-c", str(source)]
             subprocess.run(command + ["-o", str(obj)], check=True)
             objects.append(str(obj))

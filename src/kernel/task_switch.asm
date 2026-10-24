@@ -4,6 +4,8 @@ extern current_task
 extern task_schedule_next
 extern task_timer_tick
 extern task_timer_irq_exit
+extern arch_user_exit_requested
+extern arch_user_kernel_esp
 %if STARTUP_TRACE
 extern startup_trace_timer
 %endif
@@ -69,6 +71,21 @@ restore_context:
     jz .restore
     mov esp, [eax + 8]
 .restore:
+    ; Only unwind at a user return boundary, after kernel work releases locks.
+    cmp dword [arch_user_exit_requested], 0
+    je .normal_return
+    test byte [esp + 52], 3
+    jz .normal_return
+    mov dword [arch_user_exit_requested], 0
+    mov esp, [arch_user_kernel_esp]
+    mov dword [arch_user_kernel_esp], 0
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    popfd
+    ret
+.normal_return:
     pop eax
     mov gs, ax
     pop eax

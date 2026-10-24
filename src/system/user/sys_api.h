@@ -43,7 +43,10 @@ enum {
     SYS_AUDIO_SHUTDOWN = 32, /* requests a kernel managed shutdown */
     SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
     SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
-    SYS_REBOOT = 35 /* requests a kernel managed reboot */
+    SYS_REBOOT = 35, /* requests a kernel managed reboot */
+    SYS_DETACH = 36, /* reparent current process to PID 0; releases terminal wait */
+    SYS_GETPID = 37,
+    SYS_GETPPID = 38
 };
 
 enum {
@@ -55,6 +58,24 @@ enum {
     USER_TCP_CLOSE_WAIT = 7
 };
 
+static inline int32_t sys_detach(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_DETACH)
+                      : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_getpid(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_GETPID)
+                      : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_getppid(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_GETPPID)
+                      : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
 static inline int32_t sys_audio_init(uint32_t rate) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result)

@@ -10,7 +10,8 @@ volatile uint32_t arch_user_exit_requested, frame_timer;
 static volatile uint32_t ticks, worker_runs, stop_worker, worker_done;
 static uint32_t timer_active, idle_entries, idle_exits;
 static mutex_t contention;
-static task_t* volatile waiter_task;
+static task_t* volatile waiter_task, * volatile worker_task;
+static task_t* volatile cpu_tasks[MAX_TASKS - 2];
 static volatile uint32_t waiter_done, stop_cpu;
 static volatile uint32_t cpu_progress[MAX_TASKS - 2], cpu_done[MAX_TASKS - 2];
 static struct __attribute__((packed)) { uint16_t low, cs; uint8_t zero, type; uint16_t high; } idt[256];
@@ -61,6 +62,7 @@ static void wait_ticks(uint32_t count) {
 }
 static void worker(void* arg) {
     (void)arg;
+    worker_task = current_task;
     while (!stop_worker) {
         worker_runs++;
         task_sleep_ms(1);
@@ -78,6 +80,7 @@ static void mutex_waiter(void* arg) {
 }
 static void cpu_worker(void* arg) {
     unsigned i = (uint32_t)arg;
+    cpu_tasks[i] = current_task;
     while (!stop_cpu) cpu_progress[i]++;
     cpu_done[i] = 1;
 }
@@ -92,7 +95,7 @@ static void integration_checks(task_t* boot) {
     mutex_unlock(&contention);
     while (!waiter_done) task_sleep_ms(1);
     check(boot->sched.nice == -5 && !boot->owned_mutexes, "mutex restores EEVDF weight");
-    task_sleep_ms(3);
+    while (waiter_task->state != TASK_STATE_TERMINATED) task_sleep_ms(1);
     print("PASS real mutex blocking, inheritance and handoff\n");
 
     for (unsigned i = 0; i < MAX_TASKS - 2; i++)
@@ -107,8 +110,32 @@ static void integration_checks(task_t* boot) {
         if (done == MAX_TASKS - 2) break;
         task_sleep_ms(2);
     }
-    task_sleep_ms(3);
+    for (unsigned i = 0; i < MAX_TASKS - 2; i++)
+        while (cpu_tasks[i]->state != TASK_STATE_TERMINATED) task_sleep_ms(1);
     print("PASS 30 preempted CPU workers, exit and slot reuse\n");
+}
+static volatile uint32_t tree_parent, tree_child_ready, tree_detached, tree_release, tree_child_done, tree_detached_done;
+static void tree_child(void* arg) {
+    check(task_parent_id() == tree_parent, "child inherits creator PID");
+    if (arg) {
+        check(task_detach() == 0 && task_parent_id() == 0, "detach reparents to init");
+        tree_detached = 1;
+        while (!tree_release) task_sleep_ms(1);
+        tree_detached_done = 1;
+    } else {
+        tree_child_ready = 1;
+        while (!current_task->terminate_requested) task_sleep_ms(1);
+        tree_child_done = 1;
+    }
+}
+static void tree_worker(void* arg) {
+    (void)arg;
+    tree_parent = current_task->id;
+    check(task_create(tree_child, (void*)1, "detached") > 0, "detached creation");
+    while (!tree_detached) task_sleep_ms(1);
+    check(task_create(tree_child, 0, "attached") > 0, "attached creation");
+    while (!tree_child_ready) task_sleep_ms(1);
+    /* Returning must cancel the attached child and wait for its cleanup. */
 }
 void test_main(void) {
     print("Starting multitasking boundary tests\n");
@@ -168,9 +195,16 @@ void test_main(void) {
 
     stop_worker = 1;
     while (!worker_done) task_sleep_ms(2);
-    /* worker_done is published before task_exit; let its final context retire. */
-    task_sleep_ms(3);
+    /* Completion is published before exit; wait for actual retirement. */
+    while (worker_task->state != TASK_STATE_TERMINATED) task_sleep_ms(1);
     integration_checks(boot);
+    int parent_pid = task_create(tree_worker, 0, "tree-parent");
+    check(parent_pid > 0 && task_wait(parent_pid) == 0, "wait for parent and descendant retirement");
+    check(tree_child_done && tree_detached && !tree_detached_done, "detached child survives parent exit");
+    tree_release = 1;
+    while (!tree_detached_done) task_sleep_ms(1);
+    task_sleep_ms(2);
+    print("PASS process ancestry, cascade, wait and detach\n");
     /* A voluntary sleep may start masked and must resume with that same IF. */
     uint32_t masked = task_irq_save();
     uint64_t expired = scheduler_clock();
@@ -192,11 +226,15 @@ void test_main(void) {
     }
     irq = task_irq_save();
     scheduler_get_info(&final);
-    check(idle_entries - entries == 128 && idle_exits - exits == 128, "idle entry/exit count");
+    /* A short sleep may expire before pick_next samples the clock. Such a
+     * wait resumes without selecting idle; every actual idle entry must exit. */
+    uint32_t transitions = idle_entries - entries;
+    check(transitions > 0 && transitions <= 128 && idle_exits - exits == transitions,
+        "balanced idle entry/exit count");
     check(final.idle_time_ns > initial.idle_time_ns, "halted time accounting");
     check(final.runnable == 1 && final.total_weight == scheduler_weight(-5), "idle excluded from load");
     check(!timer_active, "timer trace balanced");
-    print("PASS 128 idle sleep/wake transitions\nPASS multitasking boundaries\n");
+    print("PASS 128 sleeps with balanced idle transitions\nPASS multitasking boundaries\n");
     outb(0xf4, 0);
     for (;;) __asm__ volatile ("hlt");
 }
