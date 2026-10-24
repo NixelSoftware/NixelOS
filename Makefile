@@ -118,10 +118,17 @@ $(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True); Path('src/apps/$*/entry.o').unlink(missing_ok=True); Path('src/apps/$*/main.o').unlink(missing_ok=True)"
 
-browser.bin: Makefile src/apps/browser/entry.o src/apps/browser/main.o
+BROWSER_OBJ := src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/http.o src/apps/browser/netzhaut/html.o src/apps/browser/netzhaut/document.o src/apps/browser/netzhaut/style.o
+src/apps/browser/main.o: src/apps/browser/netzhaut/html.h src/apps/browser/http.h src/apps/browser/netzhaut/document.h src/apps/browser/netzhaut/style.h
+src/apps/browser/netzhaut/document.o: src/apps/browser/netzhaut/document.h src/apps/browser/netzhaut/html.h
+src/apps/browser/netzhaut/style.o: src/apps/browser/netzhaut/style.h src/apps/browser/netzhaut/document.h src/apps/browser/netzhaut/html.h
+src/apps/browser/http.o: src/apps/browser/http.h
+src/apps/browser/netzhaut/html.o: src/apps/browser/netzhaut/html.h src/apps/browser/netzhaut/entities.inc
+
+browser.bin: Makefile $(BROWSER_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/browser/browser.tmp $@
-	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('src/apps/browser/browser.tmp','src/apps/browser/entry.o','src/apps/browser/main.o')]"
+	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('src/apps/browser/browser.tmp','src/apps/browser/entry.o','src/apps/browser/main.o','src/apps/browser/http.o','src/apps/browser/netzhaut/html.o','src/apps/browser/netzhaut/document.o','src/apps/browser/netzhaut/style.o')]"
 
 src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp

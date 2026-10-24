@@ -13,6 +13,14 @@ Thank you to everyone who contributed to the development of this project!
 
 ---
 
+## Browser engine reference
+
+[Netzhaut](https://github.com/dajofrey/Netzhaut), copyright (C) 2022 Dajo Frey,
+supplies the named HTML character-reference data used by the native browser.
+The adapted tables and license are in `src/apps/browser/netzhaut/`.
+
+
+---
 ## Wallpapers
 
 Special thanks to all the individuals who helped submit wallpapers for this project:

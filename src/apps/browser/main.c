@@ -2,6 +2,10 @@
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
 #include "../../system/user/sys_api.h"
+#include "netzhaut/html.h"
+#include "netzhaut/document.h"
+#include "netzhaut/style.h"
+#include "http.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -21,22 +25,27 @@
 #define MAX_PAGE_IMAGES   4
 #define MAX_PNG_SIZE      32768
 #define MAX_REDIRECTS     5
-#define MAX_LINKS         32
+#define MAX_LINKS         128
+#define MAX_FORMS         8
 #define MAX_CONTROLS      16
 #define CONTROL_VALUE_LEN 48
 
 typedef struct {
-    char    text[LINE_MAX_CHARS];
-    uint32_t color;
-    uint8_t is_bold;
-    uint8_t indent;
-    int8_t  image_index; 
+    char text[LINE_MAX_CHARS];
+    uint32_t colors[LINE_MAX_CHARS], backgrounds[LINE_MAX_CHARS];
+    uint8_t flags[LINE_MAX_CHARS];
+    int indent, offset;
+    int8_t image_index;
 } render_line_t;
 
-typedef struct { char url[MAX_URL_LEN]; int line, start, length; } link_t;
-typedef struct { char name[32], value[CONTROL_VALUE_LEN]; int line; uint8_t type, checked; } control_t;
-
-enum { CONTROL_TEXT, CONTROL_PASSWORD, CONTROL_CHECKBOX, CONTROL_RADIO, CONTROL_SUBMIT, CONTROL_BUTTON };
+typedef struct { char url[MAX_URL_LEN]; int line, start, length, anchor; } link_t;
+typedef struct {
+    char name[32], value[CONTROL_VALUE_LEN], label[CONTROL_VALUE_LEN];
+    int line, start, width, form;
+    uint8_t type, checked, disabled;
+} control_t;
+typedef struct { char action[MAX_URL_LEN]; uint8_t post; } form_t;
+enum { CONTROL_TEXT, CONTROL_PASSWORD, CONTROL_CHECKBOX, CONTROL_RADIO, CONTROL_SUBMIT, CONTROL_BUTTON, CONTROL_HIDDEN };
 
 static os_api_t* os = 0;
 static os_api_t user_api;
@@ -138,10 +147,8 @@ static link_t links[MAX_LINKS];
 static int num_links = 0;
 static control_t controls[MAX_CONTROLS];
 static int num_controls = 0;
-static char form_action[MAX_URL_LEN];
-static uint8_t form_post = 0;
-static char active_href[MAX_URL_LEN];
-static int active_link_start = -1;
+static form_t forms[MAX_FORMS];
+static int num_forms;
 static int active_control = -1;
 static int control_editing = 0;
 static uint8_t request_post = 0;
@@ -266,51 +273,49 @@ static int tcp_http_request(const char* host, const char* path,
     return total != 0;
 }
 
-static int fetch_image_resource(const char* host, const char* path,
-                                uint8_t* out_buf, uint32_t max_len,
-                                uint32_t* out_len) {
-    img_raw_len = 0;
-    if (!tcp_http_request(host, path,
-            "image/png, image/*;q=0.8, */*;q=0.1", 0, 0, 0,
-            img_raw_buf, sizeof(img_raw_buf), &img_raw_len)) return 0;
-    uint32_t body_start = 0;
-    for (uint32_t i = 0; i + 3u < img_raw_len; i++) {
-        if (img_raw_buf[i] == '\r' && img_raw_buf[i + 1u] == '\n' &&
-            img_raw_buf[i + 2u] == '\r' && img_raw_buf[i + 3u] == '\n') {
-            body_start = i + 4u;
-            break;
+static int parse_url(const char*, char*, int, char*, int);
+static int resolve_redirect(const char*, const char*, const char*, char*, int);
+static int parse_http_status(const char*, uint32_t);
+
+static int get_redirect_location(const char*, uint32_t, char*, int);
+static int fetch_resource(const char* base_url, const char* resource, const char* accept,
+                           uint8_t* out_buf, uint32_t max_len, uint32_t* out_len) {
+    char host[MAX_URL_LEN], path[MAX_URL_LEN], target[MAX_URL_LEN];
+    if (!parse_url(base_url, host, sizeof(host), path, sizeof(path)) ||
+        !resolve_redirect(resource, host, path, target, sizeof(target))) return 0;
+    for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+        if (!parse_url(target, host, sizeof(host), path, sizeof(path))) return 0;
+        img_raw_len = 0;
+        if (!tcp_http_request(host, path, accept, 0, 0, 0,
+                img_raw_buf, sizeof(img_raw_buf), &img_raw_len)) return 0;
+        int status = parse_http_status((const char*)img_raw_buf, img_raw_len);
+        if (status >= 300 && status < 400) {
+            char location[MAX_URL_LEN];
+            if (redirect == MAX_REDIRECTS || !get_redirect_location((const char*)img_raw_buf, img_raw_len, location, sizeof(location)) ||
+                !resolve_redirect(location, host, path, target, sizeof(target))) return 0;
+            continue;
         }
+        uint8_t* payload; unsigned size;
+        if (status < 200 || status >= 300 || !browser_http_body(img_raw_buf, img_raw_len, &payload, &size) || size > max_len) return 0;
+        for (uint32_t i = 0; i < size; i++) out_buf[i] = payload[i];
+        *out_len = size;
+        return 1;
     }
-    if (!body_start) return 0;
-    uint32_t payload_size = img_raw_len - body_start;
-    if (payload_size > max_len) payload_size = max_len;
-    for (uint32_t i = 0; i < payload_size; i++) out_buf[i] = img_raw_buf[body_start + i];
-    *out_len = payload_size;
-    return payload_size != 0;
+    return 0;
+}
+static int fetch_image_resource(const char* base_url, const char* resource,
+                                uint8_t* out_buf, uint32_t max_len, uint32_t* out_len) {
+    return fetch_resource(base_url, resource, "image/png, image/*;q=0.8, */*;q=0.1", out_buf, max_len, out_len);
 }
 
-
-
-static int ascii_equal(char a, char b) {
-    if (a >= 'A' && a <= 'Z') a += 32;
-    if (b >= 'A' && b <= 'Z') b += 32;
-    return a == b;
-}
-
-static int read_attr(const char* tag, const char* end, const char* attr, char* out, int cap) {
-    const char* tag_end = tag; while (tag_end < end && *tag_end != '>') tag_end++;
-    int alen = 0; while (attr[alen]) alen++;
-    for (const char* q = tag; q + alen < tag_end; q++) {
-        int i = 0; while (i < alen && ascii_equal(q[i], attr[i])) i++;
-        if (i != alen || (q > tag && (q[-1] != ' ' && q[-1] != '\t' && q[-1] != '\n'))) continue;
-        const char* v = q + alen; while (v < tag_end && (*v == ' ' || *v == '\t')) v++;
-        if (v >= tag_end || *v++ != '=') continue;
-        while (v < tag_end && (*v == ' ' || *v == '\t')) v++;
-        char quote = 0; if (v < tag_end && (*v == '\"' || *v == '\'')) quote = *v++;
-        int n = 0; while (v < tag_end && n < cap - 1 && (quote ? *v != quote : *v != ' ' && *v != '>' && *v != '/')) out[n++] = *v++;
-        out[n] = 0; return 1;
+static int text_equals(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = *a++, cb = *b++;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return 0;
     }
-    out[0] = 0; return 0;
+    return *a == *b;
 }
 
 static void set_status(const char* msg) {
@@ -324,293 +329,251 @@ static void set_status(const char* msg) {
 
 
 
-static int str_has_tag_bounded(const char* p, const char* end, const char* tag) {
-    int i = 0;
-    while (tag[i]) {
-        if (p + i >= end) return 0;
-        char c1 = p[i];
-        char c2 = tag[i];
-        if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
-        if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
-        if (c1 != c2) return 0;
-        i++;
+static browser_document page_document;
+static browser_stylesheet page_stylesheet;
+static browser_style node_styles[BROWSER_DOM_NODES];
+static unsigned page_background = COLOR_WHITE;
+static char page_url[MAX_URL_LEN], page_base_url[MAX_URL_LEN];
+#define MAX_PAGE_STYLESHEETS 4
+#define MAX_STYLESHEET_SIZE 8192
+static uint8_t stylesheet_pool[MAX_PAGE_STYLESHEETS][MAX_STYLESHEET_SIZE];
+static unsigned num_stylesheets;
+static int resource_unavailable;
+static int load_stylesheet(void* context, const char* url, const char** data, unsigned* length) {
+    (void)context;
+    if (num_stylesheets == MAX_PAGE_STYLESHEETS) { resource_unavailable = 1; return 0; }
+    uint32_t size;
+    if (!fetch_resource(page_base_url, url, "text/css, */*;q=0.1", stylesheet_pool[num_stylesheets], MAX_STYLESHEET_SIZE, &size)) {
+        resource_unavailable = 1; return 0;
     }
-    if (p + i >= end) return 0;
-    char term = p[i];
-    return (term == '>' || term == ' ' || term == '/' || term == '\t' || term == '\r' || term == '\n');
+    *data = (const char*)stylesheet_pool[num_stylesheets++]; *length = size;
+    return 1;
 }
+static int layout_length, layout_indent, layout_align, layout_pending_space;
+static int layout_truncated;
 
-static const char* skip_until_close_tag(const char* p, const char* end, const char* close_tag) {
-    int tag_len = 0;
-    while (close_tag[tag_len]) tag_len++;
+static int text_length(const char* text) { int n = 0; while (text[n]) n++; return n; }
 
-    while (p + tag_len + 3 <= end) {
-        if (p[0] == '<' && p[1] == '/') {
-            const char* check = p + 2;
-            int match = 1;
-            for (int i = 0; i < tag_len; i++) {
-                char c1 = check[i];
-                char c2 = close_tag[i];
-                if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
-                if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
-                if (c1 != c2) {
-                    match = 0;
-                    break;
-                }
-            }
-            if (match) {
-                p += 2 + tag_len;
-                while (p < end && *p != '>') p++;
-                if (p < end) p++;
-                return p;
+static void layout_flush(int force) {
+    if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
+    if (!layout_length && !force) return;
+    render_line_t* line = &lines[num_lines];
+    line->text[layout_length] = 0;
+    line->indent = layout_indent;
+    int available = browser_win.w - 36 - layout_indent;
+    int extra = available - layout_length * 8;
+    line->offset = layout_indent + (extra > 0 ? (layout_align == BROWSER_ALIGN_CENTER ? extra / 2 : layout_align == BROWSER_ALIGN_RIGHT ? extra : 0) : 0);
+    line->image_index = -1;
+    num_lines++;
+    layout_length = 0; layout_pending_space = 0;
+}
+static int layout_columns(int indent) {
+    int columns = (browser_win.w - 36 - indent) / 8;
+    if (columns < 8) columns = 8;
+    if (columns > LINE_MAX_CHARS - 1) columns = LINE_MAX_CHARS - 1;
+    return columns;
+}
+static void layout_char(char ch, const browser_style* style, int indent, int anchor) {
+    if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
+    if (layout_length >= layout_columns(indent)) layout_flush(0);
+    if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
+    if (!layout_length) { layout_indent = indent; layout_align = style->align; }
+    render_line_t* line = &lines[num_lines];
+    line->text[layout_length] = ch;
+    line->colors[layout_length] = style->color;
+    line->backgrounds[layout_length] = style->background;
+    line->flags[layout_length] = (style->bold ? 1 : 0) | (style->underline ? 2 : 0);
+    if (anchor >= 0) {
+        link_t* last = num_links ? &links[num_links - 1] : 0;
+        if (last && last->line == num_lines && last->anchor == anchor && last->start + last->length == layout_length) last->length++;
+        else if (num_links < MAX_LINKS) {
+            link_t* link = &links[num_links++];
+            browser_node_attr(&page_document.nodes[anchor], "href", link->url, sizeof(link->url));
+            link->line = num_lines; link->start = layout_length; link->length = 1; link->anchor = anchor;
+        }
+    }
+    layout_length++;
+}
+static void layout_text(const char* p, const char* end, const browser_style* style, int indent, int anchor) {
+    while (p < end && num_lines < MAX_RENDER_LINES) {
+        unsigned cp = (unsigned char)*p, consumed = 1;
+        if (*p == '&') {
+            unsigned n = browser_html_reference(p, end, 0, &cp);
+            if (n) consumed = n;
+        } else if (cp >= 128) {
+            /* Decode valid UTF-8 sequences once; unsupported glyphs become '?'. */
+            unsigned bytes = cp >= 0xc2 && cp <= 0xdf ? 2 : cp >= 0xe0 && cp <= 0xef ? 3 : cp >= 0xf0 && cp <= 0xf4 ? 4 : 0;
+            if (bytes && (unsigned)(end - p) >= bytes) {
+                unsigned value = cp & (bytes == 2 ? 31 : bytes == 3 ? 15 : 7), i;
+                for (i = 1; i < bytes && ((unsigned char)p[i] & 0xc0) == 0x80; i++) value = (value << 6) | ((unsigned char)p[i] & 63);
+                if (i == bytes && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff) && value >= (bytes == 2 ? 0x80u : bytes == 3 ? 0x800u : 0x10000u)) { cp = value; consumed = bytes; }
             }
         }
-        p++;
+        p += consumed;
+        char ch = browser_html_display_char(cp);
+        if (style->pre) {
+            if (ch == '\r' || ch == '\n') {
+                if (ch == '\r' && p < end && *p == '\n') p++;
+                layout_flush(1); continue;
+            }
+            if (ch == '\t') {
+                int spaces = 4 - layout_length % 4;
+                while (spaces--) layout_char(' ', style, indent, anchor);
+                continue;
+            }
+        } else if (cp != 160 && (ch == ' ' || ch == '\r' || ch == '\n' || ch == '\t' || cp == 12)) {
+            if (layout_length) layout_pending_space = 1;
+            continue;
+        }
+        if (layout_pending_space && layout_length) {
+            layout_pending_space = 0;
+            /* Keep a word together when it can fit on an empty line. */
+            const char* word = p;
+            int word_length = 1;
+            while (word < end && *word != ' ' && *word != '\n' && *word != '\r' && *word != '\t' && word_length < LINE_MAX_CHARS) { word_length++; word++; }
+            if (layout_length + 1 + word_length > layout_columns(indent)) layout_flush(0);
+            else layout_char(' ', style, indent, anchor);
+        }
+        layout_char(ch, style, indent, anchor);
     }
-    return end;
 }
-
-static void add_render_line(const char* txt, uint32_t color, uint8_t bold, uint8_t indent) {
-    if (num_lines >= MAX_RENDER_LINES) return;
-    int j = 0;
-    while (txt[j] && j < LINE_MAX_CHARS - 1) {
-        lines[num_lines].text[j] = txt[j];
-        j++;
+static void layout_literal(const char* text, const browser_style* style, int indent, int anchor) {
+    /* Internal UI labels contain no markup or character references. */
+    while (*text) layout_char(*text++, style, indent, anchor);
+}
+static void layout_control(int index, int form, const browser_style* style, int indent, int visible) {
+    if (num_controls == MAX_CONTROLS) return;
+    const browser_node* node = &page_document.nodes[index];
+    control_t* c = &controls[num_controls];
+    char type[24], flag[1];
+    browser_node_attr(node, "type", type, sizeof(type));
+    c->type = CONTROL_TEXT;
+    if (browser_node_is(node, "button")) c->type = CONTROL_SUBMIT;
+    if (text_equals(type, "password")) c->type = CONTROL_PASSWORD;
+    else if (text_equals(type, "checkbox")) c->type = CONTROL_CHECKBOX;
+    else if (text_equals(type, "radio")) c->type = CONTROL_RADIO;
+    else if (text_equals(type, "submit")) c->type = CONTROL_SUBMIT;
+    else if (text_equals(type, "button") || text_equals(type, "reset")) c->type = CONTROL_BUTTON;
+    else if (text_equals(type, "hidden")) c->type = CONTROL_HIDDEN;
+    c->checked = browser_node_attr(node, "checked", flag, sizeof(flag));
+    c->disabled = browser_node_attr(node, "disabled", flag, sizeof(flag));
+    c->form = form; c->line = -1; c->start = 0; c->width = 0;
+    browser_node_attr(node, "name", c->name, sizeof(c->name));
+    int has_value = browser_node_attr(node, "value", c->value, sizeof(c->value));
+    if (!has_value && (c->type == CONTROL_CHECKBOX || c->type == CONTROL_RADIO)) copy_string(c->value, sizeof(c->value), "on");
+    copy_string(c->label, sizeof(c->label), c->value);
+    if (browser_node_is(node, "button")) {
+        int used = 0;
+        for (int child = node->first_child; child >= 0 && used < CONTROL_VALUE_LEN - 1; child = page_document.nodes[child].next) {
+            const browser_node* text = &page_document.nodes[child];
+            if (text->tag[0]) continue;
+            for (const char* p = text->start; p < text->end && used < CONTROL_VALUE_LEN - 1; p++) c->label[used++] = *p;
+        }
+        c->label[used] = 0;
     }
-    lines[num_lines].text[j] = '\0';
-    lines[num_lines].color = color;
-    lines[num_lines].is_bold = bold;
-    lines[num_lines].indent = indent;
-    lines[num_lines].image_index = -1;
-    num_lines++;
+    num_controls++;
+    if (c->type == CONTROL_HIDDEN || !visible) return;
+    int width = (c->type == CONTROL_CHECKBOX || c->type == CONTROL_RADIO) ? 3 :
+                (c->type == CONTROL_SUBMIT || c->type == CONTROL_BUTTON) ? text_length(c->label) + 2 : 18;
+    if (width < 8 && c->type != CONTROL_CHECKBOX && c->type != CONTROL_RADIO) width = 8;
+    if (width > layout_columns(indent)) width = layout_columns(indent);
+    if (layout_length && layout_length + width + 1 > layout_columns(indent)) layout_flush(0);
+    if (layout_pending_space && layout_length) layout_char(' ', style, indent, -1);
+    layout_pending_space = 0;
+    c->line = num_lines; c->start = layout_length; c->width = width;
+    while (width--) layout_char(' ', style, indent, -1);
 }
-
+static int collect_form(const browser_node* node) {
+    if (num_forms == MAX_FORMS) { layout_truncated = 1; return -1; }
+    int form = num_forms++;
+    browser_node_attr(node, "action", forms[form].action, sizeof(forms[form].action));
+    char method[16]; browser_node_attr(node, "method", method, sizeof(method));
+    forms[form].post = text_equals(method, "post");
+    return form;
+}
+static void layout_hidden_subtree(int index, int form, const browser_style* style, unsigned depth) {
+    if (depth >= BROWSER_DOM_DEPTH) return;
+    const browser_node* node = &page_document.nodes[index];
+    if (browser_node_is(node, "form")) form = collect_form(node);
+    if (browser_node_is(node, "input") || browser_node_is(node, "button")) {
+        layout_control(index, form, style, 0, 0); return;
+    }
+    for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next)
+        layout_hidden_subtree(child, form, style, depth + 1);
+}
+static void layout_node(int index, int form, int indent, int anchor, unsigned depth) {
+    if (depth >= BROWSER_DOM_DEPTH || num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
+    const browser_node* node = &page_document.nodes[index];
+    const browser_style* parent = node->parent > 0 ? &node_styles[node->parent] : &node_styles[0];
+    browser_style* style = &node_styles[index];
+    browser_style_compute(&page_document, index, &page_stylesheet, parent, style);
+    if (style->display == BROWSER_HIDDEN) { layout_hidden_subtree(index, form, style, depth); return; }
+    if (!node->tag[0]) { layout_text(node->start, node->end, style, indent, anchor); return; }
+    if (style->display == BROWSER_BLOCK) layout_flush(0);
+    indent += style->margin_left;
+    int max_indent = browser_win.w - 100;
+    if (indent > max_indent) indent = max_indent > 0 ? max_indent : 0;
+    if (browser_node_is(node, "body") || browser_node_is(node, "html")) page_background = style->background;
+    if (browser_node_is(node, "form")) form = collect_form(node);
+    if (browser_node_is(node, "a")) {
+        char href[2];
+        if (browser_node_attr(node, "href", href, sizeof(href))) anchor = index;
+    }
+    if (browser_node_is(node, "br")) { layout_flush(1); return; }
+    if (browser_node_is(node, "hr")) {
+        layout_flush(0); layout_literal("------------------------------------------------------", style, indent, -1); layout_flush(0); return;
+    }
+    if (browser_node_is(node, "input") || browser_node_is(node, "button")) {
+        layout_control(index, form, style, indent, 1);
+        if (style->display == BROWSER_BLOCK) layout_flush(0);
+        return;
+    }
+    if (browser_node_is(node, "li")) { layout_literal("* ", style, indent, -1); indent += 16; }
+    if (browser_node_is(node, "blockquote") || browser_node_is(node, "dd")) indent += 16;
+    if (browser_node_is(node, "img")) {
+        layout_flush(0);
+        char src[MAX_URL_LEN], alt[LINE_MAX_CHARS];
+        browser_node_attr(node, "src", src, sizeof(src));
+        browser_node_attr(node, "alt", alt, sizeof(alt));
+        uint32_t size = 0;
+        if (src[0] && num_images < MAX_PAGE_IMAGES && fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) {
+            render_line_t* line = &lines[num_lines++];
+            image_sizes[num_images] = size;
+            line->image_index = num_images++; line->offset = indent; line->indent = indent; line->text[0] = 0;
+        } else {
+            layout_literal(alt[0] ? alt : "[Image]", style, indent, anchor); layout_flush(0);
+        }
+        return;
+    }
+    for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next) layout_node(child, form, indent, anchor, depth + 1);
+    if (browser_node_is(node, "td") || browser_node_is(node, "th")) layout_literal(" | ", style, indent, -1);
+    if (style->display == BROWSER_BLOCK) layout_flush(0);
+}
 static void parse_and_layout_html(const char* doc, uint32_t len) {
-    num_lines = 0;
-    scroll_y = 0;
-    num_images = 0;
-    num_links = 0; num_controls = 0; form_action[0] = 0; form_post = 0;
-    active_href[0] = 0; active_link_start = -1;
-
-    if (!doc || len == 0) return;
-
-    
-    uint32_t body_start = 0;
-    for (uint32_t i = 0; i + 3 < len; i++) {
-        if (doc[i] == '\r' && doc[i+1] == '\n' && doc[i+2] == '\r' && doc[i+3] == '\n') {
-            body_start = i + 4;
+    num_lines = num_images = num_links = num_controls = num_forms = 0;
+    scroll_y = 0; active_control = -1; control_editing = 0;
+    layout_length = layout_indent = layout_pending_space = layout_truncated = 0;
+    layout_align = BROWSER_ALIGN_LEFT; page_background = COLOR_WHITE;
+    copy_string(page_url, sizeof(page_url), url_input);
+    copy_string(page_base_url, sizeof(page_base_url), page_url);
+    num_stylesheets = 0; resource_unavailable = 0;
+    browser_document_parse(&page_document, doc, len);
+    for (int i = 1; i < page_document.count; i++) {
+        if (!browser_node_is(&page_document.nodes[i], "base")) continue;
+        char href[MAX_URL_LEN], host[MAX_URL_LEN], path[MAX_URL_LEN], resolved[MAX_URL_LEN];
+        if (browser_node_attr(&page_document.nodes[i], "href", href, sizeof(href))) {
+            if (parse_url(page_url, host, sizeof(host), path, sizeof(path)) &&
+                resolve_redirect(href, host, path, resolved, sizeof(resolved)) &&
+                parse_url(resolved, host, sizeof(host), path, sizeof(path))) copy_string(page_base_url, sizeof(page_base_url), resolved);
             break;
         }
     }
-    const char* p = doc + body_start;
-    const char* end = doc + len;
-
-    
-    {
-        const char* hscan = p;
-        while (hscan < end && (*hscan == ' ' || *hscan == '\t')) hscan++;
-        int hex_digits = 0;
-        while (hscan < end && ((*hscan >= '0' && *hscan <= '9') ||
-                              (*hscan >= 'a' && *hscan <= 'f') ||
-                              (*hscan >= 'A' && *hscan <= 'F'))) {
-            hscan++;
-            hex_digits++;
-        }
-        if (hex_digits > 0 && hscan + 1 < end && hscan[0] == '\r' && hscan[1] == '\n') {
-            p = hscan + 2;
-        }
-    }
-
-    char current_line[LINE_MAX_CHARS];
-    int line_len = 0;
-    uint32_t cur_col = COLOR_BLACK;
-    uint8_t cur_bold = 0;
-    uint8_t cur_indent = 0;
-
-    while (p < end && num_lines < MAX_RENDER_LINES) {
-        if (*p == '<') {
-            p++;
-            if (p >= end) break;
-
-            
-            if (p + 2 < end && p[0] == '!' && p[1] == '-' && p[2] == '-') {
-                p += 3;
-                while (p + 2 < end && !(p[0] == '-' && p[1] == '-' && p[2] == '>')) p++;
-                if (p + 2 < end) p += 3;
-                continue;
-            }
-
-            int is_close = 0;
-            if (*p == '/') {
-                is_close = 1;
-                p++;
-                if (p >= end) break;
-            }
-
-            
-            if (!is_close && str_has_tag_bounded(p, end, "style")) {
-                p = skip_until_close_tag(p, end, "style");
-                continue;
-            }
-            if (!is_close && str_has_tag_bounded(p, end, "script")) {
-                p = skip_until_close_tag(p, end, "script");
-                continue;
-            }
-            if (!is_close && str_has_tag_bounded(p, end, "head")) {
-                p = skip_until_close_tag(p, end, "head");
-                continue;
-            }
-
-            
-            if (str_has_tag_bounded(p, end, "form")) {
-                if (!is_close) {
-                    read_attr(p, end, "action", form_action, sizeof(form_action));
-                    char method[16]; read_attr(p, end, "method", method, sizeof(method));
-                    form_post = ascii_equal(method[0], 'p') && ascii_equal(method[1], 'o') && ascii_equal(method[2], 's') && ascii_equal(method[3], 't');
-                } else { form_action[0] = 0; form_post = 0; }
-            } else if (str_has_tag_bounded(p, end, "input") || str_has_tag_bounded(p, end, "button")) {
-                if (!is_close && num_controls < MAX_CONTROLS) {
-                    control_t* c = &controls[num_controls++];
-                    char type[20];
-                    c->line = num_lines; c->checked = 0; c->type = CONTROL_BUTTON;
-                    read_attr(p, end, "name", c->name, sizeof(c->name));
-                    read_attr(p, end, "value", c->value, sizeof(c->value));
-                    read_attr(p, end, "type", type, sizeof(type));
-                    if (str_has_tag_bounded(p, end, "button")) c->type = CONTROL_SUBMIT;
-                    else if (!type[0] || ascii_equal(type[0], 't')) c->type = CONTROL_TEXT;
-                    else if (ascii_equal(type[0], 'p')) c->type = CONTROL_PASSWORD;
-                    else if (ascii_equal(type[0], 'c')) c->type = CONTROL_CHECKBOX;
-                    else if (ascii_equal(type[0], 'r')) c->type = CONTROL_RADIO;
-                    else if (ascii_equal(type[0], 's')) c->type = CONTROL_SUBMIT;
-                    else if (ascii_equal(type[0], 'b')) c->type = CONTROL_BUTTON;
-                    char checked[8]; read_attr(p, end, "checked", checked, sizeof(checked));
-                    c->checked = checked[0] != 0;
-                    char* label = c->type == CONTROL_CHECKBOX ? "[ ]" : c->type == CONTROL_RADIO ? "( )" : c->type == CONTROL_SUBMIT ? "[Submit]" : c->type == CONTROL_BUTTON ? "[Button]" : "[________]";
-                    if (c->type == CONTROL_TEXT || c->type == CONTROL_PASSWORD) read_attr(p, end, "value", c->value, sizeof(c->value));
-                    if (line_len + 10 < LINE_MAX_CHARS) {
-                        int k = 0; while (label[k]) current_line[line_len++] = label[k++];
-                    } else { current_line[line_len] = 0; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-                }
-            } else if (str_has_tag_bounded(p, end, "h1")) {
-                if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-                cur_col = is_close ? COLOR_BLACK : COLOR_H1;
-                cur_bold = !is_close;
-                if (is_close) add_render_line("", COLOR_BLACK, 0, 0);
-            } else if (str_has_tag_bounded(p, end, "h2") || str_has_tag_bounded(p, end, "h3")) {
-                if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-                cur_col = is_close ? COLOR_BLACK : COLOR_H2;
-                cur_bold = !is_close;
-                if (is_close) add_render_line("", COLOR_BLACK, 0, 0);
-            } else if (str_has_tag_bounded(p, end, "p") || str_has_tag_bounded(p, end, "div") || str_has_tag_bounded(p, end, "section")) {
-                if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-                if (is_close) add_render_line("", COLOR_BLACK, 0, 0);
-            } else if (str_has_tag_bounded(p, end, "br")) {
-                current_line[line_len] = '\0';
-                add_render_line(current_line, cur_col, cur_bold, cur_indent);
-                line_len = 0;
-            } else if (str_has_tag_bounded(p, end, "b") || str_has_tag_bounded(p, end, "strong")) {
-                cur_bold = !is_close;
-            } else if (str_has_tag_bounded(p, end, "a")) {
-                if (is_close) {
-                    if (active_href[0] && active_link_start >= 0 && line_len > active_link_start && num_links < MAX_LINKS) {
-                        link_t* l = &links[num_links++]; copy_string(l->url, sizeof(l->url), active_href);
-                        l->line = num_lines; l->start = active_link_start; l->length = line_len - active_link_start;
-                    }
-                    active_href[0] = 0; active_link_start = -1; cur_col = COLOR_BLACK;
-                }
-                else { read_attr(p, end, "href", active_href, sizeof(active_href)); active_link_start = line_len; cur_col = COLOR_LINK; }
-            } else if (str_has_tag_bounded(p, end, "li")) {
-                if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-                if (!is_close) {
-                    current_line[0] = '-'; current_line[1] = ' ';
-                    line_len = 2;
-                    cur_indent = 2;
-                } else {
-                    cur_indent = 0;
-                }
-            } else if (str_has_tag_bounded(p, end, "img")) {
-                if (line_len > 0) { current_line[line_len] = '\0'; add_render_line(current_line, cur_col, cur_bold, cur_indent); line_len = 0; }
-
-                char img_src[64];
-                int src_len = 0;
-                const char* scan = p;
-                while (scan < end && *scan != '>') {
-                    if ((scan[0] == 's' || scan[0] == 'S') &&
-                        (scan[1] == 'r' || scan[1] == 'R') &&
-                        (scan[2] == 'c' || scan[2] == 'C') &&
-                        scan[3] == '=') {
-                        scan += 4;
-                        char quote = 0;
-                        if (*scan == '"' || *scan == '\'') {
-                            quote = *scan++;
-                        }
-                        while (scan < end && *scan != '>' && src_len < 63) {
-                            if (quote && *scan == quote) break;
-                            if (!quote && (*scan == ' ' || *scan == '>')) break;
-                            img_src[src_len++] = *scan++;
-                        }
-                        break;
-                    }
-                    scan++;
-                }
-                img_src[src_len] = '\0';
-
-                if (src_len > 0 && num_lines < MAX_RENDER_LINES && num_images < MAX_PAGE_IMAGES) {
-                    static uint8_t png_fetch_buf[32768];
-                    uint32_t png_file_size = 0;
-
-                    if (fetch_image_resource(url_input, img_src, png_fetch_buf, sizeof(png_fetch_buf), &png_file_size)) {
-                        for (uint32_t i = 0; i < png_file_size; i++) {
-                            image_pool[num_images][i] = png_fetch_buf[i];
-                        }
-                        image_sizes[num_images] = png_file_size;
-                        lines[num_lines].image_index = num_images;
-                        lines[num_lines].text[0] = '\0';
-                        lines[num_lines].indent = cur_indent;
-                        num_images++;
-                        num_lines++;
-                    } else {
-                        add_render_line("[Image load failed]", COLOR_DARK_GRAY, 0, cur_indent);
-                    }
-                } else {
-                    add_render_line("[Image]", COLOR_DARK_GRAY, 0, cur_indent);
-                }
-            }
-
-            while (p < end && *p != '>') p++;
-            if (p < end) p++;
-            continue;
-        }
-
-        
-        char ch = *p;
-        if (ch == '&') {
-            if (p + 3 < end && p[1] == 'l' && p[2] == 't' && p[3] == ';') { ch = '<'; p += 3; }
-            else if (p + 3 < end && p[1] == 'g' && p[2] == 't' && p[3] == ';') { ch = '>'; p += 3; }
-            else if (p + 4 < end && p[1] == 'a' && p[2] == 'm' && p[3] == 'p' && p[4] == ';') { ch = '&'; p += 4; }
-            else if (p + 5 < end && p[1] == 'q' && p[2] == 'u' && p[3] == 'o' && p[4] == 't' && p[5] == ';') { ch = '"'; p += 5; }
-            else if (p + 4 < end && p[1] == '#' && p[2] == '3' && p[3] == '9' && p[4] == ';') { ch = '\''; p += 4; }
-        }
-
-        if (ch == '\r' || ch == '\n' || ch == '\t') ch = ' ';
-        if (ch == ' ' && line_len > 0 && current_line[line_len - 1] == ' ') {
-            p++;
-            continue;
-        }
-
-        current_line[line_len++] = ch;
-        if (line_len >= 56) {
-            current_line[line_len] = '\0';
-            add_render_line(current_line, cur_col, cur_bold, cur_indent);
-            line_len = 0;
-        }
-        p++;
-    }
-
-    if (line_len > 0 && num_lines < MAX_RENDER_LINES) {
-        current_line[line_len] = '\0';
-        add_render_line(current_line, cur_col, cur_bold, cur_indent);
-    }
+    browser_stylesheet_collect(&page_stylesheet, &page_document, load_stylesheet, 0);
+    browser_style root = {COLOR_BLACK, COLOR_WHITE, 0, BROWSER_BLOCK, 0, BROWSER_ALIGN_LEFT, 0, 0, 0};
+    node_styles[0] = root;
+    for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0);
+    layout_flush(0);
+    if (page_document.truncated || page_stylesheet.truncated) layout_truncated = 1;
 }
 
 static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t bg_col) {
@@ -619,6 +582,38 @@ static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t
     os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
     os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
     os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+}
+
+static void draw_control(const control_t* control, int row_x, int row_y) {
+    int x = row_x + control->start * 8, width = control->width;
+    if (width <= 0) return;
+    char label[LINE_MAX_CHARS]; int used = 0;
+    if (control->type == CONTROL_CHECKBOX || control->type == CONTROL_RADIO) {
+        label[used++] = control->type == CONTROL_RADIO ? '(' : '[';
+        label[used++] = control->checked ? 'x' : ' ';
+        label[used++] = control->type == CONTROL_RADIO ? ')' : ']';
+    } else if (control->type == CONTROL_SUBMIT || control->type == CONTROL_BUTTON) {
+        const char* text = control->label[0] ? control->label : control->type == CONTROL_SUBMIT ? "Submit" : "Button";
+        label[used++] = '[';
+        for (int i = 0; text[i] && used < width - 1; i++) label[used++] = text[i];
+        while (used < width - 1) label[used++] = ' ';
+        label[used++] = ']';
+    } else {
+        int length = text_length(control->value), start = length >= width ? length - width + 1 : 0;
+        for (int i = start; i < length && used < width; i++) label[used++] = control->type == CONTROL_PASSWORD ? '*' : control->value[i];
+        if (control_editing && active_control >= 0 && control == &controls[active_control] && used < width) label[used++] = '_';
+        while (used < width) label[used++] = ' ';
+    }
+    label[used] = 0;
+    os->graphics.fill_rect(x, row_y, width * 8, 12, control->disabled ? COLOR_WIN_BG : COLOR_WHITE);
+    os->graphics.draw_string(x, row_y, label, control->disabled ? COLOR_DARK_GRAY : COLOR_BLACK);
+    if (control->type == CONTROL_TEXT || control->type == CONTROL_PASSWORD) os->graphics.fill_rect(x, row_y + 11, width * 8, 1, COLOR_DARK_GRAY);
+}
+static int render_line_height(int line) { return lines[line].image_index >= 0 ? PNG_TARGET_H + 4 : 12; }
+static int browser_max_scroll(int canvas_height) {
+    int total = 0, start = num_lines;
+    while (start > 0 && total + render_line_height(start - 1) <= canvas_height - 10) total += render_line_height(--start);
+    return start < num_lines ? start : num_lines > 0 ? num_lines - 1 : 0;
 }
 
 static void browser_draw(Window* win) {
@@ -649,14 +644,14 @@ static void browser_draw(Window* win) {
     int32_t canvas_y = y + 30;
     int32_t canvas_w = w - 20;
     int32_t canvas_h = h - 56;
-    draw_sunken_box(canvas_x, canvas_y, canvas_w, canvas_h, COLOR_WHITE);
+    draw_sunken_box(canvas_x, canvas_y, canvas_w, canvas_h, page_background);
 
     int draw_y = canvas_y + 6;
     for (int i = scroll_y; i < num_lines; i++) {
         if (lines[i].image_index >= 0) {
             if (draw_y + PNG_TARGET_H > canvas_y + canvas_h - 4) break;
 
-            int img_x = canvas_x + 8 + (lines[i].indent * 6);
+            int img_x = canvas_x + 8 + lines[i].offset;
             int idx = lines[i].image_index;
             os->graphics.png_render(image_pool[idx], image_sizes[idx],
                            img_x, draw_y, PNG_TARGET_W, PNG_TARGET_H);
@@ -664,13 +659,23 @@ static void browser_draw(Window* win) {
         } else {
             if (draw_y + 12 > canvas_y + canvas_h - 4) break;
 
-            if (lines[i].text[0] != '\0') {
-                int row_x = canvas_x + 8 + (lines[i].indent * 6);
-                os->graphics.draw_string(row_x, draw_y, lines[i].text, lines[i].color);
-                if (lines[i].is_bold) {
-                    os->graphics.draw_string(row_x + 1, draw_y, lines[i].text, lines[i].color);
-                }
+            int row_x = canvas_x + 8 + lines[i].offset;
+            for (int start = 0; lines[i].text[start];) {
+                int stop = start + 1;
+                while (lines[i].text[stop] && lines[i].colors[stop] == lines[i].colors[start] &&
+                       lines[i].backgrounds[stop] == lines[i].backgrounds[start] && lines[i].flags[stop] == lines[i].flags[start]) stop++;
+                char run[LINE_MAX_CHARS];
+                for (int j = start; j < stop; j++) run[j - start] = lines[i].text[j];
+                run[stop - start] = 0;
+                int run_x = row_x + start * 8, width = (stop - start) * 8;
+                os->graphics.fill_rect(run_x, draw_y, width, 12, lines[i].backgrounds[start]);
+                os->graphics.draw_string(run_x, draw_y, run, lines[i].colors[start]);
+                if (lines[i].flags[start] & 1) os->graphics.draw_string(run_x + 1, draw_y, run, lines[i].colors[start]);
+                if (lines[i].flags[start] & 2) os->graphics.fill_rect(run_x, draw_y + 10, width, 1, lines[i].colors[start]);
+                start = stop;
             }
+            for (int control = 0; control < num_controls; control++)
+                if (controls[control].line == i) draw_control(&controls[control], row_x, draw_y);
             draw_y += 12;
         }
     }
@@ -702,30 +707,28 @@ static int starts_with(const char* text, const char* prefix) {
 static int parse_url(const char* url, char* host, int host_max, char* path, int path_max) {
     const char* p = url;
     if (starts_with(p, "http://")) p += 7;
-    if (*p == '\0' || *p == '/') return 0;
-
+    if (!*p || *p == '/' || host_max < 2 || path_max < 2) return 0;
     int host_len = 0;
-    while (p[host_len] && p[host_len] != '/' && p[host_len] != '#' &&
-           host_len < host_max - 1) {
-        host[host_len] = p[host_len];
+    while (p[host_len] && p[host_len] != '/' && p[host_len] != '?' && p[host_len] != '#') {
+        unsigned char ch = (unsigned char)p[host_len];
+        /* The native transport currently supports DNS/IPv4 on port 80 only. */
+        if (host_len >= host_max - 1 || !((ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.')) return 0;
+        host[host_len] = ch >= 'A' && ch <= 'Z' ? ch + 32 : ch;
         host_len++;
     }
-    if (p[host_len] && p[host_len] != '/' && p[host_len] != '#') return 0;
-    host[host_len] = '\0';
-
-    const char* path_start = p + host_len;
-    if (*path_start == '#') path_start = "/";
-    if (*path_start == '\0') path_start = "/";
-    if (*path_start != '/') return 0;
-
-    int path_len = 0;
-    while (path_start[path_len] && path_start[path_len] != '#' &&
-           path_len < path_max - 1) {
-        path[path_len] = path_start[path_len];
-        path_len++;
+    if (!host_len) return 0;
+    host[host_len] = 0;
+    p += host_len;
+    int used = 0;
+    if (*p != '/') path[used++] = '/';
+    while (*p && *p != '#') {
+        unsigned char ch = (unsigned char)*p++;
+        if (ch <= 32 || ch >= 127 || ch == '\\' || used >= path_max - 1) return 0;
+        path[used++] = (char)ch;
     }
-    path[path_len] = '\0';
-    return host_len > 0 && path_len > 0;
+    path[used] = 0;
+    return used > 0;
 }
 
 static int header_name_equals(const char* name, int name_len, const char* expected) {
@@ -779,28 +782,57 @@ static int get_redirect_location(const char* response, uint32_t len, char* locat
 
 static int resolve_redirect(const char* location, const char* current_host,
                             const char* current_path, char* next_url, int max_len) {
+    char combined[MAX_URL_LEN], normalized[MAX_URL_LEN];
+    const char* relative = location;
     if (starts_with(location, "http://")) return copy_string(next_url, max_len, location);
-    if (starts_with(location, "https://")) return 0;
-
-    int p = 0;
     if (starts_with(location, "//")) {
-        if (p + 7 >= max_len) return 0;
-        next_url[p++] = 'h'; next_url[p++] = 't'; next_url[p++] = 't';
-        next_url[p++] = 'p'; next_url[p++] = ':'; next_url[p++] = '/'; next_url[p++] = '/';
-        return copy_string(next_url + p, max_len - p, location + 2);
+        if (max_len <= 7) return 0;
+        if (!copy_string(next_url, max_len, "http://")) return 0;
+        return copy_string(next_url + 7, max_len - 7, location + 2);
     }
-    if (!copy_string(next_url, max_len, "http://")) return 0;
-    while (next_url[p]) p++;
-    if (!copy_string(next_url + p, max_len - p, current_host)) return 0;
-    while (next_url[p]) p++;
-    if (location[0] == '/') return copy_string(next_url + p, max_len - p, location);
-
-    int base_len = 0;
-    while (current_path[base_len]) base_len++;
-    while (base_len > 0 && current_path[base_len - 1] != '/') base_len--;
-    if (p + base_len >= max_len) return 0;
-    for (int i = 0; i < base_len; i++) next_url[p++] = current_path[i];
-    return copy_string(next_url + p, max_len - p, location);
+    /* Reject schemes such as https:, javascript:, data:, and mailto:. */
+    for (int i = 0; location[i] && location[i] != '/' && location[i] != '?' && location[i] != '#'; i++)
+        if (location[i] == ':') return 0;
+    int used = 0;
+    if (*relative != '/') {
+        while (current_path[used] && current_path[used] != '#' && used < MAX_URL_LEN - 1) {
+            combined[used] = current_path[used]; used++;
+        }
+        if (*relative && *relative != '#') {
+            int query = 0; while (query < used && combined[query] != '?') query++;
+            used = query;
+            if (*relative != '?') while (used > 0 && combined[used - 1] != '/') used--;
+        }
+    }
+    while (*relative && *relative != '#') {
+        if (used == MAX_URL_LEN - 1) return 0;
+        combined[used++] = *relative++;
+    }
+    combined[used] = 0;
+    if (!used) { combined[0] = '/'; combined[1] = 0; }
+    /* Normalize dot segments in the path, leaving query strings intact. */
+    int src = 0, dst = 0;
+    while (combined[src] && combined[src] != '?') {
+        if (combined[src] == '/' && combined[src + 1] == '.' &&
+            (combined[src + 2] == '/' || combined[src + 2] == '?' || !combined[src + 2])) {
+            src += 2;
+            if (!combined[src] || combined[src] == '?') normalized[dst++] = '/';
+        } else if (combined[src] == '/' && combined[src + 1] == '.' && combined[src + 2] == '.' &&
+                   (combined[src + 3] == '/' || combined[src + 3] == '?' || !combined[src + 3])) {
+            src += 3;
+            while (dst > 0 && normalized[dst - 1] != '/') dst--;
+            if (dst > 0) dst--;
+            if (!combined[src] || combined[src] == '?') normalized[dst++] = '/';
+        } else normalized[dst++] = combined[src++];
+    }
+    while (combined[src]) normalized[dst++] = combined[src++];
+    normalized[dst] = 0;
+    uint32_t url_length = 0;
+    if (!request_append(next_url, (unsigned)max_len, &url_length, "http://") ||
+        !request_append(next_url, (unsigned)max_len, &url_length, current_host) ||
+        !request_append(next_url, (unsigned)max_len, &url_length, normalized)) return 0;
+    next_url[url_length] = 0;
+    return 1;
 }
 
 static int fetch_http_document(const char* host, const char* path) {
@@ -871,8 +903,16 @@ static void browser_fetch(void) {
             os->graphics.blit_all();
             return;
         }
-        parse_and_layout_html((const char*)http_raw_buf, http_raw_len);
-        set_status("Document Loaded");
+        uint8_t* body;
+        unsigned body_length;
+        if (!browser_http_body(http_raw_buf, http_raw_len, &body, &body_length)) {
+            set_status("Unsupported or incomplete HTTP body");
+            browser_draw(&browser_win);
+            os->graphics.blit_all();
+            return;
+        }
+        parse_and_layout_html((const char*)body, body_length);
+        set_status(layout_truncated ? "Document loaded (page limit reached)" : resource_unavailable ? "Document loaded (some styles unavailable)" : "Document Loaded");
         browser_draw(&browser_win);
         os->graphics.blit_all();
         return;
@@ -882,74 +922,116 @@ static void browser_fetch(void) {
     os->graphics.blit_all();
 }
 
+static int form_encode(const char* text) {
+    static const char hex[] = "0123456789ABCDEF";
+    while (*text) {
+        unsigned char c = (unsigned char)*text++;
+        int safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                   (c >= '0' && c <= '9') || c == '*' || c == '-' || c == '.' || c == '_';
+        int needed = safe || c == ' ' ? 1 : 3;
+        if (request_body_len + needed >= (int)sizeof(request_body)) return 0;
+        if (safe) request_body[request_body_len++] = (char)c;
+        else if (c == ' ') request_body[request_body_len++] = '+';
+        else {
+            request_body[request_body_len++] = '%';
+            request_body[request_body_len++] = hex[c >> 4];
+            request_body[request_body_len++] = hex[c & 15];
+        }
+    }
+    request_body[request_body_len] = 0;
+    return 1;
+}
+static void submit_form(int control) {
+    int form = controls[control].form;
+    if (form < 0 || form >= num_forms) { set_status("This control has no form"); return; }
+    request_body_len = 0; request_body[0] = 0; request_post = 0;
+    for (int j = 0; j < num_controls; j++) {
+        control_t* field = &controls[j];
+        if (field->form != form || field->disabled || !field->name[0] || field->type == CONTROL_BUTTON ||
+            (field->type == CONTROL_SUBMIT && j != control) ||
+            ((field->type == CONTROL_CHECKBOX || field->type == CONTROL_RADIO) && !field->checked)) continue;
+        if (request_body_len) {
+            if (request_body_len + 1 >= (int)sizeof(request_body)) goto too_large;
+            request_body[request_body_len++] = '&';
+        }
+        if (!form_encode(field->name) || request_body_len + 1 >= (int)sizeof(request_body)) goto too_large;
+        request_body[request_body_len++] = '=';
+        if (!form_encode(field->value)) goto too_large;
+    }
+    char host[MAX_URL_LEN], path[MAX_URL_LEN], target[MAX_URL_LEN];
+    if (!parse_url(forms[form].action[0] ? page_base_url : page_url, host, sizeof(host), path, sizeof(path)) ||
+        !resolve_redirect(forms[form].action, host, path, target, sizeof(target))) {
+        set_status("Unsupported form URL"); return;
+    }
+    if (!forms[form].post) {
+        int used = 0;
+        while (target[used] && target[used] != '?' && target[used] != '#') used++;
+        if (used + 1 + request_body_len >= MAX_URL_LEN) goto too_large;
+        target[used++] = '?';
+        for (int j = 0; j < request_body_len; j++) target[used++] = request_body[j];
+        target[used] = 0;
+    }
+    request_post = forms[form].post;
+    copy_string(url_input, sizeof(url_input), target);
+    url_cursor = text_length(url_input); control_editing = 0;
+    browser_fetch();
+    return;
+too_large:
+    request_body_len = 0; request_body[0] = 0;
+    set_status("Form exceeds request size limit");
+}
+static int same_radio_group(const control_t* a, const control_t* b) {
+    if (a->form != b->form || !a->name[0]) return 0;
+    int i = 0; while (a->name[i] && a->name[i] == b->name[i]) i++;
+    return a->name[i] == b->name[i];
+}
 static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t btn) {
     if (btn != 1) return;
-
-    int32_t btn_x1 = win->w - 65;
-    int32_t btn_x2 = win->w - 8;
-    int32_t btn_y1 = 22;
-    int32_t btn_y2 = 46;
-
-    if (lx >= btn_x1 && lx <= btn_x2 && ly >= btn_y1 && ly <= btn_y2) {
-        os->graphics.draw_button(win->x + win->w - 60, win->y + 20 + 3, 50, 22, "Go", 1);
-        os->graphics.blit_rect(win->x + win->w - 60, win->y + 20 + 3, 50, 22);
-
-        browser_fetch();
-        return;
+    if (lx >= win->w - 65 && lx <= win->w - 8 && ly >= 22 && ly <= 46) {
+        control_editing = 0; browser_fetch(); return;
     }
-
-    int canvas_x = 10, canvas_y = 50, canvas_h = win->h - 20 - 56;
-    int row = (ly - canvas_y - 6) / 12 + scroll_y;
-    if (ly >= canvas_y && ly < canvas_y + canvas_h && row >= 0 && row < num_lines) {
-        for (int i = 0; i < num_links; i++) {
-            if (links[i].line != row) continue;
-            int col = (lx - 18) / 8;
-            if (col < links[i].start || col >= links[i].start + links[i].length) continue;
-            char host[128], path[MAX_URL_LEN], next[MAX_URL_LEN];
-            if (starts_with(links[i].url, "http://")) copy_string(url_input, sizeof(url_input), links[i].url);
-            else if (parse_url(url_input, host, sizeof(host), path, sizeof(path)) && resolve_redirect(links[i].url, host, path, next, sizeof(next))) copy_string(url_input, sizeof(url_input), next);
-            else continue;
-            url_cursor = 0; while (url_input[url_cursor]) url_cursor++;
-            browser_fetch(); return;
+    if (lx >= 44 && lx < win->w - 66 && ly >= 24 && ly < 44) {
+        control_editing = 0; active_control = -1;
+        set_status("Editing address"); browser_draw(win); os->graphics.blit_all(); return;
+    }
+    int canvas_y = 50, canvas_h = win->h - 20 - 56;
+    if (ly < canvas_y + 6 || ly >= canvas_y + canvas_h - 4 || lx < 18 || lx >= win->w - 10) return;
+    int row = -1, y = canvas_y + 6;
+    for (int i = scroll_y; i < num_lines; i++) {
+        int height = render_line_height(i);
+        if (y + height > canvas_y + canvas_h - 4) break;
+        if (ly >= y && ly < y + height) { row = i; break; }
+        y += height;
+    }
+    if (row < 0 || lines[row].image_index >= 0) return;
+    int local_x = lx - 18 - lines[row].offset;
+    if (local_x < 0) return;
+    int col = local_x / 8;
+    for (int i = 0; i < num_controls; i++) {
+        control_t* c = &controls[i];
+        if (c->line != row || c->disabled || col < c->start || col >= c->start + c->width) continue;
+        active_control = i; control_editing = 0;
+        if (c->type == CONTROL_RADIO) {
+            for (int j = 0; j < num_controls; j++)
+                if (controls[j].type == CONTROL_RADIO && same_radio_group(c, &controls[j])) controls[j].checked = 0;
+            c->checked = 1;
+        } else if (c->type == CONTROL_CHECKBOX) c->checked = !c->checked;
+        else if (c->type == CONTROL_SUBMIT) submit_form(i);
+        else if (c->type == CONTROL_TEXT || c->type == CONTROL_PASSWORD) {
+            control_editing = 1; set_status("Editing form field");
         }
-        for (int i = 0; i < num_controls; i++) {
-            if (controls[i].line != row) continue;
-            active_control = i;
-            if (controls[i].type == CONTROL_CHECKBOX || controls[i].type == CONTROL_RADIO) {
-                controls[i].checked = controls[i].type == CONTROL_RADIO ? 1 : !controls[i].checked;
-                browser_draw(win); os->graphics.blit_all();
-            } else if (controls[i].type == CONTROL_SUBMIT) {
-                request_body_len = 0;
-                for (int j = 0; j < num_controls; j++) {
-                    control_t* f = &controls[j];
-                    if (!f->name[0] || f->type == CONTROL_BUTTON || f->type == CONTROL_SUBMIT || ((f->type == CONTROL_CHECKBOX || f->type == CONTROL_RADIO) && !f->checked)) continue;
-                    if (request_body_len) request_body[request_body_len++] = '&';
-                    for (int k = 0; f->name[k] && request_body_len < 480; k++) request_body[request_body_len++] = f->name[k] == ' ' ? '+' : f->name[k];
-                    if (request_body_len < 480) request_body[request_body_len++] = '=';
-                    for (int k = 0; f->value[k] && request_body_len < 510; k++) request_body[request_body_len++] = f->value[k] == ' ' ? '+' : f->value[k];
-                }
-                request_body[request_body_len] = 0; request_post = form_post;
-                char host[128], path[MAX_URL_LEN], target[MAX_URL_LEN];
-                if (form_action[0] && parse_url(url_input, host, sizeof(host), path, sizeof(path)) &&
-                    (starts_with(form_action, "http://") ? copy_string(target, sizeof(target), form_action) : resolve_redirect(form_action, host, path, target, sizeof(target)))) {
-                    copy_string(url_input, sizeof(url_input), target); url_cursor = 0; while (url_input[url_cursor]) url_cursor++;
-                }
-                if (!request_post && request_body_len && parse_url(url_input, host, sizeof(host), path, sizeof(path))) {
-                    int n = 0; while (path[n] && n < MAX_URL_LEN - 2) n++;
-                    path[n++] = '?';
-                    for (int j = 0; j < request_body_len && n < MAX_URL_LEN - 1; j++) path[n++] = request_body[j];
-                    path[n] = 0;
-                    int z = 0; const char* prefix = "http://"; while (*prefix && z < MAX_URL_LEN - 1) url_input[z++] = *prefix++;
-                    for (int j = 0; host[j] && z < MAX_URL_LEN - 1; j++) url_input[z++] = host[j];
-                    for (int j = 0; path[j] && z < MAX_URL_LEN - 1; j++) url_input[z++] = path[j];
-                    url_input[z] = 0; url_cursor = z;
-                }
-                browser_fetch();
-            } else if (controls[i].type == CONTROL_TEXT || controls[i].type == CONTROL_PASSWORD) {
-                control_editing = 1; set_status("Editing form field"); browser_draw(win); os->graphics.blit_all();
-            }
-            return;
-        }
+        browser_draw(win); os->graphics.blit_all(); return;
+    }
+    for (int i = 0; i < num_links; i++) {
+        if (links[i].line != row || col < links[i].start || col >= links[i].start + links[i].length) continue;
+        char host[MAX_URL_LEN], path[MAX_URL_LEN], next[MAX_URL_LEN];
+        if (parse_url(page_base_url, host, sizeof(host), path, sizeof(path)) &&
+            resolve_redirect(links[i].url, host, path, next, sizeof(next))) {
+            copy_string(url_input, sizeof(url_input), next);
+            url_cursor = text_length(url_input); control_editing = 0;
+            browser_fetch();
+        } else { set_status("Unsupported link URL"); browser_draw(win); os->graphics.blit_all(); }
+        return;
     }
 }
 
@@ -963,8 +1045,7 @@ static void browser_handle_key(Window* win, char c) {
 
     int canvas_h = (win->h - 20) - 56;
     int visible_rows = (canvas_h - 10) / 12;
-    int max_scroll = num_lines - visible_rows;
-    if (max_scroll < 0) max_scroll = 0;
+    int max_scroll = browser_max_scroll(canvas_h);
 
     
     if (key == 0x48) {
@@ -1065,7 +1146,7 @@ void user_main(const char* arguments) {
     user_window_handle = (uint32_t)created;
     user_window_closed = 0;
 
-    const char* default_page = "HTTP/1.1 200 OK\r\n\r\n";
+    const char* default_page = "<html><body><h1>Nixel Browser</h1><p>Enter an HTTP address above.</p></body></html>";
 
     int dlen = 0;
     while (default_page[dlen]) dlen++;
