@@ -12,7 +12,7 @@ QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 128M
 QEMU_DHCP ?= 10.0.1.0/24,dhcpstart=10.0.1.227
 QEMU_DISPLAY ?= sdl
-QEMU_EXTRA ?=
+QEMU_EXTRA ?= -usb -device usb-mouse
 
 ENABLE_OOBE ?= 0
 
@@ -82,7 +82,8 @@ KERNEL_C := \
   src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
   src/system/icons/network.h src/kernel/hal/audio.c \
-  src/system/icons/sound.h src/system/graphics/wm/start.c
+  src/system/icons/sound.h src/system/graphics/wm/start.c \
+  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm

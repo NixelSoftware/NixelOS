@@ -11,6 +11,7 @@
 #include "drivers/power.h"
 #include "drivers/acpi.h"
 #include "drivers/ps2.h"
+#include "drivers/usb/uhci.h"
 //#include "drivers/sb16_driver.h"
 #include "idt.h"
 #include "fs.h" 
@@ -22,6 +23,7 @@
 #include "arch_i386.h"
 #include "syscall.h"
 #include "hal/audio.h"
+#include "hal/usb.h"
 #include "kernel_net.h"
 #include "drivers/net.h"
 #include "net/arp.h"
@@ -400,6 +402,10 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         .finish_boot = kernel_finish_boot
     };
     audio_hal_init();
+    usb_hal_init();
+    if (uhci_init() == 0) {
+        usb_hal_register(uhci_get_ops());
+    }
     nixinit_start(&init_services);
 
     #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
