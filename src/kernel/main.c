@@ -446,3 +446,5 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     if (task_create(desktop_service, 0, "wm") < 0) __builtin_trap();
     for (;;) task_sleep_ms(1000);
 }
+
+os_api_t* kernel_get_api(void) { return &kernel_api; }

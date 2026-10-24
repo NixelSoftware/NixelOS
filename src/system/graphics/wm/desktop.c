@@ -8,7 +8,11 @@
 
 #include "../../../kernel/fs.h"
 #include "../../../kernel/users.h"
-#define NUM_ICONS 32
+#include "../../loader/app_loader.h"
+#define NUM_ICONS FS_MAX_FILES
+#define ICONS_PER_PAGE 40
+static int desktop_page;
+static uint32_t seen_generation;
 static DesktopIcon icons[NUM_ICONS];
 static int icon_count;
 typedef struct {
@@ -18,13 +22,16 @@ typedef struct {
     char target[FS_MAX_PATH];
     char label[16];
 } Shortcut;
-static char targets[NUM_ICONS][FS_MAX_PATH], labels[NUM_ICONS][16];
+static char targets[NUM_ICONS][FS_MAX_PATH], labels[NUM_ICONS][FS_MAX_FILENAME];
 static char shortcut_paths[NUM_ICONS][FS_MAX_PATH];
 static char entries[FS_MAX_FILES][FS_MAX_FILENAME];
 static char folder[FS_MAX_PATH] = "/", pending[FS_MAX_PATH];
 static int entry_count, page, chosen_icon, overlay, menu_x, menu_y;
 static int drag = -1, drag_dx, drag_dy, press_x, press_y, moved;
-static void load_shortcuts(void);
+static void refresh_desktop(void);
+static void open_item(int i);
+static void open_path(const char* path);
+static char preview[1025];
 static void save_icon(int i);
 static uint32_t last_click_time = 0;
 static int last_clicked_icon = -1;
@@ -89,28 +96,14 @@ void desktop_init(os_api_t* api) {
     debug_subsystem_print(" callback: ");
     debug_subsystem_hex((uint32_t)api->graphics.put_pixel);
     debug_subsystem_print("\n");
-    icons[0].x = 24;
-    icons[0].y = 20;
-    icons[0].label = "TERM";
-    icons[0].executable = 0;
-    icons[0].launch = terminal_launch;
-    icons[0].icon_type = 0;
-    icons[0].selected = 0;
-
-    icons[1].x = 24;
-    icons[1].y = 80;
-    icons[1].label = "NOTES";
-    icons[1].executable = 0;
-    icons[1].launch = notepad_launch;
-    icons[1].icon_type = 1;
-    icons[1].selected = 0;
-    icon_count = 2;
+    icon_count = 0;
     /* Older disks may predate the default desktop directory. Create it at
      * startup, before the first listing or shortcut save. */
     fs_stat_t desktop_stat;
     if (!fs_stat("/Desktop", &desktop_stat) && fs_mkdir("/Desktop") == 0)
         fs_chown("/Desktop", USER_REGULAR);
-    load_shortcuts();
+    refresh_desktop();
+    seen_generation = fs_generation();
     desktop_wallpaper_init(api, WALLPAPER_MODE_STRETCH);
 }
 
@@ -121,12 +114,16 @@ void desktop_draw(void) {
     debug_subsystem_hex((uint32_t)desktop_api);
     debug_subsystem_print("\n");
 
-    for (int i = 0; i < icon_count; i++) {
+    for (int i = desktop_page * ICONS_PER_PAGE; i < icon_count && i < (desktop_page+1)*ICONS_PER_PAGE; i++) {
         debug_subsystem_print("[RENDER TRACE] desktop icon start: ");
         debug_subsystem_hex((uint32_t)i);
         debug_subsystem_print("\n");
         DesktopIcon* icon = &icons[i];
         const uint8_t (*sprite)[16] = (icon->icon_type == 0) ? icon_terminal : icon_notepad;
+        if (icon->icon_type == 2) {
+            desktop_api->graphics.fill_rect(icon->x, icon->y+4, 20, 12, 0xD8B040);
+            desktop_api->graphics.fill_rect(icon->x+1, icon->y, 10, 5, 0xE8C050);
+        }
         debug_subsystem_print("[RENDER TRACE] put_pixel callback: ");
         debug_subsystem_hex((uint32_t)desktop_api->graphics.put_pixel);
         debug_subsystem_print("\n");
@@ -140,7 +137,7 @@ void desktop_draw(void) {
             for (int c = 0; c < 16; c++) {
                 int px = icon->x + c;
                 if (px < 0 || px >= SCREEN_WIDTH) continue;
-                uint8_t val = sprite[r][c];
+                uint8_t val = icon->icon_type == 2 ? 0 : sprite[r][c];
                 if (val != 0) {
                     if (r == 0 && c == 0)
                         debug_subsystem_print("[RENDER TRACE] before first icon pixel\n");
@@ -171,6 +168,11 @@ void desktop_draw(void) {
         debug_subsystem_hex((uint32_t)i);
         debug_subsystem_print("\n");
     }
+    if (icon_count > ICONS_PER_PAGE) {
+        desktop_api->graphics.draw_string(16, 548, "< Previous", COLOR_WHITE);
+        desktop_api->graphics.draw_string(660, 548, "Next >", COLOR_WHITE);
+    }
+
 }
 
 void desktop_trace_api(const char* label) {
@@ -188,9 +190,15 @@ void desktop_trace_api(const char* label) {
 }
 
 uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {
+    if (my >= 540 && icon_count > ICONS_PER_PAGE) {
+        if (mx < 130 && desktop_page > 0) desktop_page--;
+        if (mx > 650 && (desktop_page+1)*ICONS_PER_PAGE < icon_count) desktop_page++;
+        last_clicked_icon = -1;
+        return 1;
+    }
     int clicked_index = -1;
 
-    for (int i = 0; i < icon_count; i++) {
+    for (int i = desktop_page*ICONS_PER_PAGE; i < icon_count && i < (desktop_page+1)*ICONS_PER_PAGE; i++) {
         int x1 = icons[i].x - 10;
         int label_width = 0;
         while (icons[i].label[label_width]) label_width++;
@@ -214,13 +222,7 @@ uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {
     }
 
     if (clicked_index == last_clicked_icon && (current_time - last_click_time) <= DOUBLE_CLICK_THRESHOLD) {
-        DesktopIcon* icon = &icons[clicked_index];
-        if (desktop_api && icon->executable && desktop_api->shell.launch_app)
-            desktop_api->shell.launch_app(icon->executable, "");
-        else if (icon->launch && icon->launch() < 0 && desktop_api &&
-                 desktop_api->windows.show_info_dialog) {
-            desktop_api->windows.show_info_dialog("Cannot launch", "No free application, window, or process slots.");
-        }
+        open_item(clicked_index);
         icons[clicked_index].selected = 0;
         last_clicked_icon = -1;
         return 1;
@@ -252,37 +254,73 @@ static void clamp_icon(int i) {
     if (icons[i].x < 10) icons[i].x = 10;
     if (icons[i].x > SCREEN_WIDTH - 140) icons[i].x = SCREEN_WIDTH - 140;
     if (icons[i].y < 0) icons[i].y = 0;
-    if (icons[i].y > WM_TASKBAR_Y - 34) icons[i].y = WM_TASKBAR_Y - 34;
+    if (icons[i].y > WM_TASKBAR_Y - 70) icons[i].y = WM_TASKBAR_Y - 70;
+}
+/* Layout lives outside /Desktop so saving a position never adds a fake file
+ * to the folder being represented. Existing .POS files remain visible files. */
+static void layout_path(int i, char* path) {
+    copy_text(path, "/DeskCfg/", FS_MAX_PATH);
+    copy_text(path+9, labels[i], FS_MAX_PATH-9);
 }
 static void save_icon(int i) {
     Shortcut record = {0}; record.magic = 0x314B5344;
-    record.x = icons[i].x; record.y = icons[i].y; record.icon = icons[i].icon_type;
-    if (icons[i].executable) copy_text(record.target, icons[i].executable, sizeof(record.target));
-    copy_text(record.label, icons[i].label, sizeof(record.label));
-    if (fs_mkdir("/Desktop") < 0 || fs_write_file(shortcut_paths[i], (uint8_t*)&record, sizeof(record)) != sizeof(record))
-        show_info_dialog("Desktop", "Could not save shortcut in /Desktop.");
+    record.x = icons[i].x; record.y = icons[i].y;
+    char path[FS_MAX_PATH]; layout_path(i, path);
+    if (fs_mkdir("/DeskCfg") < 0 || fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
+        show_info_dialog("Desktop", "Could not save icon position.");
 }
-static void load_shortcuts(void) {
-    copy_text(shortcut_paths[0], "/Desktop/TERM.POS", FS_MAX_PATH);
-    copy_text(shortcut_paths[1], "/Desktop/NOTES.POS", FS_MAX_PATH);
-    for (int i = 0; i < 2; i++) {
-        Shortcut r;
-        if (fs_read_file(shortcut_paths[i], (uint8_t*)&r, sizeof(r)) == sizeof(r) && r.magic == 0x314B5344) {
-            icons[i].x = r.x; icons[i].y = r.y; clamp_icon(i);
-        }
+static void refresh_desktop(void) {
+    char files[FS_MAX_FILES][FS_MAX_FILENAME], old_names[NUM_ICONS][FS_MAX_FILENAME];
+    int old_count = icon_count;
+    int32_t old_x[NUM_ICONS], old_y[NUM_ICONS];
+    for (int i = 0; i < old_count; i++) {
+        copy_text(old_names[i], labels[i], FS_MAX_FILENAME);
+        old_x[i] = icons[i].x; old_y[i] = icons[i].y;
     }
-    int count = fs_list_dir("/Desktop", entries);
-    for (int j = 0; j < count && icon_count < NUM_ICONS; j++) {
-        if (!suffix(entries[j], ".LNK")) continue;
-        int i = icon_count; Shortcut r;
+    uint8_t types[FS_MAX_FILES];
+    int count = fs_list_dir_types("/Desktop", files, types);
+    icon_count = 0; last_clicked_icon = -1;
+    for (int j = 0; j < count; j++) {
+        int i = icon_count++;
+        copy_text(labels[i], files[j], sizeof(labels[i]));
         copy_text(shortcut_paths[i], "/Desktop/", FS_MAX_PATH);
-        copy_text(shortcut_paths[i] + 9, entries[j], FS_MAX_PATH - 9);
-        if (fs_read_file(shortcut_paths[i], (uint8_t*)&r, sizeof(r)) != sizeof(r) || r.magic != 0x314B5344 ||
-            r.target[FS_MAX_PATH-1] || r.label[15] || !suffix(r.target, ".BIN") || r.icon > 1) continue;
-        copy_text(targets[i], r.target, FS_MAX_PATH); copy_text(labels[i], r.label, 16);
-        icons[i] = (DesktopIcon){r.x, r.y, labels[i], targets[i], 0, r.icon, 0};
-        clamp_icon(i); icon_count++;
+        copy_text(shortcut_paths[i]+9, files[j], FS_MAX_PATH-9);
+        copy_text(targets[i], shortcut_paths[i], FS_MAX_PATH);
+        int slot = i % ICONS_PER_PAGE;
+        icons[i] = (DesktopIcon){24+(slot%5)*152, 20+(slot/5)*64, labels[i], targets[i], 0, 1, 0};
+        if (types[j] & FAT_ATTR_DIRECTORY) icons[i].icon_type = 2;
+        else if (suffix(files[j], ".BIN")) icons[i].icon_type = 0;
+        else if (suffix(files[j], ".LNK")) {
+            Shortcut record;
+            if (fs_read_file(shortcut_paths[i], (uint8_t*)&record, sizeof(record)) == sizeof(record) &&
+                record.magic == 0x314B5344 && !record.target[FS_MAX_PATH-1] &&
+                suffix(record.target, ".BIN") && record.icon < 2) {
+                copy_text(targets[i], record.target, FS_MAX_PATH);
+                icons[i].icon_type = record.icon;
+                icons[i].x = record.x; icons[i].y = record.y;
+            }
+        }
+        int previous = -1;
+        for (int k = 0; k < old_count; k++) {
+            int n = 0; while (files[j][n] && files[j][n] == old_names[k][n]) n++;
+            if (!files[j][n] && !old_names[k][n]) { previous = k; break; }
+        }
+        if (previous >= 0) { icons[i].x = old_x[previous]; icons[i].y = old_y[previous]; }
+        else {
+            char path[FS_MAX_PATH]; layout_path(i, path); Shortcut position;
+            if (fs_read_file(path, (uint8_t*)&position, sizeof(position)) == sizeof(position) && position.magic == 0x314B5344) {
+                icons[i].x = position.x; icons[i].y = position.y;
+            }
+        }
+        clamp_icon(i);
     }
+    if (desktop_page && desktop_page*ICONS_PER_PAGE >= icon_count) desktop_page = 0;
+}
+void desktop_poll(void) {
+    if (!desktop_api || drag >= 0 || overlay || seen_generation == fs_generation()) return;
+    uint32_t generation = fs_generation();
+    refresh_desktop(); seen_generation = generation;
+    request_redraw();
 }
 static void joined(char* out, const char* name) {
     copy_text(out, folder, FS_MAX_PATH);
@@ -299,6 +337,27 @@ static void browse(void) {
             copy_text(entries[entry_count++], all[i], FS_MAX_FILENAME);
     }
 }
+static void open_path(const char* path) {
+    if (fs_is_directory(path)) {
+        if (app_loader_launch_detached(desktop_api, "/files.bin", path) < 0)
+            show_info_dialog("Desktop", "Cannot open File Explorer.");
+    } else if (suffix(path, ".BIN")) {
+        if (app_loader_launch_detached(desktop_api, path, "") < 0)
+            show_info_dialog("Desktop", "Cannot launch application.");
+    } else if (suffix(path, ".BMP") && desktop_api->shell.shell_open_viewer) {
+        desktop_api->shell.shell_open_viewer(path);
+    } else {
+        int bytes = fs_read_file(path, (uint8_t*)preview, sizeof(preview)-1);
+        if (bytes < 0) { show_info_dialog("Desktop", "Cannot read file."); return; }
+        preview[bytes] = 0;
+        for (int i = 0; i < bytes; i++)
+            if ((unsigned char)preview[i] < 32 && preview[i] != '\n' && preview[i] != '\t') preview[i] = '.';
+        copy_text(pending, path, FS_MAX_PATH); overlay = 5;
+    }
+}
+static void open_item(int i) {
+    open_path(targets[i]);
+}
 static void text(int x, int y, const char* value) {
     desktop_api->graphics.draw_string(x, y, value, COLOR_BLACK);
 }
@@ -310,17 +369,28 @@ void desktop_draw_overlay(void) {
     if (!overlay) return;
     if (overlay == 1) { box(menu_x, menu_y, 188, 26); text(menu_x+8, menu_y+8, "Create shortcut..."); return; }
     box(150, 100, 500, 350);
-    text(166, 114, overlay == 2 ? "Select a BIN file" : "Choose shortcut icon");
+    text(166, 114, overlay == 2 ? "Select a BIN file" : overlay == 5 ? "File preview (first 1 KB)" : "Choose shortcut icon");
     text(570, 114, "Cancel");
-    if (overlay == 2) {
+    if (overlay == 5) {
+        char name[56]; copy_text(name, pending, sizeof(name)); text(166, 140, name);
+        int row = 0, col = 0; char line[57];
+        for (int i = 0; preview[i] && row < 12; i++) {
+            if (preview[i] == '\n' || col == 56) {
+                line[col] = 0; text(166, 170+row++*20, line); col = 0;
+                if (preview[i] == '\n') continue;
+            }
+            line[col++] = preview[i] == '\t' ? ' ' : preview[i];
+        }
+        if (col && row < 12) { line[col] = 0; text(166, 170+row*20, line); }
+    } else if (overlay == 2) {
         char display[57]; copy_text(display, folder, sizeof(display)); text(166, 140, display);
         text(166, 164, "[..] Parent folder");
         for (int row = 0; row < 10 && page + row < entry_count; row++) {
             char path[FS_MAX_PATH]; joined(path, entries[page+row]);
-            text(166, 188+row*22, fs_is_directory(path) ? "[DIR]" : "[BIN]");
-            text(214, 188+row*22, entries[page+row]);
+            text(166, 188+row*22, fs_is_directory(path) ? "[DIR]" : suffix(path, ".BIN") ? "[BIN]" : "[FILE]");
+            text(222, 188+row*22, entries[page+row]);
         }
-        if (!entry_count) text(166, 188, "No BIN files or folders here.");
+        if (!entry_count) text(166, 188, "This folder is empty.");
         text(166, 426, "Previous"); text(558, 426, "Next");
     } else {
         for (int i = 0; i < 2; i++) {
@@ -335,24 +405,19 @@ void desktop_draw_overlay(void) {
     }
 }
 static void create_shortcut(void) {
-    if (icon_count >= NUM_ICONS) { show_info_dialog("Desktop", "Desktop is full."); return; }
-    int i = icon_count;
-    /* Fixed 8.3 names avoid collisions with other shortcuts. */
-    int slot;
+    char path[FS_MAX_PATH]; int slot;
     for (slot = 0; slot < 1000; slot++) {
         char name[] = "/Desktop/SC000.LNK";
         name[11] = '0'+slot/100; name[12] = '0'+slot/10%10; name[13] = '0'+slot%10;
         fs_stat_t st;
-        if (!fs_stat(name, &st)) { copy_text(shortcut_paths[i], name, FS_MAX_PATH); break; }
+        if (!fs_stat(name, &st)) { copy_text(path, name, FS_MAX_PATH); break; }
     }
-    if (slot == 1000) { show_info_dialog("Desktop", "No free shortcut filenames."); return; }
-    copy_text(targets[i], pending, FS_MAX_PATH);
-    const char* base = pending; for (int j = 0; pending[j]; j++) if (pending[j] == '/') base = pending+j+1;
-    copy_text(labels[i], base, 16);
-    icons[i] = (DesktopIcon){100+(i%7)*96, 20+(i/7)*64, labels[i], targets[i], 0, chosen_icon, 0};
-    clamp_icon(i); save_icon(i);
-    Shortcut r;
-    if (fs_read_file(shortcut_paths[i], (uint8_t*)&r, sizeof(r)) == sizeof(r)) icon_count++;
+    if (slot == 1000 || icon_count >= NUM_ICONS) { show_info_dialog("Desktop", "Desktop is full."); return; }
+    Shortcut record = {0}; record.magic = 0x314B5344; record.icon = chosen_icon;
+    record.x = 24+(icon_count%5)*152; record.y = 20+(icon_count%ICONS_PER_PAGE/5)*64;
+    copy_text(record.target, pending, sizeof(record.target));
+    if (fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
+        show_info_dialog("Desktop", "Could not save shortcut.");
 }
 /* Called before normal window dispatch only for an active overlay/drag, or
  * a right-button press on uncovered desktop. */
@@ -378,6 +443,7 @@ uint8_t desktop_mouse(int mx, int my, uint8_t left, uint8_t down, uint8_t right)
         return 1;
     }
     if (mx >= 570 && mx < 642 && my >= 108 && my < 134) { overlay = 0; return 1; }
+    if (overlay == 5) return 1;
     if (overlay == 2) {
         if (mx < 166 || mx > 634) return 1;
         if (my >= 164 && my < 186) {
@@ -387,7 +453,8 @@ uint8_t desktop_mouse(int mx, int my, uint8_t left, uint8_t down, uint8_t right)
         } else if (my >= 188 && my < 408) {
             int i = page+(my-188)/22;
             if (i < entry_count) {
-                joined(pending, entries[i]);
+                char path[FS_MAX_PATH]; joined(path, entries[i]);
+                copy_text(pending, path, FS_MAX_PATH);
                 if (fs_is_directory(pending)) { copy_text(folder, pending, FS_MAX_PATH); browse(); }
                 else { chosen_icon = 0; overlay = 3; }
             }

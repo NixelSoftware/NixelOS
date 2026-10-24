@@ -46,7 +46,9 @@ enum {
     SYS_REBOOT = 35, /* requests a kernel managed reboot */
     SYS_DETACH = 36, /* reparent current process to PID 0; releases terminal wait */
     SYS_GETPID = 37,
-    SYS_GETPPID = 38
+    SYS_GETPPID = 38,
+    SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FAT attributes */
+    SYS_APP_LAUNCH = 40 /* EBX: executable path, ECX: arguments; starts detached */
 };
 
 enum {
@@ -148,6 +150,20 @@ static inline int32_t sys_fs_read(const char* filename, void* buffer,
                       : "0"((uint32_t)SYS_FS_READ), "b"(filename),
                         "c"(buffer), "d"(capacity)
                       : "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_fs_list_dir(const char* path,
+        char names[FS_MAX_FILES][FS_MAX_FILENAME], uint8_t types[FS_MAX_FILES]) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_LIST_DIR), "b"(path), "c"(names), "d"(types) : "memory", "cc");
+    return result;
+}
+static inline int32_t sys_app_launch(const char* path, const char* arguments) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_APP_LAUNCH), "b"(path), "c"(arguments) : "memory", "cc");
     return result;
 }
 

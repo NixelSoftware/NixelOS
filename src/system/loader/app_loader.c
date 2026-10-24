@@ -273,7 +273,7 @@ static void app_load_worker(void* argument) {
     mutex_unlock(&kernel_mutex);
     if (result >= 0) app_run(&app_instances[result]);
 }
-static int app_loader_queue(os_api_t* api, const char* name, const char* arguments) {
+static int app_loader_queue(os_api_t* api, const char* name, const char* arguments, int detached) {
     if (!api || !api->fs.read || !name || !*name) return -1;
     MUTEX_GUARD(kernel_mutex);
     launch_request_t* request = 0;
@@ -292,15 +292,21 @@ static int app_loader_queue(os_api_t* api, const char* name, const char* argumen
     request->api = api; request->active = 1;
     int pid = task_create(app_load_worker, request, name);
     if (pid < 0) { request->active = 0; return -3; }
+    if (detached) task_detach_child(pid);
     return pid;
 }
 
 int app_loader_launch(os_api_t* api, const char* name, const char* arguments) {
-    int pid = app_loader_queue(api, name, arguments);
+    int pid = app_loader_queue(api, name, arguments, 0);
     return pid < 0 ? pid : 0;
 }
 int app_loader_launch_wait(os_api_t* api, const char* name, const char* arguments) {
-    int pid = app_loader_queue(api, name, arguments);
+    int pid = app_loader_queue(api, name, arguments, 0);
     if (pid < 0) return pid;
     return task_wait(pid);
+}
+
+int app_loader_launch_detached(os_api_t* api, const char* name, const char* arguments) {
+    int pid = app_loader_queue(api, name, arguments, 1);
+    return pid < 0 ? pid : 0;
 }

@@ -15,6 +15,7 @@ typedef struct {
 
 void desktop_init(os_api_t* api);
 void desktop_draw(void);
+void desktop_poll(void);
 void desktop_draw_overlay(void);
 uint8_t desktop_mouse(int mx, int my, uint8_t left, uint8_t down, uint8_t right);
 uint8_t desktop_overlay_active(void);

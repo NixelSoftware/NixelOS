@@ -64,6 +64,7 @@ int task_create_with_request(void (*entry)(void*), void* arg, const char* name,
 void task_exit(void) __attribute__((noreturn));
 void task_yield(void);
 int task_wait(int pid); /* waits until child exits or detaches; no locks held */
+int task_detach_child(int pid);
 int task_detach(void); /* current process reparents itself to init */
 void task_terminate_children(uint32_t parent);
 uint32_t task_parent_id(void);

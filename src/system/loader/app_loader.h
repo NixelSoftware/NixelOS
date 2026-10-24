@@ -4,6 +4,7 @@
 #include "../../kernel/os_api.h"
 
 /* Loads into a private address space and queues a task. Returns immediately. */
+int app_loader_launch_detached(os_api_t* api, const char* name, const char* arguments);
 int app_loader_launch(os_api_t* api, const char* name, const char* arguments);
 
 int app_loader_launch_wait(os_api_t* api, const char* name, const char* arguments);

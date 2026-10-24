@@ -11,6 +11,8 @@ static uint32_t sectors_per_cluster = 0;
 static uint32_t root_cluster = 0;
 static uint8_t  sector_buffer[512];
 static uint8_t  cluster_scratch[4096];
+static volatile uint32_t change_generation;
+uint32_t fs_generation(void) { return change_generation; }
 static uint8_t  fs_ready = 0;
 static uint32_t last_alloc_cluster = 2;
 
@@ -361,7 +363,7 @@ void fs_init(void) {
     debug_print("\n");
 }
 
-int fs_list_dir(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
+int fs_list_dir_types(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME], uint8_t types[FS_MAX_FILES]) {
     MUTEX_GUARD(filesystem_mutex);
     if (!fs_ready) return 0;
     uint32_t dir_cluster = root_cluster;
@@ -389,12 +391,17 @@ int fs_list_dir(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENA
                 
                 if (entries[i].name[0] == '.') continue;
 
+                if (types) types[count] = entries[i].attr;
                 format_83_to_filename(entries[i].name, file_list_out[count++]);
             }
         }
         curr_cluster = get_next_cluster(curr_cluster);
     }
     return count;
+}
+
+int fs_list_dir(const char* path, char names[FS_MAX_FILES][FS_MAX_FILENAME]) {
+    return fs_list_dir_types(path, names, 0);
 }
 
 int fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
@@ -492,6 +499,7 @@ int fs_delete_file(const char* filename) {
     if (ata_read_sectors(dir_lba, 1, sector_buffer)) {
         sector_buffer[dir_offset] = 0xE5;
         ata_write_sectors(dir_lba, 1, sector_buffer);
+        change_generation++;
         return 1;
     }
     return 0;
@@ -607,6 +615,7 @@ int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes)
     dir_ptr->file_size = size_bytes;
 
     ata_write_sectors(dir_lba, 1, sector_buffer);
+    change_generation++;
     return (int)size_bytes;
 }
 

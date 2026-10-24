@@ -1051,7 +1051,8 @@ static void handle_key_event(const os_input_event_t* event) {
     char translated = wm_api->input.translate_scancode ?
         wm_api->input.translate_scancode(scancode) : 0;
     char key = (scancode == 0x3C || scancode == 0x3D || scancode == 0x48 ||
-                scancode == 0x50 || scancode == 0x01) ? (char)scancode : translated;
+                scancode == 0x50 || scancode == 0x47 || scancode == 0x4F ||
+                scancode == 0x49 || scancode == 0x51 || scancode == 0x3F || scancode == 0x01) ? (char)scancode : translated;
     if (!key) return;
     if (desktop_key(key)) { request_redraw(); return; }
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
@@ -1116,6 +1117,7 @@ void wm_poll(void) {
     }
 
 
+    desktop_poll();
     os_input_event_t event;
     event.type = OS_INPUT_NONE;
     for (unsigned budget = 16; budget; budget--) {

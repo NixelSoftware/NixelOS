@@ -13,6 +13,7 @@ static unsigned int audio_owner;
 #include "drivers/floppy.h"
 #include "net/tcp.h"
 #include "fs.h"
+#include "../system/loader/app_loader.h"
 #include "kernel_net.h"
 #include "net/dns.h"
 #include "net/icmp.h"
@@ -190,6 +191,15 @@ static int user_writable(uint32_t address, uint32_t length) {
     return 1;
 }
 
+static int copy_user_text(uint32_t address, char* out, uint32_t capacity) {
+    for (uint32_t i = 0; i < capacity; i++) {
+        if (address+i < address || !user_readable(address+i, 1)) return 0;
+        out[i] = *(const char*)(address+i);
+        if (!out[i]) return 1;
+    }
+    return 0;
+}
+
 static void syscall_dispatch_impl(registers_t* regs) {
     if (!regs) return;
     if ((regs->cs & 3u) != 3u) {
@@ -323,6 +333,27 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = (uint32_t)fs_read_file_at(filename,
                 capacity ? (uint8_t*)output_address : 0, capacity,
                 regs->eax == SYS_FS_READ_AT ? regs->esi : 0);
+            return;
+        }
+        case SYS_FS_LIST_DIR: {
+            char path[FS_MAX_PATH];
+            if (!copy_user_text(regs->ebx, path, sizeof(path)) || !path[0] ||
+                !user_writable(regs->ecx, FS_MAX_FILES*FS_MAX_FILENAME) ||
+                !user_writable(regs->edx, FS_MAX_FILES) ||
+                !fs_access(path, FS_ACCESS_READ | FS_ACCESS_EXEC) ||
+                (!(path[0] == '/' && !path[1]) && !fs_is_directory(path))) {
+                regs->eax = (uint32_t)-1; return;
+            }
+            regs->eax = fs_list_dir_types(path, (char (*)[FS_MAX_FILENAME])regs->ecx, (uint8_t*)regs->edx);
+            return;
+        }
+        case SYS_APP_LAUNCH: {
+            char path[FS_MAX_PATH], arguments[256];
+            if (!copy_user_text(regs->ebx, path, sizeof(path)) || !path[0] ||
+                !copy_user_text(regs->ecx, arguments, sizeof(arguments))) {
+                regs->eax = (uint32_t)-1; return;
+            }
+            regs->eax = app_loader_launch_detached(kernel_get_api(), path, arguments);
             return;
         }
         case SYS_FS_LIST: {
@@ -747,7 +778,7 @@ void syscall_dispatch(registers_t* regs) {
     if (!regs) return;
     switch (regs->eax) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
-        case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_WRITE:
+        case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
         case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN:
             syscall_dispatch_impl(regs);

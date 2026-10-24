@@ -125,5 +125,6 @@ typedef struct {
     os_device_api_t devices;
     os_system_api_t system;
 } os_api_t;
+os_api_t* kernel_get_api(void);
 
 #endif

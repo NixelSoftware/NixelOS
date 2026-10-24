@@ -119,6 +119,22 @@ void task_terminate_children(uint32_t parent) {
     }
     task_irq_restore(flags);
 }
+/* Detach a newly queued child while the caller still owns the core lock. */
+int task_detach_child(int pid) {
+    uint32_t flags = task_irq_save();
+    int result = -1;
+    if (current_task && pid > 0 && pid < MAX_TASKS-1) {
+        task_t* child = &task_list[pid];
+        if (child->parent_id == current_task->id && !child->terminate_requested &&
+            child->state != TASK_STATE_UNUSED && child->state != TASK_STATE_TERMINATED) {
+            child->parent_id = 0; child->detached = 1; child->terminal = 0;
+            child->shell_output = 0; child->shell_clear = 0;
+            result = 0;
+        }
+    }
+    task_irq_restore(flags);
+    return result;
+}
 int task_detach(void) {
     uint32_t flags = task_irq_save();
     int result = -1;
