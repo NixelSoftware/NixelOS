@@ -347,6 +347,13 @@ static void audio_task(void* arg) {
     for (;;) { system_sound_poll(); audio_service(); task_sleep_ms(2);
     }
 }
+static void usb_service(void* arg) {
+    (void)arg;
+    for (;;) {
+        usb_poll();
+        task_sleep_ms(10);
+    }
+}
 static void cleanup_service(void* arg) {
     (void)arg;
     for (;;) { app_loader_collect(); task_sleep_ms(20); }
@@ -403,9 +410,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     };
     audio_hal_init();
     usb_hal_init();
-    if (uhci_init() == 0) {
-        usb_hal_register(uhci_get_ops());
-    }
+    usb_hal_register(uhci_get_ops());
     nixinit_start(&init_services);
 
     #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
@@ -424,6 +429,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         task_create_nice(audio_task, 0, "audio", -4) < 0 ||
 #endif
         task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
+        task_create_nice(usb_service, 0, "usb", 2) < 0 ||
         task_create_nice(shell_service, 0, "terminal", 0) < 0 ||
         display_start_async() < 0 || serial_start_async() < 0) {
 #else

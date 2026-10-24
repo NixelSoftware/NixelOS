@@ -12,7 +12,8 @@ QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 128M
 QEMU_DHCP ?= 10.0.1.0/24,dhcpstart=10.0.1.227
 QEMU_DISPLAY ?= sdl
-QEMU_EXTRA ?= -usb -device usb-mouse
+#QEMU_EXTRA ?= -usb -device usb-mouse
+QEMU_EXTRA ?=
 
 ENABLE_OOBE ?= 0
 

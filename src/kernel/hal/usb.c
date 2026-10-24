@@ -1,6 +1,14 @@
 #include "usb.h"
 #include "../drivers/serial.h"
 
+/* 
+    I fucking hate USB. Never try to implement this, you'll hate your life.
+    I think UHCI is racist, it hates me because I am not white so it simply decides to not work.
+    "Control Transfer Failed"? Fuck you!!
+    Either way, I give up for now. 
+        - zainabm
+*/
+
 static const usb_hci_ops_t* active_controller = 0;
 
 void usb_hal_init(void) {
