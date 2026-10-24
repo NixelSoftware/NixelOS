@@ -149,13 +149,18 @@ static void open_selected(void) {
     char path[FS_MAX_PATH];
     if (!item_path(selected_file, path)) { copy_text(status, "Path too long.", sizeof(status)); return; }
     if (file_types[selected_file] & FAT_ATTR_DIRECTORY) load_directory(path);
+    else if (suffix(path, ".WAV") || suffix(path, ".MP3")) {
+        if (sys_app_launch("/sound.bin", path) < 0)
+            copy_text(status, "Cannot launch Sound Player.", sizeof(status));
+        else copy_text(status, "Opened in Sound Player.", sizeof(status));
+    }
     else if (suffix(path, ".BIN")) launch(path);
     else if (suffix(path, ".LNK")) {
         struct { uint32_t magic; int32_t x,y; uint32_t icon; char target[FS_MAX_PATH]; char label[16]; } link;
         if (sys_fs_read(path, &link, sizeof(link)) == sizeof(link) && link.magic == 0x314B5344 &&
             !link.target[FS_MAX_PATH-1] && suffix(link.target, ".BIN")) launch(link.target);
         else copy_text(status, "Invalid shortcut.", sizeof(status));
-    } else copy_text(status, "Select a folder, BIN application, or shortcut to open.", sizeof(status));
+    } else copy_text(status, "Select a folder, application, shortcut, or audio file.", sizeof(status));
 }
 static void itoa(int value, char* out) {
     char reverse[12]; int n = 0, i = 0;

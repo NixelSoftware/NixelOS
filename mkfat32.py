@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 SECTOR_SIZE = 512
-TOTAL_SIZE_MB = 36
+# Keep filesystem capacity comfortably above the default 128 MiB guest RAM.
+TOTAL_SIZE_MB = 256
 TOTAL_SECTORS = (TOTAL_SIZE_MB * 1024 * 1024) // SECTOR_SIZE
 
 FS_BASE_LBA = 500
