@@ -59,7 +59,7 @@ CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) 
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
-  src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
+  src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/session.c \

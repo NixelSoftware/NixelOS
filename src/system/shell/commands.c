@@ -1,5 +1,7 @@
 #include "../../kernel/mutex.h"
 #include "commands.h"
+#include "../../kernel/users.h"
+#include "../../kernel/fs.h"
 #include "network_commands.h"
 #include "../loader/app_loader.h"
 #include "../graphics/terminal/terminal.h"
@@ -51,6 +53,50 @@ const char* shell_command_args(void) {
     return shell_args;
 }
 
+static int account_command(const char* command) {
+    if (has_prefix(command, "whoami") && !command[6]) {
+        const user_t* u = user_by_id(user_uid());
+        print(u ? u->name : "unknown"); print("\n");
+    } else if (has_prefix(command, "id") && !command[2]) {
+        print("uid="); print_u32(user_uid()); print(" gid="); print_u32(user_gid()); print("\n");
+    } else if (has_prefix(command, "users") && !command[5]) {
+        print("root user system nobody\n");
+    } else if (has_prefix(command, "su ")) {
+        if (!user_switch(command + 3)) print("Cannot switch user (root required; account must exist).\n");
+    } else if (has_prefix(command, "stat ")) {
+        fs_stat_t st;
+        if (!fs_stat(command + 5, &st)) print("Cannot stat path.\n");
+        else {
+            const user_t* u = user_by_id(st.uid);
+            print("owner="); print(u ? u->name : "unknown");
+            print(" uid="); print_u32(st.uid); print(" gid="); print_u32(st.gid);
+            char mode[5] = {'0', '0' + ((st.mode >> 6) & 7), '0' + ((st.mode >> 3) & 7), '0' + (st.mode & 7), 0};
+            print(" mode="); print(mode); print("\n");
+        }
+    } else if (has_prefix(command, "chmod ") || has_prefix(command, "chown ")) {
+        int owner = command[2] == 'o';
+        const char* arg = command + 6;
+        char token[32]; int n = 0;
+        while (*arg && *arg != ' ' && n < 31) token[n++] = *arg++;
+        token[n] = 0;
+        while (*arg == ' ') arg++;
+        int ok = 0;
+        if (owner) {
+            const user_t* u = user_by_name(token);
+            if (u && *arg) ok = fs_chown(arg, u->uid);
+        } else {
+            unsigned mode = 0; int valid = n == 3 || (n == 4 && token[0] == '0');
+            for (int i = 0; i < n; i++) {
+                if (token[i] < '0' || token[i] > '7') valid = 0;
+                mode = (mode << 3) | (token[i] - '0');
+            }
+            if (valid && *arg) ok = fs_chmod(arg, mode);
+        }
+        if (!ok) print("Operation failed: check arguments, ownership and permissions.\n");
+    } else return 0;
+    return 1;
+}
+
 void shell_execute_command(const char* command, shell_output_fn output,
                            shell_clear_fn clear) {
     shell_output = output;
@@ -63,8 +109,14 @@ void shell_execute_command(const char* command, shell_output_fn output,
     shell_args[0] = '\0';
     if (*command == '\0') return;
 
+    if (account_command(command)) return;
     if (has_prefix(command, "help")) {
         print("Commands:\n"
+                    " users / whoami / id   Show accounts or identity\n"
+                    " su <account>    Switch identity (root only)\n"
+                    " stat <path>     Show ownership and mode\n"
+                    " chmod <octal> <path>  Set permissions\n"
+                    " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
                     " ls              List files\n"
                     " rm              Remove files\n"
@@ -102,7 +154,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         else {
             char buffer[512];
             int bytes = shell_api->fs.read(filename, (uint8_t*)buffer, 511);
-            if (bytes < 0) print("File not found!\n");
+            if (bytes < 0) print("Cannot read file (missing or permission denied).\n");
             else { buffer[bytes] = '\0'; print(buffer); print("\n"); }
         }
     } else if (has_prefix(command, "view ")) {

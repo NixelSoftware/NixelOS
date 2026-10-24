@@ -164,6 +164,8 @@ static void idle_main(void* arg) {
     }
 }
 static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) {
+    t->uid = current_task ? current_task->uid : 0;
+    t->gid = current_task ? current_task->gid : 0;
     t->parent_id = current_task ? current_task->id : 0;
     t->generation = ++next_generation;
     t->terminate_requested = 0;

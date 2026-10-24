@@ -66,6 +66,15 @@ typedef struct {
 #pragma pack(pop)
 
 
+#define FS_ACCESS_READ 4
+#define FS_ACCESS_WRITE 2
+#define FS_ACCESS_EXEC 1
+typedef struct { uint16_t uid, gid, mode; } fs_stat_t;
+int fs_stat(const char* path, fs_stat_t* out);
+int fs_access(const char* path, unsigned access);
+int fs_chmod(const char* path, uint16_t mode);
+int fs_chown(const char* path, uint16_t uid);
+
 int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity, uint32_t offset);
 void fs_init(void);
 int  fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]);

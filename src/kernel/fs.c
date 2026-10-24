@@ -1,5 +1,6 @@
 #include "mutex.h"
 #include "fs.h"
+#include "users.h"
 #include "drivers/ata.h"
 #include "drivers/serial.h"
 
@@ -12,6 +13,30 @@ static uint8_t  sector_buffer[512];
 static uint8_t  cluster_scratch[4096];
 static uint8_t  fs_ready = 0;
 static uint32_t last_alloc_cluster = 2;
+
+/* Nixel FAT extension v1: marker in NT/tenths, uid/gid/mode in
+ * creation time/date and access date. These timestamps are not maintained. */
+static fs_stat_t entry_stat(const fat32_dir_entry_t* e) {
+    if (e->nt_res == 0xA5 && e->creation_time_tenth == 0xD1)
+        return (fs_stat_t){e->creation_time, e->creation_date, e->last_access_date & 0777};
+    return (fs_stat_t){USER_ROOT, USER_ROOT,
+        (e->attr & FAT_ATTR_READ_ONLY) ? 0555 : 0755};
+}
+static void entry_set_stat(fat32_dir_entry_t* e, fs_stat_t st) {
+    e->nt_res = 0xA5; e->creation_time_tenth = 0xD1;
+    e->creation_time = st.uid; e->creation_date = st.gid;
+    e->last_access_date = st.mode;
+}
+static int allowed(fs_stat_t st, unsigned access) {
+    if (user_uid() == USER_ROOT) return 1;
+    unsigned shift = user_uid() == st.uid ? 6 : user_gid() == st.gid ? 3 : 0;
+    return (((st.mode >> shift) & access) == access);
+}
+static int entry_allowed(const fat32_dir_entry_t* e, unsigned access) {
+    return allowed(entry_stat(e), access);
+}
+/* The root is a shared writable directory until home directories exist. */
+static int parent_writable(const char* path);
 
 static char to_upper(char c) {
     if (c >= 'a' && c <= 'z') return (char)(c - 32);
@@ -235,12 +260,66 @@ static int resolve_path(const char* path, uint32_t* parent_cluster, char final_8
         
         fat32_dir_entry_t dir_ent;
         if (!find_in_directory(*parent_cluster, target_83, &dir_ent, 0, 0)) return 0;
-        if (!(dir_ent.attr & FAT_ATTR_DIRECTORY)) return 0;
+        if (!(dir_ent.attr & FAT_ATTR_DIRECTORY) || !entry_allowed(&dir_ent, FS_ACCESS_EXEC)) return 0;
 
         uint32_t sub_cluster = ((uint32_t)dir_ent.first_cluster_hi << 16) | dir_ent.first_cluster_lo;
         *parent_cluster = (sub_cluster == 0) ? root_cluster : sub_cluster;
     }
     return 0;
+}
+
+static int parent_writable(const char* path) {
+    char parent[FS_MAX_PATH];
+    int last = -1, length = 0;
+    while (path[length]) {
+        if (length >= FS_MAX_PATH - 1) return 0;
+        if (path[length] == '/') last = length;
+        length++;
+    }
+    if (last <= 0) return 1;
+    for (int i = 0; i < last; i++) parent[i] = path[i];
+    parent[last] = 0;
+    return fs_access(parent, FS_ACCESS_WRITE | FS_ACCESS_EXEC);
+}
+static int lookup(const char* path, fat32_dir_entry_t* e, uint32_t* lba, uint32_t* off) {
+    uint32_t parent; char name[11];
+    return fs_ready && resolve_path(path, &parent, name) &&
+        find_in_directory(parent, name, e, lba, off);
+}
+int fs_stat(const char* path, fs_stat_t* out) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (!out || !fs_ready || !path) return 0;
+    if (path[0] == '/' && !path[1]) { *out = (fs_stat_t){0, 0, 0777}; return 1; }
+    fat32_dir_entry_t e;
+    if (!lookup(path, &e, 0, 0)) return 0;
+    *out = entry_stat(&e); return 1;
+}
+int fs_access(const char* path, unsigned access) {
+    MUTEX_GUARD(filesystem_mutex);
+    fs_stat_t st;
+    return !(access & ~7u) && fs_stat(path, &st) && allowed(st, access);
+}
+static int change_stat(const char* path, uint16_t value, int owner) {
+    fat32_dir_entry_t e; uint32_t lba, off;
+    if (!lookup(path, &e, &lba, &off)) return 0;
+    fs_stat_t st = entry_stat(&e);
+    if (user_uid() != USER_ROOT && (owner || user_uid() != st.uid)) return 0;
+    if (owner) {
+        const user_t* user = user_by_id(value);
+        if (!user) return 0;
+        st.uid = user->uid; st.gid = user->gid;
+    } else { if (value & ~0777) return 0; st.mode = value; }
+    if (!ata_read_sectors(lba, 1, sector_buffer)) return 0;
+    entry_set_stat((fat32_dir_entry_t*)&sector_buffer[off], st);
+    return ata_write_sectors(lba, 1, sector_buffer);
+}
+int fs_chmod(const char* path, uint16_t mode) {
+    MUTEX_GUARD(filesystem_mutex);
+    return change_stat(path, mode, 0);
+}
+int fs_chown(const char* path, uint16_t uid) {
+    MUTEX_GUARD(filesystem_mutex);
+    return change_stat(path, uid, 1);
 }
 
 void fs_init(void) {
@@ -280,17 +359,12 @@ int fs_list_dir(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENA
     if (!fs_ready) return 0;
     uint32_t dir_cluster = root_cluster;
 
-    if (path && path[0] && (path[0] != '/' || path[1] != '\0')) {
-        char target_83[11];
-        if (!resolve_path(path, &dir_cluster, target_83)) {
-            fat32_dir_entry_t ent;
-            if (find_in_directory(dir_cluster, target_83, &ent, 0, 0) && (ent.attr & FAT_ATTR_DIRECTORY)) {
-                dir_cluster = ((uint32_t)ent.first_cluster_hi << 16) | ent.first_cluster_lo;
-                if (dir_cluster == 0) dir_cluster = root_cluster;
-            } else {
-                return 0;
-            }
-        }
+    if (path && path[0] && (path[0] != '/' || path[1])) {
+        fat32_dir_entry_t ent;
+        if (!lookup(path, &ent, 0, 0) || !(ent.attr & FAT_ATTR_DIRECTORY) ||
+            !entry_allowed(&ent, FS_ACCESS_READ | FS_ACCESS_EXEC)) return 0;
+        dir_cluster = ((uint32_t)ent.first_cluster_hi << 16) | ent.first_cluster_lo;
+        if (!dir_cluster) dir_cluster = root_cluster;
     }
 
     int count = 0;
@@ -336,6 +410,7 @@ int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity,
     if (!resolve_path(filename, &parent, name) ||
         !find_in_directory(parent, name, &entry, 0, 0) ||
         (entry.attr & FAT_ATTR_DIRECTORY)) return -1;
+    if (!entry_allowed(&entry, FS_ACCESS_READ)) return -1;
     if (!dest || !capacity) return (int)entry.file_size;
     if (offset >= entry.file_size) return 0;
     uint32_t remaining = entry.file_size - offset;
@@ -398,7 +473,11 @@ int fs_delete_file(const char* filename) {
     uint32_t dir_lba, dir_offset;
     if (!find_in_directory(parent_cluster, target_83, &entry, &dir_lba, &dir_offset)) return 0;
 
-    
+    if ((entry.attr & FAT_ATTR_DIRECTORY) || !parent_writable(filename)) return 0;
+    /* Shared root behaves like a sticky directory. */
+    if (parent_cluster == root_cluster && user_uid() != USER_ROOT &&
+        user_uid() != entry_stat(&entry).uid) return 0;
+
     uint32_t start_cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
     if (start_cluster >= 2) free_cluster_chain(start_cluster);
 
@@ -422,6 +501,11 @@ int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes)
     fat32_dir_entry_t entry;
     uint32_t dir_lba = 0, dir_offset = 0;
     int exists = find_in_directory(parent_cluster, target_83, &entry, &dir_lba, &dir_offset);
+
+    if (exists && ((entry.attr & FAT_ATTR_DIRECTORY) || !entry_allowed(&entry, FS_ACCESS_WRITE))) return -1;
+    if (!exists && !parent_writable(filename)) return -1;
+    fs_stat_t metadata = exists ? entry_stat(&entry) :
+        (fs_stat_t){user_uid(), user_gid(), 0644};
 
     if (exists) {
         uint32_t old_cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
@@ -495,6 +579,7 @@ int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes)
     fat32_dir_entry_t* dir_ptr = (fat32_dir_entry_t*)&sector_buffer[dir_offset];
     for (int i = 0; i < 11; i++) dir_ptr->name[i] = target_83[i];
     dir_ptr->attr = FAT_ATTR_ARCHIVE;
+    entry_set_stat(dir_ptr, metadata);
     dir_ptr->first_cluster_hi = (uint16_t)(first_cluster >> 16);
     dir_ptr->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
     dir_ptr->file_size = size_bytes;

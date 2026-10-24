@@ -1,5 +1,6 @@
 #include "../../kernel/mutex.h"
 #include "app_loader.h"
+#include "../../kernel/fs.h"
 #include "../../kernel/task.h"
 #include "../../kernel/paging.h"
 #include "../../kernel/net/ipv4.h"
@@ -114,7 +115,8 @@ static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
     }
     if (name[length]) return -1;
 
-    int bytes = api->fs.read(name, (uint8_t*)APP_VIRTUAL_BASE, APP_LOAD_LIMIT);
+    int bytes = fs_access(name, FS_ACCESS_READ | FS_ACCESS_EXEC) ?
+        api->fs.read(name, (uint8_t*)APP_VIRTUAL_BASE, APP_LOAD_LIMIT) : -1;
     if (bytes > 0) return bytes;
 
     if (length >= FS_MAX_FILENAME - 5) return bytes;
@@ -123,6 +125,7 @@ static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
     destination[length++] = 'i';
     destination[length++] = 'n';
     destination[length] = '\0';
+    if (!fs_access((const char*)destination, FS_ACCESS_READ | FS_ACCESS_EXEC)) return -1;
     return api->fs.read((const char*)destination, (uint8_t*)APP_VIRTUAL_BASE,
                         APP_LOAD_LIMIT);
 }
