@@ -1,10 +1,11 @@
 #ifndef NIXEL_BROWSER_STYLE_H
 #define NIXEL_BROWSER_STYLE_H
 #include "../dom/document.h"
+#include "../parser/css_color.h"
 #define BROWSER_CSS_RULES 160
-#define BROWSER_CSS_PROPERTIES 40
+#define BROWSER_CSS_PROPERTIES 42
 #define BROWSER_GRID_TRACKS 8
-#define BROWSER_CURRENT_COLOR 0x01000000u
+#define BROWSER_CURRENT_COLOR BROWSER_CSS_CURRENT_COLOR
 enum { BROWSER_TOP, BROWSER_RIGHT, BROWSER_BOTTOM, BROWSER_LEFT };
 
 enum { BROWSER_INLINE, BROWSER_BLOCK, BROWSER_HIDDEN, BROWSER_FLEX, BROWSER_GRID };
@@ -15,8 +16,10 @@ enum { BROWSER_CROSS_START, BROWSER_CROSS_END, BROWSER_CROSS_CENTER, BROWSER_CRO
 enum { BROWSER_TRACK_PX, BROWSER_TRACK_FR, BROWSER_TRACK_AUTO, BROWSER_TRACK_PERCENT };
 typedef struct { int kind, value; } browser_grid_track;
 typedef struct {
-    unsigned color, background;
-    int bold, display, pre, align, underline, background_set;
+    unsigned color, background, painted_background; /* Resolved against the containing backdrop. */
+    unsigned text_rgb, text_alpha, background_rgb, background_alpha, border_alpha;
+    int text_transform, visibility_hidden;
+    int bold, display, pre, align, underline, background_set; /* decoration bits: underline=1, strike=2, overline=4 */
     int margin[4], padding[4];
     /* Widths: -1=auto, -(percentage+2)=percentage, otherwise pixels. */
     int width, max_width, height, min_height;

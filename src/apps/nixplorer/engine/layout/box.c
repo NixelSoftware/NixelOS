@@ -38,8 +38,9 @@ void browser_box_begin(browser_box *b, const browser_style *s,
     b->content_y = b->y + b->border + b->padding_top;
     b->margin_bottom = clamp(s->margin[BROWSER_BOTTOM], 4096);
     b->height = 0; b->background = s->background;
-    b->paint_background = s->background_set;
-    b->border_color = s->border_color == BROWSER_CURRENT_COLOR ? s->color : s->border_color;
+    b->paint_background = s->background_set; b->visibility_hidden = s->visibility_hidden;
+    b->border_color = browser_css_blend(s->border_color == BROWSER_CURRENT_COLOR ? s->text_rgb : s->border_color,
+                                       s->border_color == BROWSER_CURRENT_COLOR ? s->text_alpha : s->border_alpha, s->background);
 }
 int browser_box_finish(browser_box *b, const browser_style *s, int content_bottom) {
     int content = content_bottom - b->content_y;

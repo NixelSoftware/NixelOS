@@ -9,7 +9,7 @@ typedef struct {
     int content_x, content_y, content_width;
     int padding_top, padding_bottom, border, margin_bottom;
     unsigned background, border_color;
-    int paint_background;
+    int paint_background, visibility_hidden;
 } browser_box;
 void browser_box_begin(browser_box *box, const browser_style *style,
                          int container_x, int container_width, int top);

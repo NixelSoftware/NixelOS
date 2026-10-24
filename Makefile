@@ -130,11 +130,13 @@ BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/layout/box.c \
              $(NIXPLORER_DIR)/engine/layout/flex.c \
              $(NIXPLORER_DIR)/engine/layout/grid.c \
-             $(NIXPLORER_DIR)/engine/parser/css_grid.c
+             $(NIXPLORER_DIR)/engine/parser/css_grid.c \
+             $(NIXPLORER_DIR)/engine/parser/css_color.c
 BROWSER_OBJ := $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
 BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
 $(NIXPLORER_DIR)/engine/parser/html.o: $(NIXPLORER_DIR)/engine/parser/entities.inc
+$(NIXPLORER_DIR)/engine/parser/css_color.o: $(NIXPLORER_DIR)/engine/parser/colors.inc
 src/system/graphics/image/png.o: $(NIXPLORER_DIR)/engine/paint/png.c $(NIXPLORER_DIR)/engine/paint/png.h
 
 browser.bin: Makefile $(BROWSER_OBJ)

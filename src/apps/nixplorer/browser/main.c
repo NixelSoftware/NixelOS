@@ -35,13 +35,16 @@ typedef struct {
     uint8_t flags[LINE_MAX_CHARS];
     int indent, offset, top, height;
     int8_t image_index;
+    uint8_t hidden_image;
 } render_line_t;
 
 typedef struct { char url[MAX_URL_LEN]; int line, start, length, anchor; } link_t;
 typedef struct {
     char name[32], value[CONTROL_VALUE_LEN], label[CONTROL_VALUE_LEN];
     int line, start, width, form;
-    uint8_t type, checked, disabled;
+    uint8_t type, checked, disabled, visibility_hidden;
+    unsigned foreground, background;
+    int text_transform, bold;
 } control_t;
 typedef struct { char action[MAX_URL_LEN]; uint8_t post; } form_t;
 enum { CONTROL_TEXT, CONTROL_PASSWORD, CONTROL_CHECKBOX, CONTROL_RADIO, CONTROL_SUBMIT, CONTROL_BUTTON, CONTROL_HIDDEN };
@@ -270,11 +273,14 @@ static void layout_char(char ch, const browser_style* style, int indent, int anc
     if (!layout_length) { layout_indent = indent; layout_align = style->align; }
     if (style->line_height > layout_height) layout_height = style->line_height;
     render_line_t* line = &lines[num_lines];
+    if (style->text_transform == 1 && ch >= 'a' && ch <= 'z') ch -= 32;
+    if (style->text_transform == 2 && ch >= 'A' && ch <= 'Z') ch += 32;
     line->text[layout_length] = ch;
     line->colors[layout_length] = style->color;
     line->backgrounds[layout_length] = style->background;
-    line->flags[layout_length] = (style->bold ? 1 : 0) | (style->underline ? 2 : 0);
-    if (anchor >= 0) {
+    line->flags[layout_length] = (style->bold ? 1 : 0) | ((style->underline & 1) ? 2 : 0) |
+                                 ((style->underline & 2) ? 4 : 0) | ((style->underline & 4) ? 8 : 0) | (style->visibility_hidden ? 16 : 0);
+    if (anchor >= 0 && !style->visibility_hidden) {
         link_t* last = num_links ? &links[num_links - 1] : 0;
         if (last && last->line == num_lines && last->anchor == anchor && last->start + last->length == layout_length) last->length++;
         else if (num_links < MAX_LINKS) {
@@ -349,6 +355,10 @@ static void layout_control(int index, int form, const browser_style* style, int 
     else if (text_equals(type, "hidden")) c->type = CONTROL_HIDDEN;
     c->checked = browser_node_attr(node, "checked", flag, sizeof(flag));
     c->disabled = browser_node_attr(node, "disabled", flag, sizeof(flag));
+    c->visibility_hidden = style->visibility_hidden;
+    c->background = style->background_set ? style->background : COLOR_WHITE;
+    c->foreground = browser_css_blend(style->text_rgb, style->text_alpha, c->background);
+    c->text_transform = style->text_transform; c->bold = style->bold;
     c->form = form; c->line = -1; c->start = 0; c->width = 0;
     browser_node_attr(node, "name", c->name, sizeof(c->name));
     int has_value = browser_node_attr(node, "value", c->value, sizeof(c->value));
@@ -670,7 +680,7 @@ static void layout_node(int index, int form, int indent, int anchor, unsigned de
             render_line_t* line = &lines[num_lines++];
             image_sizes[num_images] = size;
             line->image_index = num_images++; line->offset = indent; line->indent = indent; line->text[0] = 0;
-            line->top = layout_y; line->height = USER_WINDOW_IMAGE_TARGET_H + 4;
+            line->top = layout_y; line->height = USER_WINDOW_IMAGE_TARGET_H + 4; line->hidden_image = style->visibility_hidden;
             layout_y += line->height;
         } else {
             layout_literal(alt[0] ? alt : "[Image]", style, indent, anchor); layout_flush(0);
@@ -712,7 +722,8 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
     }
     browser_stylesheet_collect(&page_stylesheet, &page_document, load_stylesheet, 0);
     browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
-                          .line_height = 12, .width = -1, .max_width = -1, .height = -1};
+                          .line_height = 12, .width = -1, .max_width = -1, .height = -1,
+                          .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE};
     node_styles[0] = root;
     for (int i = 1; i < page_document.count; i++)
         browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
@@ -731,7 +742,7 @@ static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t
 
 static void draw_control(const control_t* control, int row_x, int row_y) {
     int x = row_x + control->start * 8, width = control->width;
-    if (width <= 0) return;
+    if (width <= 0 || control->visibility_hidden) return;
     char label[LINE_MAX_CHARS]; int used = 0;
     if (control->type == CONTROL_CHECKBOX || control->type == CONTROL_RADIO) {
         if (used < width) label[used++] = control->type == CONTROL_RADIO ? '(' : '[';
@@ -750,8 +761,13 @@ static void draw_control(const control_t* control, int row_x, int row_y) {
         while (used < width) label[used++] = ' ';
     }
     label[used] = 0;
-    browser_user_fill_rect(x, row_y, width * 8, 12, control->disabled ? COLOR_WIN_BG : COLOR_WHITE);
-    browser_user_draw_string(x, row_y, label, control->disabled ? COLOR_DARK_GRAY : COLOR_BLACK);
+    for (int i = 0; i < used; i++) {
+        if (control->text_transform == 1 && label[i] >= 'a' && label[i] <= 'z') label[i] -= 32;
+        if (control->text_transform == 2 && label[i] >= 'A' && label[i] <= 'Z') label[i] += 32;
+    }
+    browser_user_fill_rect(x, row_y, width * 8, 12, control->disabled ? COLOR_WIN_BG : control->background);
+    browser_user_draw_string(x, row_y, label, control->disabled ? COLOR_DARK_GRAY : control->foreground);
+    if (control->bold) browser_user_draw_string(x + 1, row_y, label, control->disabled ? COLOR_DARK_GRAY : control->foreground);
     if (control->type == CONTROL_TEXT || control->type == CONTROL_PASSWORD) browser_user_fill_rect(x, row_y + 11, width * 8, 1, COLOR_DARK_GRAY);
 }
 static int browser_max_scroll(int canvas_height) {
@@ -770,6 +786,7 @@ static void paint_clipped(int x, int y, int width, int height, unsigned color,
 static void draw_page_boxes(int left, int top, int right, int bottom) {
     for (int i = 0; i < num_boxes; i++) {
         const browser_box* b = &page_boxes[i];
+        if (b->visibility_hidden) continue;
         int x = left + b->x, y = top + b->y - scroll_y;
         if (b->paint_background) paint_clipped(x, y, b->width, b->height, b->background, left, top, right, bottom);
         if (b->border) {
@@ -820,7 +837,7 @@ static void browser_draw(browser_window_t* win) {
         if (row_top + height <= page_top) continue;
         if (row_top >= page_bottom) continue;
         if (lines[i].image_index >= 0) {
-            if (row_top < page_top || row_top + USER_WINDOW_IMAGE_TARGET_H > page_bottom) continue;
+            if (lines[i].hidden_image || row_top < page_top || row_top + USER_WINDOW_IMAGE_TARGET_H > page_bottom) continue;
             int img_x = canvas_x + 8 + lines[i].offset;
             int idx = lines[i].image_index;
             browser_user_png_render(image_pool[idx], image_sizes[idx], img_x, row_top, USER_WINDOW_IMAGE_TARGET_W, USER_WINDOW_IMAGE_TARGET_H);
@@ -832,6 +849,7 @@ static void browser_draw(browser_window_t* win) {
             int stop = start + 1;
             while (lines[i].text[stop] && lines[i].colors[stop] == lines[i].colors[start] &&
                    lines[i].backgrounds[stop] == lines[i].backgrounds[start] && lines[i].flags[stop] == lines[i].flags[start]) stop++;
+            if (lines[i].flags[start] & 16) { start = stop; continue; }
             char run[LINE_MAX_CHARS];
             for (int j = start; j < stop; j++) run[j - start] = lines[i].text[j];
             run[stop - start] = 0;
@@ -840,6 +858,8 @@ static void browser_draw(browser_window_t* win) {
             if (text_y >= page_top && text_y + 12 <= page_bottom) {
                 browser_user_draw_string(run_x, text_y, run, lines[i].colors[start]);
                 if (lines[i].flags[start] & 1) browser_user_draw_string(run_x + 1, text_y, run, lines[i].colors[start]);
+                if (lines[i].flags[start] & 4) browser_user_fill_rect(run_x, text_y + 5, width, 1, lines[i].colors[start]);
+                if (lines[i].flags[start] & 8) browser_user_fill_rect(run_x, text_y, width, 1, lines[i].colors[start]);
                 if (lines[i].flags[start] & 2) browser_user_fill_rect(run_x, text_y + 10, width, 1, lines[i].colors[start]);
             }
             start = stop;
@@ -1125,7 +1145,7 @@ static void browser_handle_mouse(browser_window_t* win, int32_t lx, int32_t ly, 
     int col = local_x / 8;
     for (int i = 0; i < num_controls; i++) {
         control_t* c = &controls[i];
-        if (c->line != row || c->disabled || col < c->start || col >= c->start + c->width) continue;
+        if (c->line != row || c->disabled || c->visibility_hidden || col < c->start || col >= c->start + c->width) continue;
         active_control = i; control_editing = 0;
         if (c->type == CONTROL_RADIO) {
             for (int j = 0; j < num_controls; j++)

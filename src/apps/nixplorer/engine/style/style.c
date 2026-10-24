@@ -200,47 +200,6 @@ static int matches(const browser_document *doc, int node, const browser_css_rule
     unsigned budget = 4096;
     return count && match_components(doc, node, parts, count - 1, &budget);
 }
-static int hex(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    c = lower(c); return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
-}
-static int color(const char *p, const char *end, unsigned *out) {
-    if (p < end && *p == '#') {
-        unsigned n = (unsigned)(end - ++p), value = 0;
-        if (n != 3 && n != 6) return 0;
-        for (; p < end; p++) {
-            int h = hex(*p); if (h < 0) return 0;
-            value = n == 3 ? (value << 8) | (unsigned)h * 17 : (value << 4) | (unsigned)h;
-        }
-        *out = value; return 1;
-    }
-    static const struct { const char *name; unsigned value; } colors[] = {
-        {"black",0},{"white",0xffffff},{"red",0xff0000},{"green",0x008000},
-        {"blue",0x0000ff},{"yellow",0xffff00},{"gray",0x808080},{"grey",0x808080},
-        {"silver",0xc0c0c0},{"maroon",0x800000},{"navy",0x000080},{"purple",0x800080},
-        {"teal",0x008080},{"aqua",0x00ffff},{"lime",0x00ff00},{"fuchsia",0xff00ff},
-        {"olive",0x808000},{"orange",0xffa500}
-    };
-    for (unsigned i = 0; i < sizeof(colors) / sizeof(colors[0]); i++)
-        if (equal(p, end, colors[i].name, 1)) { *out = colors[i].value; return 1; }
-    if (end - p >= 5 && lower(p[0]) == 'r' && lower(p[1]) == 'g' && lower(p[2]) == 'b' && p[3] == '(' && end[-1] == ')') {
-        unsigned value = 0; p += 4; end--;
-        for (int i = 0; i < 3; i++) {
-            p = skip(p, end); unsigned channel = 0, digits = 0;
-            while (p < end && *p >= '0' && *p <= '9') {
-                channel = channel * 10 + (unsigned)(*p++ - '0');
-                if (channel > 255) return 0;
-                digits++;
-            }
-            if (!digits) return 0;
-            value = (value << 8) | channel; p = skip(p, end);
-            if (i < 2) { if (p == end || *p++ != ',') return 0; }
-        }
-        if (p != end) return 0;
-        *out = value; return 1;
-    }
-    return 0;
-}
 enum {
     P_COLOR, P_BG, P_BOLD, P_DISPLAY, P_PRE, P_ALIGN, P_UNDERLINE,
     P_MARGIN_TOP, P_MARGIN_RIGHT, P_MARGIN_BOTTOM, P_MARGIN_LEFT,
@@ -249,7 +208,8 @@ enum {
     P_BORDER_WIDTH, P_BORDER_COLOR, P_BORDER_STYLE, P_BOX_SIZING, P_LINE_HEIGHT,
     P_FLEX_DIRECTION, P_FLEX_WRAP, P_JUSTIFY, P_ALIGN_ITEMS, P_ROW_GAP, P_COLUMN_GAP,
     P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_ALIGN_SELF,
-    P_GRID_TRACKS, P_GRID_AUTO_ROWS, P_GRID_COLUMN, P_GRID_SPAN, P_JUSTIFY_ITEMS, P_JUSTIFY_SELF
+    P_GRID_TRACKS, P_GRID_AUTO_ROWS, P_GRID_COLUMN, P_GRID_SPAN, P_JUSTIFY_ITEMS, P_JUSTIFY_SELF,
+    P_TEXT_TRANSFORM, P_VISIBILITY
 };
 static void apply_property(browser_style *s, unsigned *ranks, unsigned priority, int property, int value) {
     if (priority < ranks[property]) return;
@@ -257,8 +217,8 @@ static void apply_property(browser_style *s, unsigned *ranks, unsigned priority,
     if (property >= P_MARGIN_TOP && property <= P_MARGIN_LEFT) s->margin[property - P_MARGIN_TOP] = value;
     else if (property >= P_PADDING_TOP && property <= P_PADDING_LEFT) s->padding[property - P_PADDING_TOP] = value;
     else switch (property) {
-        case P_COLOR: s->color = (unsigned)value; break;
-        case P_BG: s->background = (unsigned)value; s->background_set = 1; break;
+        case P_COLOR: s->text_rgb = (unsigned)value; break;
+        case P_BG: s->background_rgb = (unsigned)value; s->background_set = 1; break;
         case P_BOLD: s->bold = value; break;
         case P_DISPLAY: s->display = value; break;
         case P_PRE: s->pre = value; break;
@@ -288,6 +248,8 @@ static void apply_property(browser_style *s, unsigned *ranks, unsigned priority,
         case P_GRID_SPAN: s->grid_span = value; break;
         case P_JUSTIFY_ITEMS: s->justify_items = value; break;
         case P_JUSTIFY_SELF: s->justify_self = value; break;
+        case P_TEXT_TRANSFORM: s->text_transform = value; break;
+        case P_VISIBILITY: s->visibility_hidden = value; break;
     }
 }
 /* Length encoding: -1=auto; -(percentage+2)=percentage; nonnegative=px. */
@@ -488,28 +450,31 @@ static void box_declaration(browser_style *s, const browser_style *parent, unsig
     }
     if (equal(name, name_end, "border", 1)) {
         int width = 3, solid = 0, saw_width = 0, saw_style = 0, saw_color = 0;
-        unsigned rgb = BROWSER_CURRENT_COLOR;
+        unsigned rgb = BROWSER_CURRENT_COLOR, alpha = 255;
         const char *p = v;
         while ((p = skip(p, end)) < end) {
             const char *stop = value_end(p, end); int pixels;
+            browser_css_color candidate;
             if (!saw_width && border_width_value(p, stop, &pixels)) { width = pixels; saw_width = 1; }
             else if (!saw_style && (equal(p, stop, "solid", 1) || equal(p, stop, "none", 1) || equal(p, stop, "hidden", 1))) { solid = equal(p, stop, "solid", 1); saw_style = 1; }
             else if (!saw_color && equal(p, stop, "currentcolor", 1)) { rgb = BROWSER_CURRENT_COLOR; saw_color = 1; }
-            else if (!saw_color && color(p, stop, &rgb)) saw_color = 1;
+            else if (!saw_color && browser_css_parse_color(p, stop, &candidate)) { rgb = candidate.rgb; alpha = candidate.alpha; saw_color = 1; }
             else return;
             p = stop;
         }
         if (!saw_width && !saw_style && !saw_color) return;
         apply_property(s, ranks, priority, P_BORDER_WIDTH, width);
         apply_property(s, ranks, priority, P_BORDER_STYLE, solid);
-        apply_property(s, ranks, priority, P_BORDER_COLOR, (int)rgb);
+        if (priority >= ranks[P_BORDER_COLOR]) {
+            apply_property(s, ranks, priority, P_BORDER_COLOR, (int)rgb); s->border_alpha = alpha;
+        }
     } else if (equal(name, name_end, "border-width", 1)) {
         if (border_width_value(v, end, &value)) apply_property(s, ranks, priority, P_BORDER_WIDTH, value);
     } else if (equal(name, name_end, "border-color", 1)) {
-        unsigned rgb;
-        if (equal(v, end, "currentcolor", 1)) rgb = BROWSER_CURRENT_COLOR;
-        else if (!color(v, end, &rgb)) return;
-        apply_property(s, ranks, priority, P_BORDER_COLOR, (int)rgb);
+        browser_css_color candidate;
+        if (priority >= ranks[P_BORDER_COLOR] && browser_css_parse_color(v, end, &candidate)) {
+            apply_property(s, ranks, priority, P_BORDER_COLOR, (int)candidate.rgb); s->border_alpha = candidate.alpha;
+        }
     } else if (equal(name, name_end, "border-style", 1)) {
         if (equal(v, end, "solid", 1) || equal(v, end, "none", 1) || equal(v, end, "hidden", 1))
             apply_property(s, ranks, priority, P_BORDER_STYLE, equal(v, end, "solid", 1));
@@ -552,19 +517,22 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             if (!equal(important, ve, "important", 1)) { p = semi < end ? semi + 1 : end; continue; }
             priority |= 0x80000000u; ve = trim(v, bang);
         }
-        int property = -1, value = 0; unsigned rgb;
+        int property = -1, value = 0; unsigned alpha = 255; browser_css_color candidate;
         int inherit = equal(v, ve, "inherit", 1);
         if (equal(p, name_end, "color", 1)) {
-            if (inherit) { property = P_COLOR; value = (int)parent->color; }
-            else if (color(v, ve, &rgb)) { property = P_COLOR; value = (int)rgb; }
+            if (inherit || equal(v, ve, "unset", 1) || equal(v, ve, "currentcolor", 1)) {
+                property = P_COLOR; value = (int)parent->text_rgb; alpha = parent->text_alpha;
+            } else if (equal(v, ve, "initial", 1)) property = P_COLOR;
+            else if (browser_css_parse_color(v, ve, &candidate)) { property = P_COLOR; value = (int)(candidate.rgb == BROWSER_CURRENT_COLOR ? parent->text_rgb : candidate.rgb); alpha = candidate.rgb == BROWSER_CURRENT_COLOR ? parent->text_alpha : candidate.alpha; }
         } else if (equal(p, name_end, "background-color", 1) || equal(p, name_end, "background", 1)) {
-            if (inherit) { property = P_BG; value = (int)parent->background; }
-            else if (equal(v, ve, "transparent", 1)) { property = P_BG; value = (int)parent->background; }
-            else if (color(v, ve, &rgb)) { property = P_BG; value = (int)rgb; }
+            if (inherit) { property = P_BG; value = (int)parent->background_rgb; alpha = parent->background_alpha; }
+            else if (equal(v, ve, "initial", 1) || equal(v, ve, "unset", 1)) { property = P_BG; alpha = 0; }
+            else if (browser_css_parse_color(v, ve, &candidate)) { property = P_BG; value = (int)candidate.rgb; alpha = candidate.alpha; }
         } else if (equal(p, name_end, "font-weight", 1)) {
             if (inherit) { property = P_BOLD; value = parent->bold; }
             else if (equal(v, ve, "bold", 1) || equal(v, ve, "bolder", 1) || equal(v, ve, "700", 0) || equal(v, ve, "800", 0) || equal(v, ve, "900", 0)) { property = P_BOLD; value = 1; }
             else if (equal(v, ve, "normal", 1) || equal(v, ve, "400", 0)) property = P_BOLD;
+            else { int weight; if (flex_number(v, ve, &weight) && weight >= 100 && weight <= 900 && weight % 100 == 0) { property = P_BOLD; value = weight >= 600; } }
         } else if (equal(p, name_end, "display", 1)) {
             if (equal(v, ve, "flex", 1) || equal(v, ve, "inline-flex", 1)) { property = P_DISPLAY; value = BROWSER_FLEX; }
             else if (equal(v, ve, "grid", 1) || equal(v, ve, "inline-grid", 1)) { property = P_DISPLAY; value = BROWSER_GRID; }
@@ -580,12 +548,36 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             else if (equal(v, ve, "left", 1)) property = P_ALIGN;
             else if (equal(v, ve, "center", 1)) { property = P_ALIGN; value = BROWSER_ALIGN_CENTER; }
             else if (equal(v, ve, "right", 1)) { property = P_ALIGN; value = BROWSER_ALIGN_RIGHT; }
-        } else if (equal(p, name_end, "text-decoration", 1)) {
-            if (equal(v, ve, "underline", 1)) { property = P_UNDERLINE; value = 1; }
-            else if (equal(v, ve, "grid", 1) || equal(v, ve, "inline-grid", 1)) { property = P_DISPLAY; value = BROWSER_GRID; }
-            else if (equal(v, ve, "none", 1)) property = P_UNDERLINE;
+        } else if (equal(p, name_end, "text-decoration", 1) || equal(p, name_end, "text-decoration-line", 1)) {
+            if (inherit) { property = P_UNDERLINE; value = parent->underline; }
+            else if (equal(v, ve, "none", 1) || equal(v, ve, "initial", 1)) property = P_UNDERLINE;
+            else {
+                const char *q = v; int bits = 0, valid = 1;
+                while ((q = skip(q, ve)) < ve) {
+                    const char *stop = value_end(q, ve);
+                    if (equal(q, stop, "underline", 1)) bits |= 1;
+                    else if (equal(q, stop, "line-through", 1)) bits |= 2;
+                    else if (equal(q, stop, "overline", 1)) bits |= 4;
+                    else { valid = 0; break; }
+                    q = stop;
+                }
+                if (valid && bits) { property = P_UNDERLINE; value = bits; }
+            }
+        } else if (equal(p, name_end, "text-transform", 1)) {
+            if (inherit || equal(v, ve, "unset", 1)) { property = P_TEXT_TRANSFORM; value = parent->text_transform; }
+            else if (equal(v, ve, "none", 1) || equal(v, ve, "initial", 1)) property = P_TEXT_TRANSFORM;
+            else if (equal(v, ve, "uppercase", 1)) { property = P_TEXT_TRANSFORM; value = 1; }
+            else if (equal(v, ve, "lowercase", 1)) { property = P_TEXT_TRANSFORM; value = 2; }
+        } else if (equal(p, name_end, "visibility", 1)) {
+            if (inherit || equal(v, ve, "unset", 1)) { property = P_VISIBILITY; value = parent->visibility_hidden; }
+            else if (equal(v, ve, "visible", 1) || equal(v, ve, "initial", 1)) property = P_VISIBILITY;
+            else if (equal(v, ve, "hidden", 1)) { property = P_VISIBILITY; value = 1; }
         } else box_declaration(style, parent, ranks, priority, p, name_end, v, ve);
-        if (property >= 0) apply_property(style, ranks, priority, property, value);
+        if (property >= 0 && priority >= ranks[property]) {
+            apply_property(style, ranks, priority, property, value);
+            if (property == P_COLOR) style->text_alpha = alpha;
+            if (property == P_BG) style->background_alpha = alpha;
+        }
         p = semi < end ? semi + 1 : end;
     }
 }
@@ -595,6 +587,7 @@ void browser_style_compute(const browser_document *doc, int index,
     const browser_node *node = &doc->nodes[index];
     *style = *parent;
     style->display = BROWSER_INLINE; style->background_set = 0;
+    style->background_rgb = style->background_alpha = 0; style->border_alpha = 255;
     for (int i = 0; i < 4; i++) style->margin[i] = style->padding[i] = 0;
     style->width = style->max_width = style->height = -1; style->min_height = 0;
     style->border_width = 3; style->border_solid = style->border_box = 0;
@@ -613,8 +606,10 @@ void browser_style_compute(const browser_document *doc, int index,
     for (unsigned i = 0; i < sizeof(hidden) / sizeof(hidden[0]); i++) if (browser_node_is(node, hidden[i])) style->display = BROWSER_HIDDEN;
     if (browser_node_is(node, "b") || browser_node_is(node, "strong") || browser_node_is(node, "th") ||
         (node->tag[0] == 'h' && node->tag[1] >= '1' && node->tag[1] <= '6' && !node->tag[2])) style->bold = 1;
-    if (browser_node_is(node, "a")) { char href[2]; if (browser_node_attr(node, "href", href, sizeof(href))) { style->color = 0xff; style->underline = 1; } }
-    if (browser_node_is(node, "u")) style->underline = 1;
+    if (browser_node_is(node, "a")) { char href[2]; if (browser_node_attr(node, "href", href, sizeof(href))) { style->text_rgb = 0xff; style->text_alpha = 255; style->underline = 1; } }
+    if (browser_node_is(node, "u") || browser_node_is(node, "ins")) style->underline |= 1;
+    if (browser_node_is(node, "s") || browser_node_is(node, "del") || browser_node_is(node, "strike")) style->underline |= 2;
+    if (browser_node_is(node, "mark")) { style->background_rgb = 0xffff00; style->background_alpha = 255; style->background_set = 1; style->text_rgb = 0; style->text_alpha = 255; }
     if (browser_node_is(node, "pre") || browser_node_is(node, "textarea")) style->pre = 1;
     unsigned ranks[BROWSER_CSS_PROPERTIES] = {0};
     for (int i = 0; i < sheet->count; i++) {
@@ -629,4 +624,9 @@ void browser_style_compute(const browser_document *doc, int index,
     }
     char hidden_attr[1];
     if (browser_node_attr(node, "hidden", hidden_attr, sizeof(hidden_attr))) style->display = BROWSER_HIDDEN;
+    unsigned bg = style->background_rgb == BROWSER_CURRENT_COLOR ? style->text_rgb : style->background_rgb;
+    unsigned bg_alpha = style->background_rgb == BROWSER_CURRENT_COLOR ? style->text_alpha : style->background_alpha;
+    style->background = browser_css_blend(bg, bg_alpha, parent->painted_background);
+    style->painted_background = style->visibility_hidden ? parent->painted_background : style->background;
+    style->color = browser_css_blend(style->text_rgb, style->text_alpha, style->background);
 }
