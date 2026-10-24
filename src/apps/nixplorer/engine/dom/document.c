@@ -1,8 +1,5 @@
-/* Freestanding document-tree adapter. Reference architecture:
- * Netzhaut lib/nh-html/Parser/{Tokenizer,TreeConstruction}.c and lib/nh-dom.
- * This bounded implementation does not implement all HTML5 insertion modes. */
 #include "document.h"
-#include "html.h"
+#include "../parser/html.h"
 
 static char lower(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int alpha(char c) { c = lower(c); return c >= 'a' && c <= 'z'; }

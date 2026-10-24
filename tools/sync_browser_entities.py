@@ -22,4 +22,4 @@ output = '''/* Netzhaut - Web Browser Engine
 static const char *const entity_names[] = {%s};
 static const unsigned entity_values[] = {%s};
 ''' % (hashlib.sha256(raw).hexdigest(), names, values)
-(root / 'src/apps/browser/netzhaut/entities.inc').write_text(output)
+(root / 'src/apps/nixplorer/engine/parser/entities.inc').write_text(output)

@@ -1,11 +1,11 @@
-#include "../../kernel/types.h"
-#include "../../kernel/os_api.h"
-#include "../../kernel/window.h"
-#include "../../system/user/sys_api.h"
-#include "netzhaut/html.h"
-#include "netzhaut/document.h"
-#include "netzhaut/style.h"
-#include "http.h"
+#include "../engine/platform/nixel.h"
+#include "../engine/parser/html.h"
+#include "../engine/font/font.h"
+#include "../engine/dom/document.h"
+#include "../engine/style/style.h"
+#include "../engine/layout/box.h"
+#include "../engine/layout/flex.h"
+#include "../engine/net/http.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -34,7 +34,7 @@ typedef struct {
     char text[LINE_MAX_CHARS];
     uint32_t colors[LINE_MAX_CHARS], backgrounds[LINE_MAX_CHARS];
     uint8_t flags[LINE_MAX_CHARS];
-    int indent, offset;
+    int indent, offset, top, height;
     int8_t image_index;
 } render_line_t;
 
@@ -332,6 +332,8 @@ static void set_status(const char* msg) {
 static browser_document page_document;
 static browser_stylesheet page_stylesheet;
 static browser_style node_styles[BROWSER_DOM_NODES];
+static browser_box page_boxes[BROWSER_DOM_NODES];
+static int num_boxes, layout_y, layout_right, layout_height;
 static unsigned page_background = COLOR_WHITE;
 static char page_url[MAX_URL_LEN], page_base_url[MAX_URL_LEN];
 #define MAX_PAGE_STYLESHEETS 4
@@ -360,16 +362,18 @@ static void layout_flush(int force) {
     render_line_t* line = &lines[num_lines];
     line->text[layout_length] = 0;
     line->indent = layout_indent;
-    int available = browser_win.w - 36 - layout_indent;
+    int available = layout_right - layout_indent;
     int extra = available - layout_length * 8;
     line->offset = layout_indent + (extra > 0 ? (layout_align == BROWSER_ALIGN_CENTER ? extra / 2 : layout_align == BROWSER_ALIGN_RIGHT ? extra : 0) : 0);
     line->image_index = -1;
+    line->top = layout_y; line->height = layout_height < 12 ? 12 : layout_height;
+    layout_y += line->height;
     num_lines++;
-    layout_length = 0; layout_pending_space = 0;
+    layout_length = 0; layout_pending_space = 0; layout_height = 12;
 }
 static int layout_columns(int indent) {
-    int columns = (browser_win.w - 36 - indent) / 8;
-    if (columns < 8) columns = 8;
+    int columns = (layout_right - indent) / 8;
+    if (columns < 1) columns = 1;
     if (columns > LINE_MAX_CHARS - 1) columns = LINE_MAX_CHARS - 1;
     return columns;
 }
@@ -378,6 +382,7 @@ static void layout_char(char ch, const browser_style* style, int indent, int anc
     if (layout_length >= layout_columns(indent)) layout_flush(0);
     if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     if (!layout_length) { layout_indent = indent; layout_align = style->align; }
+    if (style->line_height > layout_height) layout_height = style->line_height;
     render_line_t* line = &lines[num_lines];
     line->text[layout_length] = ch;
     line->colors[layout_length] = style->color;
@@ -410,10 +415,11 @@ static void layout_text(const char* p, const char* end, const browser_style* sty
             }
         }
         p += consumed;
-        char ch = browser_html_display_char(cp);
+        char ch = browser_font_character(cp);
         if (style->pre) {
             if (ch == '\r' || ch == '\n') {
                 if (ch == '\r' && p < end && *p == '\n') p++;
+                if (style->line_height > layout_height) layout_height = style->line_height;
                 layout_flush(1); continue;
             }
             if (ch == '\t') {
@@ -501,59 +507,244 @@ static void layout_hidden_subtree(int index, int form, const browser_style* styl
     for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next)
         layout_hidden_subtree(child, form, style, depth + 1);
 }
-static void layout_node(int index, int form, int indent, int anchor, unsigned depth) {
+enum { LAYOUT_FLEX_ITEM = 1, LAYOUT_FILL_WIDTH = 2 };
+static void layout_node(int, int, int, int, unsigned, int);
+static int flex_blank(const browser_node* node) {
+    if (node->tag[0]) return 0;
+    for (const char* p = node->start; p < node->end; p++)
+        if (*p != ' ' && *p != '\n' && *p != '\r' && *p != '\t' && *p != '\f') return 0;
+    return 1;
+}
+static int flex_intrinsic_width(int index, int available) {
+    int widest = 8, current = 0, pending = 0;
+    for (int i = index; i < page_document.count; i++) {
+        int ancestor = i, hidden = 0;
+        while (ancestor > index) {
+            if (node_styles[ancestor].display == BROWSER_HIDDEN) hidden = 1;
+            ancestor = page_document.nodes[ancestor].parent;
+        }
+        if (ancestor != index) break;
+        if (hidden) continue;
+        const browser_node* node = &page_document.nodes[i];
+        if (node->tag[0]) {
+            if (i != index && (node_styles[i].display == BROWSER_BLOCK || node_styles[i].display == BROWSER_FLEX)) current = 0;
+            if (browser_node_is(node, "input") || browser_node_is(node, "button")) current += 144;
+            else if (browser_node_is(node, "img")) current += PNG_TARGET_W;
+        } else {
+            for (const char* p = node->start; p < node->end;) {
+                unsigned cp = (unsigned char)*p, n = browser_html_reference(p, node->end, 0, &cp);
+                p += n ? n : 1;
+                if (cp == ' ' || cp == '\n' || cp == '\r' || cp == '\t') { pending = current != 0; continue; }
+                current += pending ? 16 : 8; pending = 0;
+                if (current >= available) return available;
+            }
+        }
+        if (current > widest) widest = current;
+    }
+    return widest > available ? available : widest;
+}
+static int flex_outer_width(const browser_style* style, int indent, int available) {
+    browser_box probe;
+    browser_style measured = *style;
+    if (measured.margin[BROWSER_LEFT] < 0) measured.margin[BROWSER_LEFT] = 0;
+    if (measured.margin[BROWSER_RIGHT] < 0) measured.margin[BROWSER_RIGHT] = 0;
+    browser_box_begin(&probe, &measured, indent, available, 0);
+    int right = style->margin[BROWSER_RIGHT] > 0 ? style->margin[BROWSER_RIGHT] : 0;
+    int width = probe.x - indent + probe.width + right;
+    return width > available ? available : width;
+}
+static void flex_translate(browser_flex_item* item, int dx, int dy) {
+    for (int i = item->first_line; i < item->last_line; i++) {
+        lines[i].offset += dx; lines[i].indent += dx; lines[i].top += dy;
+    }
+    for (int i = item->first_box; i < item->last_box; i++) {
+        page_boxes[i].x += dx; page_boxes[i].content_x += dx;
+        page_boxes[i].y += dy; page_boxes[i].content_y += dy;
+    }
+}
+static int flex_cross_alignment(const browser_style* parent, const browser_style* item) {
+    return item->align_self < 0 ? parent->align_items : item->align_self;
+}
+static void layout_flex_children(int index, int form, int indent, int anchor, unsigned depth, int parent_box) {
+    browser_flex_item items[BROWSER_FLEX_ITEMS];
+    const browser_node* node = &page_document.nodes[index];
+    const browser_style* style = &node_styles[index];
+    int count = 0, available = layout_right - indent;
+    for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next) {
+        if (node_styles[child].display == BROWSER_HIDDEN || flex_blank(&page_document.nodes[child])) continue;
+        if (count == BROWSER_FLEX_ITEMS || available < 8) {
+            /* Keep all content available when the bounded flex adapter fills. */
+            layout_truncated = 1;
+            for (int c = node->first_child; c >= 0; c = page_document.nodes[c].next)
+                layout_node(c, form, indent, anchor, depth + 1, 0);
+            return;
+        }
+        browser_flex_item* item = &items[count++];
+        item->node = child;
+        browser_style probe = node_styles[child];
+        if (!style->flex_column && probe.flex_basis != -1) probe.width = probe.flex_basis;
+        if (probe.width == -1) probe.width = flex_intrinsic_width(child, available);
+        item->basis = flex_outer_width(&probe, indent, available);
+        probe.width = 0; probe.max_width = -1;
+        item->minimum = flex_outer_width(&probe, indent, available);
+        probe = node_styles[child]; probe.width = -1;
+        item->maximum = flex_outer_width(&probe, indent, available);
+        item->grow = node_styles[child].flex_grow; item->shrink = node_styles[child].flex_shrink;
+    }
+    for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next)
+        if (node_styles[child].display == BROWSER_HIDDEN) layout_hidden_subtree(child, form, &node_styles[child], depth + 1);
+    if (!count) return;
+    int right = layout_right, start_y = layout_y;
+    int minimum_height = style->height > style->min_height ? style->height : style->min_height;
+    if (style->border_box && parent_box >= 0) minimum_height -= 2 * page_boxes[parent_box].border + page_boxes[parent_box].padding_top + page_boxes[parent_box].padding_bottom;
+    if (minimum_height < 0) minimum_height = 0;
+    if (style->flex_column) {
+        int grow_total = 0;
+        for (int i = 0; i < count; i++) {
+            browser_flex_item* item = &items[i];
+            const browser_style* child_style = &node_styles[item->node];
+            int align = flex_cross_alignment(style, child_style);
+            int width = align == BROWSER_CROSS_STRETCH && child_style->width == -1 ? available : item->basis;
+            int x = indent + (align == BROWSER_CROSS_CENTER ? (available - width) / 2 : align == BROWSER_CROSS_END ? available - width : 0);
+            if (i) layout_y += style->row_gap;
+            int top = layout_y;
+            item->first_line = num_lines; item->first_box = num_boxes;
+            layout_right = x + width;
+            layout_node(item->node, form, x, anchor, depth + 1, LAYOUT_FLEX_ITEM | LAYOUT_FILL_WIDTH);
+            layout_flush(0);
+            item->last_line = num_lines; item->last_box = num_boxes; item->height = layout_y - top;
+            grow_total += item->grow;
+        }
+        int extra = minimum_height - (layout_y - start_y);
+        if (extra < 0) extra = 0;
+        int had_grow = grow_total != 0;
+        int shift = 0, remaining = extra;
+        for (int i = 0; i < count; i++) {
+            browser_flex_item* item = &items[i];
+            int spacing = 0;
+            if (!had_grow) {
+                if (style->justify == BROWSER_JUSTIFY_END) spacing = extra;
+                else if (style->justify == BROWSER_JUSTIFY_CENTER) spacing = extra / 2;
+                else if (style->justify == BROWSER_JUSTIFY_BETWEEN && count > 1) spacing = extra * i / (count - 1);
+                else if (style->justify == BROWSER_JUSTIFY_AROUND) spacing = extra * (2 * i + 1) / (2 * count);
+                else if (style->justify == BROWSER_JUSTIFY_EVENLY) spacing = extra * (i + 1) / (count + 1);
+            }
+            flex_translate(item, 0, shift + spacing);
+            if (grow_total && item->grow) {
+                int added = remaining * item->grow / grow_total;
+                if (item->last_box > item->first_box) page_boxes[item->first_box].height += added;
+                remaining -= added; grow_total -= item->grow; shift += added;
+            }
+        }
+        layout_y += extra;
+    } else {
+        int rows = browser_flex_plan(items, count, available, style->column_gap, style->flex_wrap, style->justify);
+        int cursor = start_y;
+        for (int row = 0; row < rows; row++) {
+            int row_height = 0;
+            for (int i = 0; i < count; i++) {
+                browser_flex_item* item = &items[i];
+                if (item->row != row) continue;
+                layout_y = cursor; layout_right = indent + item->x + item->width;
+                item->first_line = num_lines; item->first_box = num_boxes;
+                layout_node(item->node, form, indent + item->x, anchor, depth + 1, LAYOUT_FLEX_ITEM | LAYOUT_FILL_WIDTH);
+                layout_flush(0);
+                item->last_line = num_lines; item->last_box = num_boxes; item->height = layout_y - cursor;
+                if (item->height > row_height) row_height = item->height;
+            }
+            if (rows == 1 && minimum_height > row_height) row_height = minimum_height;
+            for (int i = 0; i < count; i++) {
+                browser_flex_item* item = &items[i];
+                if (item->row != row) continue;
+                const browser_style* child_style = &node_styles[item->node];
+                int align = flex_cross_alignment(style, child_style), extra = row_height - item->height;
+                int dy = align == BROWSER_CROSS_CENTER ? extra / 2 : align == BROWSER_CROSS_END ? extra : 0;
+                flex_translate(item, 0, dy);
+                if (align == BROWSER_CROSS_STRETCH && child_style->height == -1 && item->last_box > item->first_box)
+                    page_boxes[item->first_box].height += extra;
+            }
+            cursor += row_height;
+            if (row + 1 < rows) cursor += style->row_gap;
+        }
+        layout_y = cursor;
+    }
+    layout_right = right;
+}
+
+static void layout_node(int index, int form, int indent, int anchor, unsigned depth, int item_flags) {
     if (depth >= BROWSER_DOM_DEPTH || num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     const browser_node* node = &page_document.nodes[index];
-    const browser_style* parent = node->parent > 0 ? &node_styles[node->parent] : &node_styles[0];
     browser_style* style = &node_styles[index];
-    browser_style_compute(&page_document, index, &page_stylesheet, parent, style);
     if (style->display == BROWSER_HIDDEN) { layout_hidden_subtree(index, form, style, depth); return; }
-    if (!node->tag[0]) { layout_text(node->start, node->end, style, indent, anchor); return; }
-    if (style->display == BROWSER_BLOCK) layout_flush(0);
-    indent += style->margin_left;
-    int max_indent = browser_win.w - 100;
-    if (indent > max_indent) indent = max_indent > 0 ? max_indent : 0;
+    if (!node->tag[0] && !item_flags) { layout_text(node->start, node->end, style, indent, anchor); return; }
+    int saved_right = layout_right, box = -1;
+    browser_style box_style = *style;
+    if (item_flags & LAYOUT_FILL_WIDTH) box_style.width = -1;
+    if (style->display == BROWSER_BLOCK || style->display == BROWSER_FLEX || item_flags) {
+        layout_flush(0);
+        if (num_boxes == BROWSER_DOM_NODES) { layout_truncated = 1; return; }
+        box = num_boxes++;
+        browser_box_begin(&page_boxes[box], &box_style, indent, layout_right - indent, layout_y);
+        indent = page_boxes[box].content_x;
+        layout_right = indent + page_boxes[box].content_width;
+        layout_y = page_boxes[box].content_y;
+    }
+    if (!node->tag[0]) { layout_text(node->start, node->end, style, indent, anchor); goto finish; }
     if (browser_node_is(node, "body") || browser_node_is(node, "html")) page_background = style->background;
     if (browser_node_is(node, "form")) form = collect_form(node);
     if (browser_node_is(node, "a")) {
         char href[2];
         if (browser_node_attr(node, "href", href, sizeof(href))) anchor = index;
     }
-    if (browser_node_is(node, "br")) { layout_flush(1); return; }
+    if (browser_node_is(node, "br")) { layout_height = style->line_height; layout_flush(1); goto finish; }
     if (browser_node_is(node, "hr")) {
-        layout_flush(0); layout_literal("------------------------------------------------------", style, indent, -1); layout_flush(0); return;
+        layout_flush(0);
+        int columns = layout_columns(indent);
+        while (columns-- > 0) layout_char('-', style, indent, -1);
+        layout_flush(0); goto finish;
     }
     if (browser_node_is(node, "input") || browser_node_is(node, "button")) {
-        layout_control(index, form, style, indent, 1);
-        if (style->display == BROWSER_BLOCK) layout_flush(0);
-        return;
+        layout_control(index, form, style, indent, 1); goto finish;
     }
     if (browser_node_is(node, "li")) { layout_literal("* ", style, indent, -1); indent += 16; }
     if (browser_node_is(node, "blockquote") || browser_node_is(node, "dd")) indent += 16;
+    if (indent > layout_right - 8) indent = layout_right - 8;
     if (browser_node_is(node, "img")) {
         layout_flush(0);
         char src[MAX_URL_LEN], alt[LINE_MAX_CHARS];
         browser_node_attr(node, "src", src, sizeof(src));
         browser_node_attr(node, "alt", alt, sizeof(alt));
         uint32_t size = 0;
-        if (src[0] && num_images < MAX_PAGE_IMAGES && fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) {
+        if (src[0] && num_images < MAX_PAGE_IMAGES && layout_right - indent >= PNG_TARGET_W &&
+            num_lines < MAX_RENDER_LINES && fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) {
             render_line_t* line = &lines[num_lines++];
             image_sizes[num_images] = size;
             line->image_index = num_images++; line->offset = indent; line->indent = indent; line->text[0] = 0;
+            line->top = layout_y; line->height = PNG_TARGET_H + 4;
+            layout_y += line->height;
         } else {
             layout_literal(alt[0] ? alt : "[Image]", style, indent, anchor); layout_flush(0);
         }
-        return;
+        goto finish;
     }
-    for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next) layout_node(child, form, indent, anchor, depth + 1);
+    if (style->display == BROWSER_FLEX) layout_flex_children(index, form, indent, anchor, depth, box);
+    else for (int child = node->first_child; child >= 0; child = page_document.nodes[child].next)
+        layout_node(child, form, indent, anchor, depth + 1, 0);
     if (browser_node_is(node, "td") || browser_node_is(node, "th")) layout_literal(" | ", style, indent, -1);
-    if (style->display == BROWSER_BLOCK) layout_flush(0);
+finish:
+    if (box >= 0) {
+        layout_flush(0);
+        layout_y = browser_box_finish(&page_boxes[box], style, layout_y);
+        layout_right = saved_right;
+    }
 }
+
 static void parse_and_layout_html(const char* doc, uint32_t len) {
     num_lines = num_images = num_links = num_controls = num_forms = 0;
     scroll_y = 0; active_control = -1; control_editing = 0;
     layout_length = layout_indent = layout_pending_space = layout_truncated = 0;
     layout_align = BROWSER_ALIGN_LEFT; page_background = COLOR_WHITE;
+    num_boxes = layout_y = 0; layout_height = 12; layout_right = browser_win.w - 36;
     copy_string(page_url, sizeof(page_url), url_input);
     copy_string(page_base_url, sizeof(page_base_url), page_url);
     num_stylesheets = 0; resource_unavailable = 0;
@@ -569,9 +760,12 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
         }
     }
     browser_stylesheet_collect(&page_stylesheet, &page_document, load_stylesheet, 0);
-    browser_style root = {COLOR_BLACK, COLOR_WHITE, 0, BROWSER_BLOCK, 0, BROWSER_ALIGN_LEFT, 0, 0, 0};
+    browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
+                          .line_height = 12, .width = -1, .max_width = -1, .height = -1};
     node_styles[0] = root;
-    for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0);
+    for (int i = 1; i < page_document.count; i++)
+        browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
+    for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0, 0);
     layout_flush(0);
     if (page_document.truncated || page_stylesheet.truncated) layout_truncated = 1;
 }
@@ -589,15 +783,15 @@ static void draw_control(const control_t* control, int row_x, int row_y) {
     if (width <= 0) return;
     char label[LINE_MAX_CHARS]; int used = 0;
     if (control->type == CONTROL_CHECKBOX || control->type == CONTROL_RADIO) {
-        label[used++] = control->type == CONTROL_RADIO ? '(' : '[';
-        label[used++] = control->checked ? 'x' : ' ';
-        label[used++] = control->type == CONTROL_RADIO ? ')' : ']';
+        if (used < width) label[used++] = control->type == CONTROL_RADIO ? '(' : '[';
+        if (used < width) label[used++] = control->checked ? 'x' : ' ';
+        if (used < width) label[used++] = control->type == CONTROL_RADIO ? ')' : ']';
     } else if (control->type == CONTROL_SUBMIT || control->type == CONTROL_BUTTON) {
         const char* text = control->label[0] ? control->label : control->type == CONTROL_SUBMIT ? "Submit" : "Button";
         label[used++] = '[';
         for (int i = 0; text[i] && used < width - 1; i++) label[used++] = text[i];
         while (used < width - 1) label[used++] = ' ';
-        label[used++] = ']';
+        if (used < width) label[used++] = ']';
     } else {
         int length = text_length(control->value), start = length >= width ? length - width + 1 : 0;
         for (int i = start; i < length && used < width; i++) label[used++] = control->type == CONTROL_PASSWORD ? '*' : control->value[i];
@@ -609,11 +803,32 @@ static void draw_control(const control_t* control, int row_x, int row_y) {
     os->graphics.draw_string(x, row_y, label, control->disabled ? COLOR_DARK_GRAY : COLOR_BLACK);
     if (control->type == CONTROL_TEXT || control->type == CONTROL_PASSWORD) os->graphics.fill_rect(x, row_y + 11, width * 8, 1, COLOR_DARK_GRAY);
 }
-static int render_line_height(int line) { return lines[line].image_index >= 0 ? PNG_TARGET_H + 4 : 12; }
 static int browser_max_scroll(int canvas_height) {
-    int total = 0, start = num_lines;
-    while (start > 0 && total + render_line_height(start - 1) <= canvas_height - 10) total += render_line_height(--start);
-    return start < num_lines ? start : num_lines > 0 ? num_lines - 1 : 0;
+    int maximum = layout_y - (canvas_height - 10);
+    return maximum > 0 ? maximum : 0;
+}
+static void paint_clipped(int x, int y, int width, int height, unsigned color,
+                           int left, int top, int right, int bottom) {
+    int end_x = x + width, end_y = y + height;
+    if (x < left) x = left;
+    if (y < top) y = top;
+    if (end_x > right) end_x = right;
+    if (end_y > bottom) end_y = bottom;
+    if (end_x > x && end_y > y) os->graphics.fill_rect(x, y, end_x - x, end_y - y, color);
+}
+static void draw_page_boxes(int left, int top, int right, int bottom) {
+    for (int i = 0; i < num_boxes; i++) {
+        const browser_box* b = &page_boxes[i];
+        int x = left + b->x, y = top + b->y - scroll_y;
+        if (b->paint_background) paint_clipped(x, y, b->width, b->height, b->background, left, top, right, bottom);
+        if (b->border) {
+            int border = b->border;
+            paint_clipped(x, y, b->width, border, b->border_color, left, top, right, bottom);
+            paint_clipped(x, y + b->height - border, b->width, border, b->border_color, left, top, right, bottom);
+            paint_clipped(x, y, border, b->height, b->border_color, left, top, right, bottom);
+            paint_clipped(x + b->width - border, y, border, b->height, b->border_color, left, top, right, bottom);
+        }
+    }
 }
 
 static void browser_draw(Window* win) {
@@ -646,41 +861,43 @@ static void browser_draw(Window* win) {
     int32_t canvas_h = h - 56;
     draw_sunken_box(canvas_x, canvas_y, canvas_w, canvas_h, page_background);
 
-    int draw_y = canvas_y + 6;
-    for (int i = scroll_y; i < num_lines; i++) {
+    int page_top = canvas_y + 6, page_bottom = canvas_y + canvas_h - 4;
+    draw_page_boxes(canvas_x + 8, page_top, canvas_x + canvas_w - 8, page_bottom);
+    for (int i = 0; i < num_lines; i++) {
+        int row_top = page_top + lines[i].top - scroll_y;
+        int height = lines[i].height;
+        if (row_top + height <= page_top) continue;
+        if (row_top >= page_bottom) continue;
         if (lines[i].image_index >= 0) {
-            if (draw_y + PNG_TARGET_H > canvas_y + canvas_h - 4) break;
-
+            if (row_top < page_top || row_top + PNG_TARGET_H > page_bottom) continue;
             int img_x = canvas_x + 8 + lines[i].offset;
             int idx = lines[i].image_index;
-            os->graphics.png_render(image_pool[idx], image_sizes[idx],
-                           img_x, draw_y, PNG_TARGET_W, PNG_TARGET_H);
-            draw_y += PNG_TARGET_H + 4;
-        } else {
-            if (draw_y + 12 > canvas_y + canvas_h - 4) break;
-
-            int row_x = canvas_x + 8 + lines[i].offset;
-            for (int start = 0; lines[i].text[start];) {
-                int stop = start + 1;
-                while (lines[i].text[stop] && lines[i].colors[stop] == lines[i].colors[start] &&
-                       lines[i].backgrounds[stop] == lines[i].backgrounds[start] && lines[i].flags[stop] == lines[i].flags[start]) stop++;
-                char run[LINE_MAX_CHARS];
-                for (int j = start; j < stop; j++) run[j - start] = lines[i].text[j];
-                run[stop - start] = 0;
-                int run_x = row_x + start * 8, width = (stop - start) * 8;
-                os->graphics.fill_rect(run_x, draw_y, width, 12, lines[i].backgrounds[start]);
-                os->graphics.draw_string(run_x, draw_y, run, lines[i].colors[start]);
-                if (lines[i].flags[start] & 1) os->graphics.draw_string(run_x + 1, draw_y, run, lines[i].colors[start]);
-                if (lines[i].flags[start] & 2) os->graphics.fill_rect(run_x, draw_y + 10, width, 1, lines[i].colors[start]);
-                start = stop;
-            }
-            for (int control = 0; control < num_controls; control++)
-                if (controls[control].line == i) draw_control(&controls[control], row_x, draw_y);
-            draw_y += 12;
+            os->graphics.png_render(image_pool[idx], image_sizes[idx], img_x, row_top, PNG_TARGET_W, PNG_TARGET_H);
+            continue;
         }
+        int row_x = canvas_x + 8 + lines[i].offset;
+        int text_y = row_top + (height - 12) / 2;
+        for (int start = 0; lines[i].text[start];) {
+            int stop = start + 1;
+            while (lines[i].text[stop] && lines[i].colors[stop] == lines[i].colors[start] &&
+                   lines[i].backgrounds[stop] == lines[i].backgrounds[start] && lines[i].flags[stop] == lines[i].flags[start]) stop++;
+            char run[LINE_MAX_CHARS];
+            for (int j = start; j < stop; j++) run[j - start] = lines[i].text[j];
+            run[stop - start] = 0;
+            int run_x = row_x + start * 8, width = (stop - start) * 8;
+            paint_clipped(run_x, row_top, width, height, lines[i].backgrounds[start], canvas_x + 8, page_top, canvas_x + canvas_w - 8, page_bottom);
+            if (text_y >= page_top && text_y + 12 <= page_bottom) {
+                os->graphics.draw_string(run_x, text_y, run, lines[i].colors[start]);
+                if (lines[i].flags[start] & 1) os->graphics.draw_string(run_x + 1, text_y, run, lines[i].colors[start]);
+                if (lines[i].flags[start] & 2) os->graphics.fill_rect(run_x, text_y + 10, width, 1, lines[i].colors[start]);
+            }
+            start = stop;
+        }
+        if (text_y >= page_top && text_y + 12 <= page_bottom)
+            for (int control = 0; control < num_controls; control++)
+                if (controls[control].line == i) draw_control(&controls[control], row_x, text_y);
     }
 
-    
     draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_WIN_BG);
     os->graphics.draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
 }
@@ -996,12 +1213,14 @@ static void browser_handle_mouse(Window* win, int32_t lx, int32_t ly, uint8_t bt
     }
     int canvas_y = 50, canvas_h = win->h - 20 - 56;
     if (ly < canvas_y + 6 || ly >= canvas_y + canvas_h - 4 || lx < 18 || lx >= win->w - 10) return;
-    int row = -1, y = canvas_y + 6;
-    for (int i = scroll_y; i < num_lines; i++) {
-        int height = render_line_height(i);
-        if (y + height > canvas_y + canvas_h - 4) break;
-        if (ly >= y && ly < y + height) { row = i; break; }
-        y += height;
+    int row = -1;
+    for (int i = 0; i < num_lines; i++) {
+        int top = canvas_y + 6 + lines[i].top - scroll_y;
+        int glyph_y = top + (lines[i].height - 12) / 2;
+        if (glyph_y < canvas_y + 6 || glyph_y + 12 > canvas_y + canvas_h - 4) continue;
+        int row_left = 18 + lines[i].offset;
+        int row_width = lines[i].image_index >= 0 ? PNG_TARGET_W : text_length(lines[i].text) * 8;
+        if (ly >= glyph_y && ly < glyph_y + 12 && lx >= row_left && lx < row_left + row_width) { row = i; break; }
     }
     if (row < 0 || lines[row].image_index >= 0) return;
     int local_x = lx - 18 - lines[row].offset;
@@ -1044,20 +1263,21 @@ static void browser_handle_key(Window* win, char c) {
     }
 
     int canvas_h = (win->h - 20) - 56;
-    int visible_rows = (canvas_h - 10) / 12;
+    int page_step = (canvas_h - 10) / 2;
     int max_scroll = browser_max_scroll(canvas_h);
 
     
     if (key == 0x48) {
         if (scroll_y > 0) {
-            scroll_y--;
+            scroll_y -= 12;
+            if (scroll_y < 0) scroll_y = 0;
             browser_draw(win);
             os->graphics.blit_all();
         }
         return;
     }
     if (key == 0x49) {
-        scroll_y -= (visible_rows / 2);
+        scroll_y -= page_step;
         if (scroll_y < 0) scroll_y = 0;
         browser_draw(win);
         os->graphics.blit_all();
@@ -1067,14 +1287,15 @@ static void browser_handle_key(Window* win, char c) {
     
     if (key == 0x50) {
         if (scroll_y < max_scroll) {
-            scroll_y++;
+            scroll_y += 12;
+            if (scroll_y > max_scroll) scroll_y = max_scroll;
             browser_draw(win);
             os->graphics.blit_all();
         }
         return;
     }
     if (key == 0x51) {
-        scroll_y += (visible_rows / 2);
+        scroll_y += page_step;
         if (scroll_y > max_scroll) scroll_y = max_scroll;
         browser_draw(win);
         os->graphics.blit_all();

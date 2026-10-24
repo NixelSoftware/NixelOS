@@ -1,4 +1,5 @@
 #include "html.h"
+#include "../font/font.h"
 #include "entities.inc"
 
 static int space(char c) {
@@ -10,8 +11,6 @@ static int alnum(char c) {
 }
 static char lower(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 
-/* Replaces Netzhaut's dynamically allocated trie with bounded longest-match
- * lookup. Preserve the length of the last terminal, not the last prefix. */
 unsigned browser_html_reference(const char *text, const char *end,
                                 int attribute, unsigned *codepoint) {
     if (text >= end || *text != '&') return 0;
@@ -60,16 +59,6 @@ unsigned browser_html_reference(const char *text, const char *end,
     return best + 1;
 }
 
-/* The native window text ABI uses an 8-bit font, not Unicode glyph shaping. */
-char browser_html_display_char(unsigned cp) {
-    if (cp == 0xa0) return ' ';
-    if (cp == 9 || cp == 10 || cp == 13) return (char)cp;
-    if (cp == 0x2018 || cp == 0x2019) return '\'';
-    if (cp == 0x201c || cp == 0x201d) return '"';
-    if (cp == 0x2013 || cp == 0x2014) return '-';
-    return cp >= 32 && cp <= 126 ? (char)cp : '?';
-}
-
 const char *browser_html_tag_end(const char *tag, const char *end) {
     char quote = 0;
     for (; tag < end; tag++) {
@@ -113,7 +102,7 @@ int browser_html_attribute(const char *tag, const char *end,
         unsigned used = 0;
         while (value < limit && used + 1 < capacity) {
             unsigned cp, consumed = browser_html_reference(value, limit, 1, &cp);
-            out[used++] = consumed ? browser_html_display_char(cp) : *value;
+            out[used++] = consumed ? browser_font_character(cp) : *value;
             value += consumed ? consumed : 1;
         }
         out[used] = 0;

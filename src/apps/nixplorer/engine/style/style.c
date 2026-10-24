@@ -1,7 +1,5 @@
-/* Bounded native cascade adapter, informed by Netzhaut's nh-css split between
- * selector parsing and Properties/Cascade.c. Supports a deliberate CSS subset. */
 #include "style.h"
-#include "html.h"
+#include "../parser/html.h"
 
 static int space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 static char lower(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
@@ -242,7 +240,245 @@ static int color(const char *p, const char *end, unsigned *out) {
     }
     return 0;
 }
-enum { P_COLOR, P_BG, P_BOLD, P_DISPLAY, P_PRE, P_ALIGN, P_MARGIN, P_UNDERLINE, P_BGSET };
+enum {
+    P_COLOR, P_BG, P_BOLD, P_DISPLAY, P_PRE, P_ALIGN, P_UNDERLINE,
+    P_MARGIN_TOP, P_MARGIN_RIGHT, P_MARGIN_BOTTOM, P_MARGIN_LEFT,
+    P_PADDING_TOP, P_PADDING_RIGHT, P_PADDING_BOTTOM, P_PADDING_LEFT,
+    P_WIDTH, P_MAX_WIDTH, P_HEIGHT, P_MIN_HEIGHT,
+    P_BORDER_WIDTH, P_BORDER_COLOR, P_BORDER_STYLE, P_BOX_SIZING, P_LINE_HEIGHT,
+    P_FLEX_DIRECTION, P_FLEX_WRAP, P_JUSTIFY, P_ALIGN_ITEMS, P_ROW_GAP, P_COLUMN_GAP,
+    P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_ALIGN_SELF
+};
+static void apply_property(browser_style *s, unsigned *ranks, unsigned priority, int property, int value) {
+    if (priority < ranks[property]) return;
+    ranks[property] = priority;
+    if (property >= P_MARGIN_TOP && property <= P_MARGIN_LEFT) s->margin[property - P_MARGIN_TOP] = value;
+    else if (property >= P_PADDING_TOP && property <= P_PADDING_LEFT) s->padding[property - P_PADDING_TOP] = value;
+    else switch (property) {
+        case P_COLOR: s->color = (unsigned)value; break;
+        case P_BG: s->background = (unsigned)value; s->background_set = 1; break;
+        case P_BOLD: s->bold = value; break;
+        case P_DISPLAY: s->display = value; break;
+        case P_PRE: s->pre = value; break;
+        case P_ALIGN: s->align = value; break;
+        case P_UNDERLINE: s->underline = value; break;
+        case P_WIDTH: s->width = value; break;
+        case P_MAX_WIDTH: s->max_width = value; break;
+        case P_HEIGHT: s->height = value; break;
+        case P_MIN_HEIGHT: s->min_height = value; break;
+        case P_BORDER_WIDTH: s->border_width = value; break;
+        case P_BORDER_COLOR: s->border_color = (unsigned)value; break;
+        case P_BORDER_STYLE: s->border_solid = value; break;
+        case P_BOX_SIZING: s->border_box = value; break;
+        case P_LINE_HEIGHT: s->line_height = value; break;
+        case P_FLEX_DIRECTION: s->flex_column = value; break;
+        case P_FLEX_WRAP: s->flex_wrap = value; break;
+        case P_JUSTIFY: s->justify = value; break;
+        case P_ALIGN_ITEMS: s->align_items = value; break;
+        case P_ALIGN_SELF: s->align_self = value; break;
+        case P_ROW_GAP: s->row_gap = value; break;
+        case P_COLUMN_GAP: s->column_gap = value; break;
+        case P_FLEX_GROW: s->flex_grow = value; break;
+        case P_FLEX_SHRINK: s->flex_shrink = value; break;
+        case P_FLEX_BASIS: s->flex_basis = value; break;
+    }
+}
+/* Length encoding: -1=auto; -(percentage+2)=percentage; nonnegative=px. */
+static int length_value(const char *v, const char *end, int auto_ok, int percent_ok, int *value) {
+    if (auto_ok && equal(v, end, "auto", 1)) { *value = -1; return 1; }
+    const char *p = v; int number = 0;
+    while (p < end && *p >= '0' && *p <= '9') {
+        number = number * 10 + *p++ - '0';
+        if (number > 4096) return 0;
+    }
+    if (p == v) return 0;
+    if (percent_ok && equal(p, end, "%", 0)) {
+        if (number > 100) return 0;
+        *value = -number - 2; return 1;
+    }
+    if (!equal(p, end, "px", 1) && !(number == 0 && p == end)) return 0;
+    *value = number; return 1;
+}
+static int border_width_value(const char *v, const char *end, int *value) {
+    if (equal(v, end, "thin", 1)) { *value = 1; return 1; }
+    if (equal(v, end, "medium", 1)) { *value = 3; return 1; }
+    if (equal(v, end, "thick", 1)) { *value = 5; return 1; }
+    return length_value(v, end, 0, 0, value);
+}
+static const char *value_end(const char *p, const char *end) {
+    unsigned parens = 0;
+    while (p < end) {
+        if (*p == '(') parens++;
+        else if (*p == ')' && parens) parens--;
+        else if (space(*p) && !parens) break;
+        p++;
+    }
+    return p;
+}
+static int flex_number(const char *v, const char *end, int *out) {
+    int number = 0;
+    if (v == end) return 0;
+    while (v < end && *v >= '0' && *v <= '9') {
+        number = number * 10 + *v++ - '0';
+        if (number > 1000) return 0;
+    }
+    if (v != end) return 0;
+    *out = number; return 1;
+}
+static int flex_alignment(const char *v, const char *end, int stretch) {
+    if (equal(v, end, "start", 1) || equal(v, end, "flex-start", 1)) return BROWSER_CROSS_START;
+    if (equal(v, end, "end", 1) || equal(v, end, "flex-end", 1)) return BROWSER_CROSS_END;
+    if (equal(v, end, "center", 1)) return BROWSER_CROSS_CENTER;
+    if (stretch && equal(v, end, "stretch", 1)) return BROWSER_CROSS_STRETCH;
+    return -2;
+}
+static void flex_declaration(browser_style *s, unsigned *ranks, unsigned priority,
+                              const char *name, const char *name_end, const char *v, const char *end) {
+    int value;
+    if (equal(name, name_end, "flex-direction", 1)) {
+        if (equal(v, end, "row", 1) || equal(v, end, "column", 1))
+            apply_property(s, ranks, priority, P_FLEX_DIRECTION, equal(v, end, "column", 1));
+    } else if (equal(name, name_end, "flex-wrap", 1)) {
+        if (equal(v, end, "wrap", 1) || equal(v, end, "nowrap", 1))
+            apply_property(s, ranks, priority, P_FLEX_WRAP, equal(v, end, "wrap", 1));
+    } else if (equal(name, name_end, "justify-content", 1)) {
+        value = flex_alignment(v, end, 0);
+        if (equal(v, end, "space-between", 1)) value = BROWSER_JUSTIFY_BETWEEN;
+        else if (equal(v, end, "space-around", 1)) value = BROWSER_JUSTIFY_AROUND;
+        else if (equal(v, end, "space-evenly", 1)) value = BROWSER_JUSTIFY_EVENLY;
+        if (value >= 0) apply_property(s, ranks, priority, P_JUSTIFY, value);
+    } else if (equal(name, name_end, "align-items", 1) || equal(name, name_end, "align-self", 1)) {
+        int self = equal(name, name_end, "align-self", 1);
+        value = flex_alignment(v, end, 1);
+        if (self && equal(v, end, "auto", 1)) value = -1;
+        if (value >= -1) apply_property(s, ranks, priority, self ? P_ALIGN_SELF : P_ALIGN_ITEMS, value);
+    } else if (equal(name, name_end, "gap", 1)) {
+        const char *stop = value_end(v, end), *next = skip(stop, end);
+        int row, col;
+        if (!length_value(v, stop, 0, 0, &row)) return;
+        if (next == end) col = row;
+        else if (!length_value(next, end, 0, 0, &col)) return;
+        apply_property(s, ranks, priority, P_ROW_GAP, row);
+        apply_property(s, ranks, priority, P_COLUMN_GAP, col);
+    } else if (equal(name, name_end, "row-gap", 1) || equal(name, name_end, "column-gap", 1)) {
+        if (length_value(v, end, 0, 0, &value))
+            apply_property(s, ranks, priority, equal(name, name_end, "row-gap", 1) ? P_ROW_GAP : P_COLUMN_GAP, value);
+    } else if (equal(name, name_end, "flex-grow", 1) || equal(name, name_end, "flex-shrink", 1)) {
+        if (flex_number(v, end, &value))
+            apply_property(s, ranks, priority, equal(name, name_end, "flex-grow", 1) ? P_FLEX_GROW : P_FLEX_SHRINK, value);
+    } else if (equal(name, name_end, "flex-basis", 1)) {
+        if (length_value(v, end, 1, 1, &value)) apply_property(s, ranks, priority, P_FLEX_BASIS, value);
+    } else if (equal(name, name_end, "flex", 1)) {
+        int grow = 0, shrink = 1, basis = -1;
+        if (equal(v, end, "none", 1)) shrink = 0;
+        else if (equal(v, end, "auto", 1)) grow = 1;
+        else if (!equal(v, end, "initial", 1)) {
+            const char *stop = value_end(v, end), *next = skip(stop, end);
+            if (!flex_number(v, stop, &grow)) return;
+            basis = 0;
+            if (next < end) {
+                stop = value_end(next, end);
+                if (flex_number(next, stop, &shrink)) {
+                    next = skip(stop, end);
+                    if (next < end && !length_value(next, end, 1, 1, &basis)) return;
+                } else if (!length_value(next, end, 1, 1, &basis)) return;
+            }
+        }
+        apply_property(s, ranks, priority, P_FLEX_GROW, grow);
+        apply_property(s, ranks, priority, P_FLEX_SHRINK, shrink);
+        apply_property(s, ranks, priority, P_FLEX_BASIS, basis);
+    }
+}
+
+static void box_declaration(browser_style *s, const browser_style *parent, unsigned *ranks, unsigned priority,
+                             const char *name, const char *name_end, const char *v, const char *end) {
+    static const char *sides[] = {"top", "right", "bottom", "left"};
+    int margin = equal(name, name_end, "margin", 1), padding = equal(name, name_end, "padding", 1);
+    if (margin || padding) {
+        int values[4], count = 0;
+        const char *p = v;
+        while ((p = skip(p, end)) < end) {
+            const char *stop = value_end(p, end);
+            if (count == 4 || !length_value(p, stop, margin, 0, &values[count++])) return;
+            p = stop;
+        }
+        if (!count) return;
+        int expanded[] = {values[0], count > 1 ? values[1] : values[0], count > 2 ? values[2] : values[0], count > 3 ? values[3] : count > 1 ? values[1] : values[0]};
+        for (int i = 0; i < 4; i++) apply_property(s, ranks, priority, (margin ? P_MARGIN_TOP : P_PADDING_TOP) + i, expanded[i]);
+        return;
+    }
+    for (int i = 0; i < 4; i++) {
+        const char *suffix = 0; int property = 0;
+        if (name_end - name > 7 && equal(name, name + 7, "margin-", 1)) { suffix = name + 7; property = P_MARGIN_TOP + i; }
+        else if (name_end - name > 8 && equal(name, name + 8, "padding-", 1)) { suffix = name + 8; property = P_PADDING_TOP + i; }
+        if (suffix && equal(suffix, name_end, sides[i], 1)) {
+            int value;
+            if (length_value(v, end, property <= P_MARGIN_LEFT, 0, &value)) apply_property(s, ranks, priority, property, value);
+            return;
+        }
+    }
+    int property = -1, value = 0;
+    if (equal(name, name_end, "width", 1)) property = P_WIDTH;
+    else if (equal(name, name_end, "max-width", 1)) property = P_MAX_WIDTH;
+    else if (equal(name, name_end, "height", 1)) property = P_HEIGHT;
+    else if (equal(name, name_end, "min-height", 1)) property = P_MIN_HEIGHT;
+    if (property >= 0) {
+        if (property == P_MAX_WIDTH && equal(v, end, "none", 1)) value = -1;
+        else if (!length_value(v, end, property == P_WIDTH || property == P_HEIGHT, property == P_WIDTH || property == P_MAX_WIDTH, &value)) return;
+        apply_property(s, ranks, priority, property, value); return;
+    }
+    if (equal(name, name_end, "border", 1)) {
+        int width = 3, solid = 0, saw_width = 0, saw_style = 0, saw_color = 0;
+        unsigned rgb = BROWSER_CURRENT_COLOR;
+        const char *p = v;
+        while ((p = skip(p, end)) < end) {
+            const char *stop = value_end(p, end); int pixels;
+            if (!saw_width && border_width_value(p, stop, &pixels)) { width = pixels; saw_width = 1; }
+            else if (!saw_style && (equal(p, stop, "solid", 1) || equal(p, stop, "none", 1) || equal(p, stop, "hidden", 1))) { solid = equal(p, stop, "solid", 1); saw_style = 1; }
+            else if (!saw_color && equal(p, stop, "currentcolor", 1)) { rgb = BROWSER_CURRENT_COLOR; saw_color = 1; }
+            else if (!saw_color && color(p, stop, &rgb)) saw_color = 1;
+            else return;
+            p = stop;
+        }
+        if (!saw_width && !saw_style && !saw_color) return;
+        apply_property(s, ranks, priority, P_BORDER_WIDTH, width);
+        apply_property(s, ranks, priority, P_BORDER_STYLE, solid);
+        apply_property(s, ranks, priority, P_BORDER_COLOR, (int)rgb);
+    } else if (equal(name, name_end, "border-width", 1)) {
+        if (border_width_value(v, end, &value)) apply_property(s, ranks, priority, P_BORDER_WIDTH, value);
+    } else if (equal(name, name_end, "border-color", 1)) {
+        unsigned rgb;
+        if (equal(v, end, "currentcolor", 1)) rgb = BROWSER_CURRENT_COLOR;
+        else if (!color(v, end, &rgb)) return;
+        apply_property(s, ranks, priority, P_BORDER_COLOR, (int)rgb);
+    } else if (equal(name, name_end, "border-style", 1)) {
+        if (equal(v, end, "solid", 1) || equal(v, end, "none", 1) || equal(v, end, "hidden", 1))
+            apply_property(s, ranks, priority, P_BORDER_STYLE, equal(v, end, "solid", 1));
+    } else if (equal(name, name_end, "box-sizing", 1)) {
+        if (equal(v, end, "border-box", 1) || equal(v, end, "content-box", 1))
+            apply_property(s, ranks, priority, P_BOX_SIZING, equal(v, end, "border-box", 1));
+    } else if (equal(name, name_end, "line-height", 1)) {
+        if (equal(v, end, "inherit", 1)) value = parent->line_height;
+        else if (equal(v, end, "normal", 1)) value = 12;
+        else if (!length_value(v, end, 0, 0, &value)) {
+            /* Fixed font metrics: unitless values multiply the 12px glyph line. */
+            const char *p = v; int whole = 0, fraction = 0, scale = 1;
+            while (p < end && *p >= '0' && *p <= '9') { whole = whole * 10 + *p++ - '0'; if (whole > 8) return; }
+            if (p == v) return;
+            if (p < end && *p == '.') {
+                const char *digits = ++p;
+                while (p < end && *p >= '0' && *p <= '9' && scale < 1000) { fraction = fraction * 10 + *p++ - '0'; scale *= 10; }
+                if (p == digits) return;
+            }
+            if (p != end) return;
+            value = whole * 12 + fraction * 12 / scale;
+        }
+        if (value < 12) value = 12;
+        if (value > 96) value = 96;
+        apply_property(s, ranks, priority, P_LINE_HEIGHT, value);
+    } else flex_declaration(s, ranks, priority, name, name_end, v, end);
+}
+
 static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
                           const char *p, const char *end, const browser_style *parent) {
     while ((p = skip(p, end)) < end) {
@@ -271,7 +507,8 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             else if (equal(v, ve, "bold", 1) || equal(v, ve, "bolder", 1) || equal(v, ve, "700", 0) || equal(v, ve, "800", 0) || equal(v, ve, "900", 0)) { property = P_BOLD; value = 1; }
             else if (equal(v, ve, "normal", 1) || equal(v, ve, "400", 0)) property = P_BOLD;
         } else if (equal(p, name_end, "display", 1)) {
-            if (equal(v, ve, "none", 1)) { property = P_DISPLAY; value = BROWSER_HIDDEN; }
+            if (equal(v, ve, "flex", 1) || equal(v, ve, "inline-flex", 1)) { property = P_DISPLAY; value = BROWSER_FLEX; }
+            else if (equal(v, ve, "none", 1)) { property = P_DISPLAY; value = BROWSER_HIDDEN; }
             else if (equal(v, ve, "block", 1) || equal(v, ve, "list-item", 1)) { property = P_DISPLAY; value = BROWSER_BLOCK; }
             else if (equal(v, ve, "inline", 1) || equal(v, ve, "inline-block", 1)) property = P_DISPLAY;
         } else if (equal(p, name_end, "white-space", 1)) {
@@ -286,24 +523,8 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
         } else if (equal(p, name_end, "text-decoration", 1)) {
             if (equal(v, ve, "underline", 1)) { property = P_UNDERLINE; value = 1; }
             else if (equal(v, ve, "none", 1)) property = P_UNDERLINE;
-        } else if (equal(p, name_end, "margin-left", 1)) {
-            const char *q = v; unsigned pixels = 0, digits = 0;
-            while (q < ve && *q >= '0' && *q <= '9' && pixels < 1000) { pixels = pixels * 10 + (unsigned)(*q++ - '0'); digits++; }
-            if (digits && (equal(q, ve, "px", 1) || (pixels == 0 && q == ve))) { property = P_MARGIN; value = pixels > 128 ? 128 : (int)pixels; }
-        }
-        if (property >= 0 && priority >= ranks[property]) {
-            ranks[property] = priority;
-            switch (property) {
-                case P_COLOR: style->color = (unsigned)value; break;
-                case P_BG: style->background = (unsigned)value; style->background_set = 1; break;
-                case P_BOLD: style->bold = value; break;
-                case P_DISPLAY: style->display = value; break;
-                case P_PRE: style->pre = value; break;
-                case P_ALIGN: style->align = value; break;
-                case P_MARGIN: style->margin_left = value; break;
-                case P_UNDERLINE: style->underline = value; break;
-            }
-        }
+        } else box_declaration(style, parent, ranks, priority, p, name_end, v, ve);
+        if (property >= 0) apply_property(style, ranks, priority, property, value);
         p = semi < end ? semi + 1 : end;
     }
 }
@@ -312,7 +533,15 @@ void browser_style_compute(const browser_document *doc, int index,
                            const browser_style *parent, browser_style *style) {
     const browser_node *node = &doc->nodes[index];
     *style = *parent;
-    style->display = BROWSER_INLINE; style->margin_left = 0; style->background_set = 0;
+    style->display = BROWSER_INLINE; style->background_set = 0;
+    for (int i = 0; i < 4; i++) style->margin[i] = style->padding[i] = 0;
+    style->width = style->max_width = style->height = -1; style->min_height = 0;
+    style->border_width = 3; style->border_solid = style->border_box = 0;
+    style->border_color = BROWSER_CURRENT_COLOR;
+    style->flex_column = style->flex_wrap = style->justify = 0;
+    style->align_items = BROWSER_CROSS_STRETCH; style->align_self = -1;
+    style->row_gap = style->column_gap = style->flex_grow = 0;
+    style->flex_shrink = 1; style->flex_basis = -1;
     if (!node->tag[0]) return;
     const char *blocks[] = {"html","body","main","article","section","aside","header","footer","nav","p","div","h1","h2","h3","h4","h5","h6","ul","ol","li","dl","dt","dd","blockquote","pre","form","fieldset","table","tr","hr"};
     const char *hidden[] = {"head","style","script","title","meta","link","base","template"};

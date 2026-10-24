@@ -118,17 +118,25 @@ $(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True); Path('src/apps/$*/entry.o').unlink(missing_ok=True); Path('src/apps/$*/main.o').unlink(missing_ok=True)"
 
-BROWSER_OBJ := src/apps/browser/entry.o src/apps/browser/main.o src/apps/browser/http.o src/apps/browser/netzhaut/html.o src/apps/browser/netzhaut/document.o src/apps/browser/netzhaut/style.o
-src/apps/browser/main.o: src/apps/browser/netzhaut/html.h src/apps/browser/http.h src/apps/browser/netzhaut/document.h src/apps/browser/netzhaut/style.h
-src/apps/browser/netzhaut/document.o: src/apps/browser/netzhaut/document.h src/apps/browser/netzhaut/html.h
-src/apps/browser/netzhaut/style.o: src/apps/browser/netzhaut/style.h src/apps/browser/netzhaut/document.h src/apps/browser/netzhaut/html.h
-src/apps/browser/http.o: src/apps/browser/http.h
-src/apps/browser/netzhaut/html.o: src/apps/browser/netzhaut/html.h src/apps/browser/netzhaut/entities.inc
+NIXPLORER_DIR := src/apps/nixplorer
+BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
+             $(NIXPLORER_DIR)/engine/net/http.c \
+             $(NIXPLORER_DIR)/engine/parser/html.c \
+             $(NIXPLORER_DIR)/engine/font/font.c \
+             $(NIXPLORER_DIR)/engine/dom/document.c \
+             $(NIXPLORER_DIR)/engine/style/style.c \
+             $(NIXPLORER_DIR)/engine/layout/box.c \
+             $(NIXPLORER_DIR)/engine/layout/flex.c
+BROWSER_OBJ := $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
+BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
+$(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
+$(NIXPLORER_DIR)/engine/parser/html.o: $(NIXPLORER_DIR)/engine/parser/entities.inc
+src/system/graphics/image/png.o: $(NIXPLORER_DIR)/engine/paint/png.c $(NIXPLORER_DIR)/engine/paint/png.h
 
 browser.bin: Makefile $(BROWSER_OBJ)
-	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/browser/browser.tmp
-	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/browser/browser.tmp $@
-	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('src/apps/browser/browser.tmp','src/apps/browser/entry.o','src/apps/browser/main.o','src/apps/browser/http.o','src/apps/browser/netzhaut/html.o','src/apps/browser/netzhaut/document.o','src/apps/browser/netzhaut/style.o')]"
+	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(NIXPLORER_DIR)/browser/browser.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
+	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in '$(NIXPLORER_DIR)/browser/browser.tmp $(BROWSER_OBJ)'.split()]"
 
 src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp

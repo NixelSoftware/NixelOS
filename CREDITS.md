@@ -17,7 +17,7 @@ Thank you to everyone who contributed to the development of this project!
 
 [Netzhaut](https://github.com/dajofrey/Netzhaut), copyright (C) 2022 Dajo Frey,
 supplies the named HTML character-reference data used by the native browser.
-The adapted tables and license are in `src/apps/browser/netzhaut/`.
+The adapted tables and license are in `src/apps/nixplorer/engine/parser/`.
 
 
 ---

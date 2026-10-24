@@ -3,11 +3,10 @@
 
 #define BROWSER_DOM_NODES 768
 #define BROWSER_DOM_DEPTH 48
-/* Source spans borrow the HTTP document buffer until the next navigation. */
 typedef struct {
     const char *start, *end;
     int parent, first_child, last_child, next;
-    char tag[20]; /* Empty name denotes a text node. */
+    char tag[20];
 } browser_node;
 typedef struct {
     browser_node nodes[BROWSER_DOM_NODES];
