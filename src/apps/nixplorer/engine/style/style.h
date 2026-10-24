@@ -2,15 +2,18 @@
 #define NIXEL_BROWSER_STYLE_H
 #include "../dom/document.h"
 #define BROWSER_CSS_RULES 160
-#define BROWSER_CSS_PROPERTIES 34
+#define BROWSER_CSS_PROPERTIES 40
+#define BROWSER_GRID_TRACKS 8
 #define BROWSER_CURRENT_COLOR 0x01000000u
 enum { BROWSER_TOP, BROWSER_RIGHT, BROWSER_BOTTOM, BROWSER_LEFT };
 
-enum { BROWSER_INLINE, BROWSER_BLOCK, BROWSER_HIDDEN, BROWSER_FLEX };
+enum { BROWSER_INLINE, BROWSER_BLOCK, BROWSER_HIDDEN, BROWSER_FLEX, BROWSER_GRID };
 enum { BROWSER_ALIGN_LEFT, BROWSER_ALIGN_CENTER, BROWSER_ALIGN_RIGHT };
 enum { BROWSER_JUSTIFY_START, BROWSER_JUSTIFY_END, BROWSER_JUSTIFY_CENTER,
        BROWSER_JUSTIFY_BETWEEN, BROWSER_JUSTIFY_AROUND, BROWSER_JUSTIFY_EVENLY };
 enum { BROWSER_CROSS_START, BROWSER_CROSS_END, BROWSER_CROSS_CENTER, BROWSER_CROSS_STRETCH };
+enum { BROWSER_TRACK_PX, BROWSER_TRACK_FR, BROWSER_TRACK_AUTO, BROWSER_TRACK_PERCENT };
+typedef struct { int kind, value; } browser_grid_track;
 typedef struct {
     unsigned color, background;
     int bold, display, pre, align, underline, background_set;
@@ -21,6 +24,9 @@ typedef struct {
     unsigned border_color;
     int flex_column, flex_wrap, justify, align_items, align_self;
     int row_gap, column_gap, flex_grow, flex_shrink, flex_basis;
+    browser_grid_track grid_tracks[BROWSER_GRID_TRACKS];
+    int grid_track_count, grid_auto_rows, grid_column, grid_span;
+    int justify_items, justify_self;
 } browser_style;
 typedef struct {
     const char *selector, *selector_end, *declarations, *declarations_end;

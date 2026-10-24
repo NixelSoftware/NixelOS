@@ -32,6 +32,7 @@ static unsigned int audio_owner;
 #define SYS_TCP_SEND_MAX TCP_MAX_PAYLOAD
 #define SYS_TCP_READ_MAX 4096u
 #define SYS_WINDOW_IMAGE_MAX 32768u
+_Static_assert(PNG_TARGET_W == USER_WINDOW_IMAGE_TARGET_W && PNG_TARGET_H == USER_WINDOW_IMAGE_TARGET_H, "native image ABI dimensions");
 #define USER_PING_REQUEST_MAX 16u
 #define USER_PING_TIMEOUT_TICKS 200u
 #define USER_PING_STALL_POLLS 100000u

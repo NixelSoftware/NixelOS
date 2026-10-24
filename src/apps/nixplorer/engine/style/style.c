@@ -1,5 +1,6 @@
 #include "style.h"
 #include "../parser/html.h"
+#include "../parser/css_grid.h"
 
 static int space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 static char lower(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
@@ -247,7 +248,8 @@ enum {
     P_WIDTH, P_MAX_WIDTH, P_HEIGHT, P_MIN_HEIGHT,
     P_BORDER_WIDTH, P_BORDER_COLOR, P_BORDER_STYLE, P_BOX_SIZING, P_LINE_HEIGHT,
     P_FLEX_DIRECTION, P_FLEX_WRAP, P_JUSTIFY, P_ALIGN_ITEMS, P_ROW_GAP, P_COLUMN_GAP,
-    P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_ALIGN_SELF
+    P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_ALIGN_SELF,
+    P_GRID_TRACKS, P_GRID_AUTO_ROWS, P_GRID_COLUMN, P_GRID_SPAN, P_JUSTIFY_ITEMS, P_JUSTIFY_SELF
 };
 static void apply_property(browser_style *s, unsigned *ranks, unsigned priority, int property, int value) {
     if (priority < ranks[property]) return;
@@ -281,6 +283,11 @@ static void apply_property(browser_style *s, unsigned *ranks, unsigned priority,
         case P_FLEX_GROW: s->flex_grow = value; break;
         case P_FLEX_SHRINK: s->flex_shrink = value; break;
         case P_FLEX_BASIS: s->flex_basis = value; break;
+        case P_GRID_AUTO_ROWS: s->grid_auto_rows = value; break;
+        case P_GRID_COLUMN: s->grid_column = value; break;
+        case P_GRID_SPAN: s->grid_span = value; break;
+        case P_JUSTIFY_ITEMS: s->justify_items = value; break;
+        case P_JUSTIFY_SELF: s->justify_self = value; break;
     }
 }
 /* Length encoding: -1=auto; -(percentage+2)=percentage; nonnegative=px. */
@@ -332,6 +339,58 @@ static int flex_alignment(const char *v, const char *end, int stretch) {
     if (stretch && equal(v, end, "stretch", 1)) return BROWSER_CROSS_STRETCH;
     return -2;
 }
+static int grid_integer(const char *v, const char *end, int *out) {
+    if (!flex_number(v, end, out)) return 0;
+    return *out >= 1 && *out <= BROWSER_GRID_TRACKS;
+}
+static int grid_span(const char *v, const char *end, int *out) {
+    const char *stop = value_end(v, end);
+    if (!equal(v, stop, "span", 1)) return 0;
+    return grid_integer(skip(stop, end), end, out);
+}
+static void grid_declaration(browser_style *s, unsigned *ranks, unsigned priority,
+                              const char *name, const char *name_end, const char *v, const char *end) {
+    int value;
+    if (equal(name, name_end, "grid-template-columns", 1)) {
+        browser_grid_track parsed[BROWSER_GRID_TRACKS]; int count;
+        if (priority < ranks[P_GRID_TRACKS] || !browser_css_grid_tracks(v, end, parsed, &count)) return;
+        ranks[P_GRID_TRACKS] = priority; s->grid_track_count = count;
+        for (int i = 0; i < count; i++) s->grid_tracks[i] = parsed[i];
+    } else if (equal(name, name_end, "grid-auto-rows", 1)) {
+        if (equal(v, end, "auto", 1)) value = 0;
+        else if (!length_value(v, end, 0, 0, &value)) return;
+        apply_property(s, ranks, priority, P_GRID_AUTO_ROWS, value);
+    } else if (equal(name, name_end, "justify-items", 1) || equal(name, name_end, "justify-self", 1)) {
+        int self = equal(name, name_end, "justify-self", 1);
+        value = flex_alignment(v, end, 1);
+        if (self && equal(v, end, "auto", 1)) value = -1;
+        if (value >= -1) apply_property(s, ranks, priority, self ? P_JUSTIFY_SELF : P_JUSTIFY_ITEMS, value);
+    } else if (equal(name, name_end, "grid-column-start", 1)) {
+        if (equal(v, end, "auto", 1)) value = 0;
+        else if (!grid_integer(v, end, &value)) return;
+        apply_property(s, ranks, priority, P_GRID_COLUMN, value);
+    } else if (equal(name, name_end, "grid-column-end", 1)) {
+        if (grid_span(v, end, &value)) apply_property(s, ranks, priority, P_GRID_SPAN, value);
+    } else if (equal(name, name_end, "grid-column", 1)) {
+        int column = 0, span = 1;
+        const char *slash = find(v, end, '/'), *first_end = trim(v, slash);
+        if (equal(v, first_end, "auto", 1)) column = 0;
+        else if (grid_span(v, first_end, &span)) { if (slash != end) return; }
+        else if (!grid_integer(v, first_end, &column)) return;
+        if (slash < end) {
+            const char *next = skip(slash + 1, end);
+            if (equal(next, end, "auto", 1)) span = 1;
+            else if (!grid_span(next, end, &span)) {
+                int last;
+                if (!column || !flex_number(next, end, &last) || last <= column || last > BROWSER_GRID_TRACKS + 1) return;
+                span = last - column;
+            }
+        }
+        apply_property(s, ranks, priority, P_GRID_COLUMN, column);
+        apply_property(s, ranks, priority, P_GRID_SPAN, span);
+    }
+}
+
 static void flex_declaration(browser_style *s, unsigned *ranks, unsigned priority,
                               const char *name, const char *name_end, const char *v, const char *end) {
     int value;
@@ -387,7 +446,7 @@ static void flex_declaration(browser_style *s, unsigned *ranks, unsigned priorit
         apply_property(s, ranks, priority, P_FLEX_GROW, grow);
         apply_property(s, ranks, priority, P_FLEX_SHRINK, shrink);
         apply_property(s, ranks, priority, P_FLEX_BASIS, basis);
-    }
+    } else grid_declaration(s, ranks, priority, name, name_end, v, end);
 }
 
 static void box_declaration(browser_style *s, const browser_style *parent, unsigned *ranks, unsigned priority,
@@ -508,6 +567,7 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             else if (equal(v, ve, "normal", 1) || equal(v, ve, "400", 0)) property = P_BOLD;
         } else if (equal(p, name_end, "display", 1)) {
             if (equal(v, ve, "flex", 1) || equal(v, ve, "inline-flex", 1)) { property = P_DISPLAY; value = BROWSER_FLEX; }
+            else if (equal(v, ve, "grid", 1) || equal(v, ve, "inline-grid", 1)) { property = P_DISPLAY; value = BROWSER_GRID; }
             else if (equal(v, ve, "none", 1)) { property = P_DISPLAY; value = BROWSER_HIDDEN; }
             else if (equal(v, ve, "block", 1) || equal(v, ve, "list-item", 1)) { property = P_DISPLAY; value = BROWSER_BLOCK; }
             else if (equal(v, ve, "inline", 1) || equal(v, ve, "inline-block", 1)) property = P_DISPLAY;
@@ -522,6 +582,7 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             else if (equal(v, ve, "right", 1)) { property = P_ALIGN; value = BROWSER_ALIGN_RIGHT; }
         } else if (equal(p, name_end, "text-decoration", 1)) {
             if (equal(v, ve, "underline", 1)) { property = P_UNDERLINE; value = 1; }
+            else if (equal(v, ve, "grid", 1) || equal(v, ve, "inline-grid", 1)) { property = P_DISPLAY; value = BROWSER_GRID; }
             else if (equal(v, ve, "none", 1)) property = P_UNDERLINE;
         } else box_declaration(style, parent, ranks, priority, p, name_end, v, ve);
         if (property >= 0) apply_property(style, ranks, priority, property, value);
@@ -542,6 +603,9 @@ void browser_style_compute(const browser_document *doc, int index,
     style->align_items = BROWSER_CROSS_STRETCH; style->align_self = -1;
     style->row_gap = style->column_gap = style->flex_grow = 0;
     style->flex_shrink = 1; style->flex_basis = -1;
+    style->grid_track_count = style->grid_auto_rows = style->grid_column = 0; style->grid_span = 1;
+    style->justify_items = BROWSER_CROSS_STRETCH; style->justify_self = -1;
+    for (int i = 0; i < BROWSER_GRID_TRACKS; i++) style->grid_tracks[i] = (browser_grid_track){0, 0};
     if (!node->tag[0]) return;
     const char *blocks[] = {"html","body","main","article","section","aside","header","footer","nav","p","div","h1","h2","h3","h4","h5","h6","ul","ol","li","dl","dt","dd","blockquote","pre","form","fieldset","table","tr","hr"};
     const char *hidden[] = {"head","style","script","title","meta","link","base","template"};

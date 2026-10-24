@@ -122,7 +122,7 @@ keyboard and mouse events through the user window API, and fetches HTTP pages
 with the owner-scoped DNS and TCP syscalls. It opens the original
 `home.menifeetech.pp.ua` homepage at startup and retains the original HTML
 layout, links, form controls, and PNG image handling; it supports HTTP on port
-80. PNGs are decoded into the app-owned window surface by the WM.
+
 The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT
 vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.

@@ -4,6 +4,8 @@
 #include "../../kernel/types.h"
 
 #define USER_WINDOW_TITLE_MAX 32u
+#define USER_WINDOW_IMAGE_TARGET_W 64u
+#define USER_WINDOW_IMAGE_TARGET_H 64u
 
 typedef struct {
     int32_t x, y, width, height;

@@ -121,12 +121,16 @@ $(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 NIXPLORER_DIR := src/apps/nixplorer
 BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/net/http.c \
+             $(NIXPLORER_DIR)/engine/net/response.c \
+             $(NIXPLORER_DIR)/engine/platform/tcp.c \
              $(NIXPLORER_DIR)/engine/parser/html.c \
              $(NIXPLORER_DIR)/engine/font/font.c \
              $(NIXPLORER_DIR)/engine/dom/document.c \
              $(NIXPLORER_DIR)/engine/style/style.c \
              $(NIXPLORER_DIR)/engine/layout/box.c \
-             $(NIXPLORER_DIR)/engine/layout/flex.c
+             $(NIXPLORER_DIR)/engine/layout/flex.c \
+             $(NIXPLORER_DIR)/engine/layout/grid.c \
+             $(NIXPLORER_DIR)/engine/parser/css_grid.c
 BROWSER_OBJ := $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
 BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
