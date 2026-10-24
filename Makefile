@@ -90,7 +90,8 @@ KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 $(KERNEL_OBJ): src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h \
                src/kernel/sched_policy.h src/kernel/sched_wide.h
 APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
-        crash_debug shutdown userhello sound oobe sysdiag reboot setwall
+        crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
+        shutdlg
 # Temporary Fastfetch image inclusion for testing.
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 .PHONY: all run clean clean-build

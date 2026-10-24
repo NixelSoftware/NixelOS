@@ -139,8 +139,8 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
                     }
                     break;
                 case START_ITEM_SHUTDOWN:
-                    if (s_api && s_api->system.shutdown) {
-                        s_api->system.shutdown();
+                    if (s_api && s_api->shell.launch_app) {
+                        s_api->shell.launch_app("shutdlg.bin", "");
                     }
                     break;
             }
