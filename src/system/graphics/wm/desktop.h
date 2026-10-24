@@ -13,6 +13,8 @@ typedef struct {
     uint8_t selected;
 } DesktopIcon;
 
+int desktop_picker_result(uint32_t token, uint32_t pid, const char* path);
+
 void desktop_init(os_api_t* api);
 void desktop_draw(void);
 void desktop_poll(void);

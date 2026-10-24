@@ -2,6 +2,7 @@
 #include "desktop_wallpaper.h"
 #include "../../../kernel/drivers/serial.h"
 #include "wm.h"
+#include "../widgets.h"
 #include "../terminal/terminal.h"
 #include "../../../apps/notepad/notepad.h"
 #include "../dialog/dialog.h"
@@ -23,15 +24,21 @@ typedef struct {
     char label[16];
 } Shortcut;
 static char targets[NUM_ICONS][FS_MAX_PATH], labels[NUM_ICONS][FS_MAX_FILENAME];
+static char shortcut_labels[NUM_ICONS][FS_MAX_FILENAME];
 static char shortcut_paths[NUM_ICONS][FS_MAX_PATH];
-static char entries[FS_MAX_FILES][FS_MAX_FILENAME];
-static char folder[FS_MAX_PATH] = "/", pending[FS_MAX_PATH];
-static int entry_count, page, chosen_icon, overlay, menu_x, menu_y;
+static char pending[FS_MAX_PATH];
+static int chosen_icon, overlay, menu_x, menu_y;
+static Window shortcut_window;
+static uint32_t picker_token;
+static int picker_pid = -1;
+static char shortcut_status[64];
+static void show_shortcut_window(void);
 static int drag = -1, drag_dx, drag_dy, press_x, press_y, moved;
 static void refresh_desktop(void);
 static void open_item(int i);
 static void open_path(const char* path);
 static char preview[1025];
+static char preview_path[FS_MAX_PATH];
 static void save_icon(int i);
 static uint32_t last_click_time = 0;
 static int last_clicked_icon = -1;
@@ -295,6 +302,12 @@ static void refresh_desktop(void) {
             if (fs_read_file(shortcut_paths[i], (uint8_t*)&record, sizeof(record)) == sizeof(record) &&
                 record.magic == 0x314B5344 && !record.target[FS_MAX_PATH-1] &&
                 suffix(record.target, ".BIN") && record.icon < 2) {
+                const char* base = record.target;
+                for (int k = 0; record.target[k]; k++) if (record.target[k] == '/') base = record.target+k+1;
+                copy_text(shortcut_labels[i], base, sizeof(shortcut_labels[i]));
+                int length = 0; while (shortcut_labels[i][length]) length++;
+                if (suffix(shortcut_labels[i], ".BIN")) shortcut_labels[i][length-4] = 0;
+                icons[i].label = shortcut_labels[i];
                 copy_text(targets[i], record.target, FS_MAX_PATH);
                 icons[i].icon_type = record.icon;
                 icons[i].x = record.x; icons[i].y = record.y;
@@ -322,21 +335,6 @@ void desktop_poll(void) {
     refresh_desktop(); seen_generation = generation;
     request_redraw();
 }
-static void joined(char* out, const char* name) {
-    copy_text(out, folder, FS_MAX_PATH);
-    int n = 0; while (out[n]) n++;
-    if (n > 1 && n < FS_MAX_PATH-1) out[n++] = '/';
-    copy_text(out + n, name, FS_MAX_PATH - n);
-}
-static void browse(void) {
-    char all[FS_MAX_FILES][FS_MAX_FILENAME], path[FS_MAX_PATH];
-    int n = fs_list_dir(folder, all); entry_count = 0; page = 0;
-    for (int i = 0; i < n; i++) {
-        joined(path, all[i]);
-        if (fs_is_directory(path) || suffix(all[i], ".BIN"))
-            copy_text(entries[entry_count++], all[i], FS_MAX_FILENAME);
-    }
-}
 static void open_path(const char* path) {
     if (fs_is_directory(path)) {
         if (app_loader_launch_detached(desktop_api, "/files.bin", path) < 0)
@@ -352,7 +350,7 @@ static void open_path(const char* path) {
         preview[bytes] = 0;
         for (int i = 0; i < bytes; i++)
             if ((unsigned char)preview[i] < 32 && preview[i] != '\n' && preview[i] != '\t') preview[i] = '.';
-        copy_text(pending, path, FS_MAX_PATH); overlay = 5;
+        copy_text(preview_path, path, FS_MAX_PATH); overlay = 5;
     }
 }
 static void open_item(int i) {
@@ -369,10 +367,10 @@ void desktop_draw_overlay(void) {
     if (!overlay) return;
     if (overlay == 1) { box(menu_x, menu_y, 188, 26); text(menu_x+8, menu_y+8, "Create shortcut..."); return; }
     box(150, 100, 500, 350);
-    text(166, 114, overlay == 2 ? "Select a BIN file" : overlay == 5 ? "File preview (first 1 KB)" : "Choose shortcut icon");
+    text(166, 114, "File preview (first 1 KB)");
     text(570, 114, "Cancel");
     if (overlay == 5) {
-        char name[56]; copy_text(name, pending, sizeof(name)); text(166, 140, name);
+        char name[56]; copy_text(name, preview_path, sizeof(name)); text(166, 140, name);
         int row = 0, col = 0; char line[57];
         for (int i = 0; preview[i] && row < 12; i++) {
             if (preview[i] == '\n' || col == 56) {
@@ -382,26 +380,7 @@ void desktop_draw_overlay(void) {
             line[col++] = preview[i] == '\t' ? ' ' : preview[i];
         }
         if (col && row < 12) { line[col] = 0; text(166, 170+row*20, line); }
-    } else if (overlay == 2) {
-        char display[57]; copy_text(display, folder, sizeof(display)); text(166, 140, display);
-        text(166, 164, "[..] Parent folder");
-        for (int row = 0; row < 10 && page + row < entry_count; row++) {
-            char path[FS_MAX_PATH]; joined(path, entries[page+row]);
-            text(166, 188+row*22, fs_is_directory(path) ? "[DIR]" : suffix(path, ".BIN") ? "[BIN]" : "[FILE]");
-            text(222, 188+row*22, entries[page+row]);
-        }
-        if (!entry_count) text(166, 188, "This folder is empty.");
-        text(166, 426, "Previous"); text(558, 426, "Next");
-    } else {
-        for (int i = 0; i < 2; i++) {
-            int x = 190+i*210; box(x, 180, 180, 100);
-            const uint8_t (*sprite)[16] = i ? icon_notepad : icon_terminal;
-            for (int r = 0; r < 16; r++) for (int c = 0; c < 16; c++)
-                if (sprite[r][c]) desktop_api->graphics.put_pixel(x+80+c, 200+r, resolve_color(sprite[r][c]));
-            text(x+24, 248, i ? "Document" : "Terminal");
-            if (chosen_icon == i) text(x+24, 264, "Selected");
-        }
-        text(166, 320, "Click an icon, then Create."); text(558, 426, "Create");
+
     }
 }
 static void create_shortcut(void) {
@@ -413,9 +392,24 @@ static void create_shortcut(void) {
         if (!fs_stat(name, &st)) { copy_text(path, name, FS_MAX_PATH); break; }
     }
     if (slot == 1000 || icon_count >= NUM_ICONS) { show_info_dialog("Desktop", "Desktop is full."); return; }
+    const char* program_name = pending;
+    for (int i = 0; pending[i]; i++) if (pending[i] == '/') program_name = pending+i+1;
+    char named_path[FS_MAX_PATH];
+    copy_text(named_path, "/Desktop/", sizeof(named_path));
+    copy_text(named_path+9, program_name, sizeof(named_path)-9);
+    int end = 0; while (named_path[end]) end++;
+    copy_text(named_path+end-4, ".LNK", sizeof(named_path)-end+4);
+    fs_stat_t existing;
+    if (!fs_stat(named_path, &existing)) copy_text(path, named_path, sizeof(path));
     Shortcut record = {0}; record.magic = 0x314B5344; record.icon = chosen_icon;
     record.x = 24+(icon_count%5)*152; record.y = 20+(icon_count%ICONS_PER_PAGE/5)*64;
     copy_text(record.target, pending, sizeof(record.target));
+    const char* base = pending;
+    for (int i = 0; pending[i]; i++) if (pending[i] == '/') base = pending+i+1;
+    char name[FS_MAX_FILENAME]; copy_text(name, base, sizeof(name));
+    int length = 0; while (name[length]) length++;
+    if (suffix(name, ".BIN")) name[length-4] = 0;
+    copy_text(record.label, name, sizeof(record.label));
     if (fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
         show_info_dialog("Desktop", "Could not save shortcut.");
 }
@@ -439,36 +433,12 @@ uint8_t desktop_mouse(int mx, int my, uint8_t left, uint8_t down, uint8_t right)
     if (overlay == 1) {
         int hit = mx >= menu_x && mx < menu_x+188 && my >= menu_y && my < menu_y+26;
         overlay = 0;
-        if (hit) { copy_text(folder, "/", FS_MAX_PATH); browse(); overlay = 2; }
+        if (hit) { show_shortcut_window(); }
         return 1;
     }
     if (mx >= 570 && mx < 642 && my >= 108 && my < 134) { overlay = 0; return 1; }
     if (overlay == 5) return 1;
-    if (overlay == 2) {
-        if (mx < 166 || mx > 634) return 1;
-        if (my >= 164 && my < 186) {
-            int n = 0; while (folder[n]) n++;
-            while (n > 1 && folder[n-1] != '/') n--;
-            folder[n > 1 ? n-1 : 1] = 0; browse();
-        } else if (my >= 188 && my < 408) {
-            int i = page+(my-188)/22;
-            if (i < entry_count) {
-                char path[FS_MAX_PATH]; joined(path, entries[i]);
-                copy_text(pending, path, FS_MAX_PATH);
-                if (fs_is_directory(pending)) { copy_text(folder, pending, FS_MAX_PATH); browse(); }
-                else { chosen_icon = 0; overlay = 3; }
-            }
-        } else if (my >= 420 && my < 446) {
-            if (mx < 270 && page >= 10) page -= 10;
-            if (mx > 550 && page+10 < entry_count) page += 10;
-        }
-    } else {
-        if (my >= 180 && my < 280) {
-            if (mx >= 190 && mx < 370) chosen_icon = 0;
-            if (mx >= 400 && mx < 580) chosen_icon = 1;
-        }
-        if (mx >= 550 && mx < 642 && my >= 420 && my < 446) { overlay = 0; create_shortcut(); }
-    }
+
     return 1;
 }
 uint8_t desktop_overlay_active(void) { return overlay != 0 || drag >= 0; }
@@ -476,4 +446,87 @@ uint8_t desktop_key(char key) {
     if (!overlay) return 0;
     if ((uint8_t)key == 1) overlay = 0;
     return 1;
+}
+
+static void shortcut_close(void) {
+    picker_pid = -1;
+    shortcut_window.visible = 0;
+    desktop_api->windows.unregister_window(&shortcut_window);
+    request_redraw();
+}
+static void shortcut_submit(void) {
+    if (pending[0] != '/' || !suffix(pending, ".BIN") || fs_is_directory(pending) ||
+        !fs_access(pending, FS_ACCESS_READ | FS_ACCESS_EXEC)) {
+        copy_text(shortcut_status, "Enter the absolute path of an accessible BIN app.", sizeof(shortcut_status));
+        return;
+    }
+    fs_stat_t st;
+    if (!fs_stat(pending, &st)) {
+        copy_text(shortcut_status, "Program does not exist.", sizeof(shortcut_status)); return;
+    }
+    create_shortcut(); shortcut_close();
+}
+static void shortcut_draw(Window* win) {
+    int x = win->x, y = win->y;
+    text(x+16, y+38, "Program:");
+    box(x+16, y+60, 366, 26);
+    desktop_api->graphics.fill_rect(x+18, y+62, 362, 22, COLOR_WHITE);
+    int n = 0; while (pending[n]) n++;
+    text(x+22, y+69, pending+(n > 43 ? n-43 : 0));
+    graphics_draw_button(x+392, y+60, 72, 26, "Open", 0);
+    text(x+16, y+104, "Icon:");
+    graphics_draw_button(x+80, y+96, 130, 26, chosen_icon ? "Terminal" : "[Terminal]", 0);
+    graphics_draw_button(x+224, y+96, 130, 26, chosen_icon ? "[Document]" : "Document", 0);
+    text(x+16, y+140, shortcut_status);
+    graphics_draw_button(x+288, y+174, 80, 26, "Create", 0);
+    graphics_draw_button(x+384, y+174, 80, 26, "Cancel", 0);
+}
+static void shortcut_key(Window* win, char key) {
+    (void)win;
+    if ((uint8_t)key == 1) { shortcut_close(); return; }
+    if (key == '\n') { shortcut_submit(); return; }
+    int n = 0; while (pending[n]) n++;
+    if (key == '\b') { if (n) pending[n-1] = 0; }
+    else if ((uint8_t)key >= 32 && (uint8_t)key < 127 && n < FS_MAX_PATH-1) {
+        pending[n] = key; pending[n+1] = 0;
+    }
+    shortcut_status[0] = 0;
+}
+static void shortcut_mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
+    (void)win;
+    if (!(buttons & 1)) return;
+    if (y >= 60 && y < 86 && x >= 392 && x < 464) {
+        char arguments[40] = "--pick-bin ";
+        char digits[12]; int n = 0, at = 11;
+        uint32_t value = ++picker_token;
+        if (!value) value = ++picker_token;
+        do { digits[n++] = '0'+value%10; value /= 10; } while (value);
+        while (n) arguments[at++] = digits[--n]; arguments[at] = 0;
+        picker_pid = app_loader_launch_picker(desktop_api, arguments);
+        if (picker_pid < 0) copy_text(shortcut_status, "Cannot open Files.", sizeof(shortcut_status));
+    }
+    if (y >= 96 && y < 122) {
+        if (x >= 80 && x < 210) chosen_icon = 0;
+        if (x >= 224 && x < 354) chosen_icon = 1;
+    }
+    if (y >= 174 && y < 200) {
+        if (x >= 288 && x < 368) shortcut_submit();
+        if (x >= 384 && x < 464) shortcut_close();
+    }
+}
+static void show_shortcut_window(void) {
+    if (shortcut_window.visible) return;
+    pending[0] = 0; shortcut_status[0] = 0; chosen_icon = 0; picker_pid = -1;
+    shortcut_window = (Window){(SCREEN_WIDTH-480)/2, 160, 480, 218,
+        "Create shortcut", 1, 1, shortcut_draw, shortcut_key, shortcut_mouse};
+    if (desktop_api->windows.register_window(&shortcut_window) < 0)
+        shortcut_window.visible = 0;
+}
+int desktop_picker_result(uint32_t token, uint32_t pid, const char* path) {
+    if (!shortcut_window.visible || picker_pid < 0 || (uint32_t)picker_pid != pid || token != picker_token) return -1;
+    if (path[0] && (path[0] != '/' || !suffix(path, ".BIN") || fs_is_directory(path) ||
+        !fs_access(path, FS_ACCESS_READ | FS_ACCESS_EXEC))) return -1;
+    picker_pid = -1;
+    if (path[0]) copy_text(pending, path, sizeof(pending));
+    request_redraw(); return 0;
 }

@@ -76,6 +76,8 @@ static void user_blit_all(void) {
 
 static char current_dir[FS_MAX_PATH] = "/";
 static uint8_t file_types[FS_MAX_FILES];
+static uint32_t picker_token;
+static int picker_finished;
 static int first_row;
 static char status[64];
 static int last_clicked = -1;
@@ -123,11 +125,13 @@ static int load_directory(const char* path) {
     int count = sys_fs_list_dir(path, names, types);
     if (count < 0) { copy_text(status, "Cannot open directory: missing or permission denied.", sizeof(status)); return 0; }
     copy_text(current_dir, path, sizeof(current_dir));
-    file_count = count;
+    file_count = 0;
     for (int i = 0; i < count; i++) {
-        copy_text(file_list[i], names[i], FS_MAX_FILENAME);
-        file_types[i] = types[i]; file_sizes[i] = -2;
+        if (picker_token && !(types[i] & FAT_ATTR_DIRECTORY) && !suffix(names[i], ".BIN")) continue;
+        copy_text(file_list[file_count], names[i], FS_MAX_FILENAME);
+        file_types[file_count] = types[i]; file_sizes[file_count++] = -2;
     }
+    count = file_count;
     selected_file = count ? 0 : -1; first_row = 0; last_clicked = -1; status[0] = 0;
     return 1;
 }
@@ -149,6 +153,11 @@ static void open_selected(void) {
     char path[FS_MAX_PATH];
     if (!item_path(selected_file, path)) { copy_text(status, "Path too long.", sizeof(status)); return; }
     if (file_types[selected_file] & FAT_ATTR_DIRECTORY) load_directory(path);
+    else if (picker_token) {
+        if (sys_file_pick_result(picker_token, path) == 0) {
+            picker_finished = 1; files_close_requested = 1;
+        } else copy_text(status, "Selection request expired or program inaccessible.", sizeof(status));
+    }
     else if (suffix(path, ".WAV") || suffix(path, ".MP3")) {
         if (sys_app_launch("/sound.bin", path) < 0)
             copy_text(status, "Cannot launch Sound Player.", sizeof(status));
@@ -283,7 +292,15 @@ void user_main(const char* arguments) {
     user_api.windows.register_window = user_register_window;
     user_api.windows.unregister_window = user_unregister_window;
     files_window.x = 150; files_window.y = 80; files_window.w = 520; files_window.h = 390;
-    files_window.title = "Files"; files_window.visible = 1; files_window.focused = 1;
+    picker_token = 0; picker_finished = 0;
+    const char* prefix = "--pick-bin "; int match = 0;
+    while (arguments && prefix[match] && arguments[match] == prefix[match]) match++;
+    if (!prefix[match]) {
+        const char* number = arguments+match;
+        while (*number >= '0' && *number <= '9') picker_token = picker_token*10 + (*number++-'0');
+        arguments = "/";
+    }
+    files_window.title = picker_token ? "Select a program" : "Files"; files_window.visible = 1; files_window.focused = 1;
     files_window.draw_content = files_draw_content;
     files_window.handle_key = files_handle_key; files_window.handle_mouse = files_handle_mouse;
     /* A single directory argument, absolute or relative to the filesystem root. */
@@ -310,5 +327,6 @@ void user_main(const char* arguments) {
             if (!files_close_requested) { files_draw_content(&files_window); user_blit_all(); }
         }
     }
+    if (picker_token && !picker_finished) (void)sys_file_pick_result(picker_token, "");
     user_unregister_window(&files_window);
 }

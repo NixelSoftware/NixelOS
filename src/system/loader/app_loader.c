@@ -310,3 +310,7 @@ int app_loader_launch_detached(os_api_t* api, const char* name, const char* argu
     int pid = app_loader_queue(api, name, arguments, 1);
     return pid < 0 ? pid : 0;
 }
+
+int app_loader_launch_picker(os_api_t* api, const char* arguments) {
+    return app_loader_queue(api, "/files.bin", arguments, 1);
+}

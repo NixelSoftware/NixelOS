@@ -15,6 +15,7 @@ static unsigned int audio_owner;
 #include "fs.h"
 #include "../system/loader/app_loader.h"
 #include "kernel_net.h"
+#include "../system/graphics/wm/desktop.h"
 #include "net/dns.h"
 #include "net/icmp.h"
 #include "../system/graphics/wm/wm.h"
@@ -345,6 +346,14 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 regs->eax = (uint32_t)-1; return;
             }
             regs->eax = fs_list_dir_types(path, (char (*)[FS_MAX_FILENAME])regs->ecx, (uint8_t*)regs->edx);
+            return;
+        }
+        case SYS_FILE_PICK_RESULT: {
+            char path[FS_MAX_PATH];
+            if (!copy_user_text(regs->ecx, path, sizeof(path))) {
+                regs->eax = (uint32_t)-1; return;
+            }
+            regs->eax = desktop_picker_result(regs->ebx, current_task->id, path);
             return;
         }
         case SYS_APP_LAUNCH: {
