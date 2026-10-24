@@ -279,12 +279,19 @@ static void terminal_shell_clear(void) {
     terminal_t* t = current_task ? current_task->terminal : 0;
     if (!t || !t->active) return;
     char input[sizeof(t->term_input)];
-    int length = t->term_input_length;
+    int editing = t->term_editing;
+    int length = editing ? t->term_input_length : 0;
     for (int i = 0; i <= length; i++) input[i] = t->term_input[i];
     terminal_clear_output(t);
-    for (int i = 0; i <= length; i++) t->term_input[i] = input[i];
-    t->term_input_length = length;
-    terminal_show_input(t);
+    t->term_input[0] = 0;
+    /* Submitted commands are no longer editable input. The shell adds a
+     * fresh prompt when the command finishes. */
+    if (editing) {
+        for (int i = 0; i <= length; i++) t->term_input[i] = input[i];
+        t->term_input_length = length;
+        t->term_editing = 1;
+        terminal_show_input(t);
+    }
     wm_invalidate();
 }
 
