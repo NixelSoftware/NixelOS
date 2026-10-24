@@ -29,13 +29,8 @@ void system_graphics_initialize(os_api_t* api, system_redraw_fn request_redraw) 
 
     debug_print("[APPS] window manager init...\n");
     wm_initialize(api, request_redraw);
-    debug_print("[APPS] register notepad...\n");
-    wm_register_window(&notepad_window);
-    debug_print("[APPS] register viewer...\n");
-    wm_register_window(&viewer_window);
-    debug_print("[APPS] register terminal...\n");
-    wm_register_window(&terminal_window);
-    debug_print("[APPS] desktop init...\n");
-    desktop_init(api, &terminal_window, &notepad_window);
+    desktop_init(api);
+    /* One initial shell; each icon activation creates an additional instance. */
+    if (terminal_launch() < 0) debug_print("[APPS] Cannot create initial terminal\n");
     debug_print("[APPS] initialization done\n");
 }

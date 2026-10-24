@@ -1,5 +1,6 @@
 #include "start.h"
 #include "wm.h"
+#include "../terminal/terminal.h"
 #include "../../../kernel/drivers/display/font.h"
 
 static os_api_t* s_api = 0;
@@ -128,10 +129,11 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
             switch (selected) {
                 case START_ITEM_PROGRAMS:
                 case START_ITEM_FILES:
-                    toggle_window("Files");
+                    if (s_api && s_api->shell.launch_app) s_api->shell.launch_app("files.bin", "");
                     break;
                 case START_ITEM_TERMINAL:
-                    toggle_window("Terminal");
+                    if (terminal_launch() < 0 && s_api && s_api->windows.show_info_dialog)
+                        s_api->windows.show_info_dialog("Cannot launch", "No free terminal, window, or process slots.");
                     break;
                 case START_ITEM_HELP:
                     if (s_api && s_api->windows.show_info_dialog) {

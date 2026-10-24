@@ -3,6 +3,8 @@
 
 static uint8_t shift_held = 0;
 static uint8_t caps_lock = 0;
+static uint8_t control_held;
+static uint8_t extended_scancode;
 
 static const char unshifted_map[128] = {
     0,   27,  '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -72,6 +74,19 @@ uint8_t kbd_get_caps_lock(void) {
 }
 
 char kbd_scancode_to_ascii(uint8_t scancode) {
+    if (scancode == 0xE0) {
+        extended_scancode = 1;
+        return 0;
+    }
+    uint8_t extended = extended_scancode;
+    extended_scancode = 0;
+    if ((scancode & 0x7F) == 0x1D) {
+        uint8_t mask = extended ? 2u : 1u;
+        if (scancode & 0x80) control_held &= (uint8_t)~mask;
+        else control_held |= mask;
+        return 0;
+    }
+    if (control_held && scancode == 0x2E) return 3; /* Ctrl+C / ETX */
     
     if (scancode == 0x2A || scancode == 0x36) { 
         shift_held = 1;

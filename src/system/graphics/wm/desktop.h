@@ -8,12 +8,12 @@ typedef struct {
     int32_t y;
     const char* label;
     const char* executable;
-    Window* target_window;
+    int (*launch)(void);
     uint8_t icon_type; 
     uint8_t selected;
 } DesktopIcon;
 
-void desktop_init(os_api_t* api, Window* term_win, Window* note_win);
+void desktop_init(os_api_t* api);
 void desktop_draw(void);
 void desktop_trace_api(const char* label);
 

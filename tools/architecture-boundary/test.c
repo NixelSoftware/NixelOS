@@ -153,6 +153,14 @@ void test_main(void) {
         for(unsigned i=0;i<3;i++)
             while(user_tasks[i]->state!=TASK_STATE_TERMINATED)task_sleep_ms(1);
     }
+    done=0;
+    data[0][7]=1; data[0][8]=0;
+    int interrupted=task_create(user_task,0,"interrupt-spin");
+    check(interrupted>0,"create CPU-bound interruption target");
+    while(!data[0][8])task_sleep_ms(1);
+    task_terminate_children(current_task->id);
+    check(task_wait(interrupted)==0 && done==1,"CPU-bound user interruption and cleanup");
+    print("PASS forced termination of user loop without syscalls\n");
     check(user_irqs>3 && kernel_irqs>3 && switches>30,"real user IRQ preemption");
     print("PASS user IRQ frames, TSS stacks, CR3 and private mappings\n");
     print("PASS syscall suspension, normal exit and user fault returns\n");

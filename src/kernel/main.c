@@ -65,7 +65,7 @@ volatile uint32_t frame_timer = 0;
 static uint8_t needs_redraw = 1;
 
 
-static shell_output_fn shell_output;
+
 
 
 static void pit_init(uint32_t frequency_hz) {
@@ -172,12 +172,13 @@ static void api_capture_screenshot(void) {
 
 static void api_shell_set_output(shell_output_fn output) {
     MUTEX_GUARD(kernel_mutex);
-    shell_output = output;
+    if (current_task) current_task->shell_output = output;
 }
 
 static int api_shell_open_viewer(const char* filename) {
     if (!viewer_load_bmp(filename)) return 0;
     MUTEX_GUARD(kernel_mutex);
+    if (wm_register_window(&viewer_window) < 0) return 0;
     viewer_window.visible = 1;
     wm_bring_to_front(&viewer_window);
     needs_redraw = 1;
@@ -430,7 +431,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 #endif
         task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
         task_create_nice(usb_service, 0, "usb", 2) < 0 ||
-        task_create_nice(shell_service, 0, "terminal", 0) < 0 ||
         display_start_async() < 0 || serial_start_async() < 0) {
 #else
     if (serial_start_async() < 0) {

@@ -4,7 +4,7 @@
 #include "../../../kernel/os_api.h"
 #include "../../user/window_api.h"
 
-#define WM_MAX_WINDOWS 6
+#define WM_MAX_WINDOWS 16
 #define WM_TASKBAR_Y 568
 #define WM_TASKBAR_HEIGHT 32
 

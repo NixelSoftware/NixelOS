@@ -2,13 +2,16 @@
 #include "desktop_wallpaper.h"
 #include "../../../kernel/drivers/serial.h"
 #include "wm.h"
+#include "../terminal/terminal.h"
+#include "../../../apps/notepad/notepad.h"
+#include "../dialog/dialog.h"
 
 #define NUM_ICONS 2
 static DesktopIcon icons[NUM_ICONS];
 
 static uint32_t last_click_time = 0;
 static int last_clicked_icon = -1;
-#define DOUBLE_CLICK_THRESHOLD 5000
+#define DOUBLE_CLICK_THRESHOLD 50 /* get_ticks is the legacy 100 Hz clock. */
 static os_api_t* desktop_api;
 
 static const uint8_t icon_terminal[16][16] = {
@@ -60,7 +63,7 @@ static uint32_t resolve_color(uint8_t c) {
     }
 }
 
-void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
+void desktop_init(os_api_t* api) {
     desktop_api = api;
     debug_subsystem_print("[RENDER TRACE] desktop_init API pointer: ");
     debug_subsystem_hex((uint32_t)api);
@@ -73,7 +76,7 @@ void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
     icons[0].y = 20;
     icons[0].label = "TERM";
     icons[0].executable = 0;
-    icons[0].target_window = term_win;
+    icons[0].launch = terminal_launch;
     icons[0].icon_type = 0;
     icons[0].selected = 0;
 
@@ -81,7 +84,7 @@ void desktop_init(os_api_t* api, Window* term_win, Window* note_win) {
     icons[1].y = 80;
     icons[1].label = "NOTES";
     icons[1].executable = 0;
-    icons[1].target_window = note_win;
+    icons[1].launch = notepad_launch;
     icons[1].icon_type = 1;
     icons[1].selected = 0;
     desktop_wallpaper_init(api, WALLPAPER_MODE_STRETCH);
@@ -184,9 +187,9 @@ uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {
         DesktopIcon* icon = &icons[clicked_index];
         if (desktop_api && icon->executable && desktop_api->shell.launch_app)
             desktop_api->shell.launch_app(icon->executable, "");
-        else if (icon->target_window) {
-            icon->target_window->visible = 1;
-            wm_bring_to_front(icon->target_window);
+        else if (icon->launch && icon->launch() < 0 && desktop_api &&
+                 desktop_api->windows.show_info_dialog) {
+            desktop_api->windows.show_info_dialog("Cannot launch", "No free application, window, or process slots.");
         }
         icons[clicked_index].selected = 0;
         last_clicked_icon = -1;

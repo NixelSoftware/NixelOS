@@ -36,6 +36,10 @@ typedef struct task {
     uint32_t id, state, esp; /* esp at offset 8 is shared with task_switch.asm. */
     uint32_t directory, user_kernel_esp, user_exit_requested;
     uint32_t parent_id, generation, terminate_requested, detached;
+    struct terminal* terminal;
+    char command_args[256];
+    void (*shell_output)(const char*);
+    void (*shell_clear)(void);
     uint32_t preempt_count;
     int base_nice;
     struct mutex *owned_mutexes, *waiting_mutex;

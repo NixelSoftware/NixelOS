@@ -125,6 +125,7 @@ int task_detach(void) {
     if (current_task && !current_task->terminate_requested) {
         current_task->parent_id = 0;
         current_task->detached = 1;
+        current_task->terminal = 0;
         result = 0;
     }
     task_irq_restore(flags);
@@ -167,6 +168,11 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
     t->generation = ++next_generation;
     t->terminate_requested = 0;
     t->detached = current_task ? current_task->detached : 0;
+    t->terminal = current_task ? current_task->terminal : 0;
+    t->shell_output = current_task ? current_task->shell_output : 0;
+    t->shell_clear = current_task ? current_task->shell_clear : 0;
+    for (unsigned i = 0; i < sizeof(t->command_args); i++)
+        t->command_args[i] = current_task ? current_task->command_args[i] : 0;
     t->directory = paging_kernel_directory();
     t->user_kernel_esp = t->user_exit_requested = t->preempt_count = 0;
     t->wait_next = 0;

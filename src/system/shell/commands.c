@@ -5,10 +5,10 @@
 #include "../graphics/terminal/terminal.h"
 
 static os_api_t* shell_api;
-static shell_output_fn shell_output;
-static shell_clear_fn shell_clear;
+#define shell_output (current_task->shell_output)
+#define shell_clear (current_task->shell_clear)
 #define SHELL_ARGUMENT_MAX 256
-static char shell_args[SHELL_ARGUMENT_MAX];
+#define shell_args (current_task->command_args)
 
 static void print(const char* text) {
     if (shell_output) shell_output(text);
@@ -180,53 +180,94 @@ void shell_initialize(os_api_t* api) {
     shell_network_initialize(api);
 }
 
-/* Commands run on a worker stack. Input callbacks only copy a bounded request;
- * disk waits and application preparation never retain the input callback lock. */
-#define SHELL_QUEUE_SIZE 8u
+/* Each terminal owns a queue and shell task; no command state is shared. */
 typedef struct {
+    terminal_t* terminal;
+    task_t* task;
     char command[SHELL_ARGUMENT_MAX];
     shell_output_fn output;
     shell_clear_fn clear;
-} shell_request_t;
-static shell_request_t shell_queue[SHELL_QUEUE_SIZE];
-static uint32_t shell_head, shell_count;
-static task_t* terminal_task;
-void shell_close_terminal(void) {
-    MUTEX_GUARD(kernel_mutex);
-    shell_count = 0;
-    if (terminal_task) task_terminate_children(terminal_task->id);
+    uint8_t allocated, pending, active, closing;
+} shell_session_t;
+static shell_session_t sessions[TERMINAL_MAX_INSTANCES];
+static shell_session_t* session_for(terminal_t* terminal) {
+    for (int i = 0; i < TERMINAL_MAX_INSTANCES; i++)
+        if (sessions[i].allocated && sessions[i].terminal == terminal) return &sessions[i];
+    return 0;
 }
-
-int shell_submit_command(const char* command, shell_output_fn output, shell_clear_fn clear) {
+int shell_open_terminal(terminal_t* terminal) {
     MUTEX_GUARD(kernel_mutex);
-    if (!command) return 0;
+    for (int i = 0; i < TERMINAL_MAX_INSTANCES; i++) {
+        shell_session_t* s = &sessions[i];
+        if (s->allocated) continue;
+        *s = (shell_session_t){.terminal = terminal, .allocated = 1};
+        if (task_create(shell_service, s, "terminal") < 0) { s->allocated = 0; return -1; }
+        return 0;
+    }
+    return -1;
+}
+int shell_interrupt(terminal_t* terminal) {
+    MUTEX_GUARD(kernel_mutex);
+    shell_session_t* s = session_for(terminal);
+    if (!s) return 0;
+    s->pending = 0;
+    if (s->task) {
+        if (s->active) s->task->terminate_requested = 1;
+        task_terminate_children(s->task->id);
+    }
+    return s->active;
+}
+void shell_close_terminal(terminal_t* terminal) {
+    MUTEX_GUARD(kernel_mutex);
+    shell_session_t* s = session_for(terminal);
+    if (!s) return;
+    s->closing = 1;
+    shell_interrupt(terminal);
+}
+int shell_submit_command(terminal_t* terminal, const char* command,
+                         shell_output_fn output, shell_clear_fn clear) {
+    MUTEX_GUARD(kernel_mutex);
+    shell_session_t* s = session_for(terminal);
+    if (!s || s->closing || s->pending || s->active || !command) return 0;
     uint32_t length = 0;
     while (command[length] && length < SHELL_ARGUMENT_MAX) length++;
-    if (length == SHELL_ARGUMENT_MAX || shell_count == SHELL_QUEUE_SIZE) return 0;
-
-    shell_request_t* request = &shell_queue[(shell_head + shell_count) % SHELL_QUEUE_SIZE];
-    for (uint32_t i = 0; i <= length; i++) request->command[i] = command[i];
-    request->output = output; request->clear = clear;
-    shell_count++;
+    if (length == SHELL_ARGUMENT_MAX) return 0;
+    for (uint32_t i = 0; i <= length; i++) s->command[i] = command[i];
+    s->output = output; s->clear = clear; s->pending = 1;
     return 1;
 }
-
 void shell_service(void* argument) {
-    (void)argument;
-    terminal_task = current_task;
+    shell_session_t* s = argument;
+    mutex_lock(&kernel_mutex);
+    s->task = current_task;
+    current_task->terminal = s->terminal;
+    /* A new shell is independent of the terminal that launched it. */
+    current_task->detached = 0;
+    mutex_unlock(&kernel_mutex);
     for (;;) {
-        shell_request_t request;
         mutex_lock(&kernel_mutex);
-        if (!shell_count) {
+        if (current_task->terminate_requested) s->closing = 1;
+        if (s->closing) {
+            terminal_release(s->terminal);
+            s->allocated = 0;
+            mutex_unlock(&kernel_mutex);
+            return;
+        }
+        if (!s->pending) {
             mutex_unlock(&kernel_mutex);
             task_sleep_ms(1);
             continue;
         }
-        request = shell_queue[shell_head];
-        shell_head = (shell_head + 1u) % SHELL_QUEUE_SIZE;
-        shell_count--;
+        char command[SHELL_ARGUMENT_MAX];
+        for (unsigned i = 0; i < sizeof(command); i++) command[i] = s->command[i];
+        s->pending = 0; s->active = 1;
+        current_task->terminate_requested = 0;
         mutex_unlock(&kernel_mutex);
-        shell_execute_command(request.command, request.output, request.clear);
-        terminal_command_done();
+        shell_execute_command(command, s->output, s->clear);
+        mutex_lock(&kernel_mutex);
+        current_task->terminate_requested = 0;
+        s->active = 0;
+        if (!s->closing) terminal_command_done(s->terminal);
+        mutex_unlock(&kernel_mutex);
     }
 }

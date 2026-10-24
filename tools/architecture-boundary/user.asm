@@ -2,6 +2,13 @@
 section .rodata
 global user_code, user_code_end
 user_code:
+    cmp dword [0xc0101c], 1
+    jne .normal
+    mov dword [0xc01020], 1
+.cancel_spin:
+    pause
+    jmp .cancel_spin ; No syscalls: interruption must work at a timer boundary.
+.normal:
     fnstcw [0xc01200]
     cmp word [0xc01200], 0x037f
     jne .bad

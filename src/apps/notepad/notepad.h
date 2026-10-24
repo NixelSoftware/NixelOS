@@ -3,7 +3,8 @@
 
 #include "../../kernel/window.h"
 
-extern Window notepad_window;
+int notepad_launch(void);
+int notepad_close(Window* window);
 
 void notepad_init(void);
 void notepad_draw(Window* win);
