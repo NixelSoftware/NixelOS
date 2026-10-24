@@ -2,3 +2,6 @@
 *.elf
 *.img
 *.code-workspace
+os
+struct
+*pyc
