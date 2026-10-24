@@ -1,5 +1,6 @@
 
 # Todo
+- [X] **someone** - Truncate filenames until clicked on the desktop
 - [X] **zainabm** - Implement ACPI for reboots
 - [x] **zainabm** - Implement proper ACPI
 - [ ] **zainabm** - Add telnet server
