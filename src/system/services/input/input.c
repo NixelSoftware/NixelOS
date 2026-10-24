@@ -1,4 +1,19 @@
 #include "input.h"
+#include "../../../kernel/task.h"
+
+static os_input_event_t pending[128];
+static unsigned read_index, write_index;
+
+void input_enqueue_event(const os_input_event_t* event) {
+    if (!event) return;
+    uint32_t flags = task_irq_save();
+    unsigned next = (write_index + 1) % 128;
+    if (next == read_index) read_index = (read_index + 1) % 128;
+    pending[write_index] = *event;
+    write_index = next;
+    task_irq_restore(flags);
+}
+
 
 static os_api_t* input_api;
 static uint8_t mouse_packet_cycle;
@@ -12,6 +27,15 @@ void input_initialize(os_api_t* api) {
 }
 
 int input_poll_event(os_input_event_t* event) {
+    if (!event) return 0;
+    uint32_t flags = task_irq_save();
+    if (read_index != write_index) {
+        *event = pending[read_index];
+        read_index = (read_index + 1) % 128;
+        task_irq_restore(flags);
+        return 1;
+    }
+    task_irq_restore(flags);
     if (!input_api || !event || !input_api->input.ps2_status || !input_api->input.ps2_read_data)
         return 0;
     event->type = OS_INPUT_NONE;

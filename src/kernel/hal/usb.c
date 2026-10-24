@@ -7,6 +7,8 @@
     "Control Transfer Failed"? Fuck you!!
     Either way, I give up for now. 
         - zainabm
+
+    fixed - elyas-code
 */
 
 static const usb_hci_ops_t* active_controller = 0;

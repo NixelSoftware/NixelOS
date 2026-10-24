@@ -166,12 +166,12 @@ static void user_surface_composite(user_window_slot_t* slot) {
     Window* window = &slot->window;
     /* The compositor already owns kernel_mutex. Copy page-sized row spans
      * directly, avoiding a mutex/IRQ transition for every individual pixel. */
-    int32_t left = window->x < 0 ? -window->x : 0;
-    int32_t right = window->w;
+    int32_t left = window->x < 0 ? -window->x : 1;
+    int32_t right = window->w - 1;
     if (window->x + right > SCREEN_WIDTH) right = SCREEN_WIDTH - window->x;
     if (left >= right) return;
     uint32_t* buffer = display_get_backbuffer();
-    for (int32_t y = 18; y < window->h; y++) {
+    for (int32_t y = 18; y < window->h - 1; y++) {
         int32_t py = window->y + y;
         if (py < 0 || py >= SCREEN_HEIGHT) continue;
         int32_t x = left;
