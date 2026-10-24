@@ -1,10 +1,6 @@
 /* Netzhaut - Web Browser Engine
  * Copyright (C) 2022 Dajo Frey
  * Published under GNU LGPL; see LICENSE.LGPL in this directory.
- * Extracted by tools/sync_browser_entities.py; do not edit by hand.
- * Source: https://github.com/dajofrey/Netzhaut
- * Local source SHA-256: 141ecbc41a408ae949db95e210f496913ebca8952faa4b308425ca5fdb835f53
- * Adaptation: private, const tables; lookup is implemented in html.c.
  */
 static const char *const entity_names[] = {
     "Aacute;",

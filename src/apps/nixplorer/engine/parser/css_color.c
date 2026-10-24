@@ -51,10 +51,19 @@ unsigned browser_css_blend(unsigned rgb, unsigned alpha, unsigned backdrop) {
     }
     return result;
 }
-static int parse_color(const char *input, const char *end, browser_css_color *out) {
+static int parse_color(const char *input, const char *end, browser_css_color *out, unsigned depth) {
+    if (depth > 4) return 0;
     const char *p = skip(input, end);
     while (end > p && space(end[-1])) end--;
     browser_css_color result = {0, 255};
+    if (end - p > 12 && equal(p, p + 11, "light-dark(") && end[-1] == ')') {
+        const char *split = p + 11; unsigned nested = 0;
+        while (split < end - 1) { if (*split == '(') nested++; else if (*split == ')' && nested) nested--; else if (*split == ',' && !nested) break; split++; }
+        browser_css_color dark;
+        if (split == end - 1 || !parse_color(p + 11, split, &result, depth + 1) || !parse_color(split + 1, end - 1, &dark, depth + 1)) return 0;
+        /* The native browser currently uses a light colour scheme. */
+        *out = result; return 1;
+    }
     if (equal(p, end, "transparent")) { result.alpha = 0; *out = result; return 1; }
     if (equal(p, end, "currentcolor")) { result.rgb = BROWSER_CSS_CURRENT_COLOR; *out = result; return 1; }
     if (p < end && *p == '#') {
@@ -143,5 +152,5 @@ int browser_css_parse_color(const char *p, const char *end, browser_css_color *o
             value[count++] = *p++;
         }
     }
-    return parse_color(value, value + count, out);
+    return parse_color(value, value + count, out, 0);
 }

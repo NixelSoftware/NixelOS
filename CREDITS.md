@@ -13,14 +13,16 @@ Thank you to everyone who contributed to the development of this project!
 
 ---
 
-## Browser engine reference
+## Browser Engine
 
-[Netzhaut](https://github.com/dajofrey/Netzhaut), copyright (C) 2022 Dajo Frey,
-supplies the browser engine used by the native browser.
-The adapted tables and license are in `src/apps/nixplorer/engine/parser/`.
-
+Thanks to **Dajo Frey**, creator of [Netzhaut](https://github.com/dajofrey/Netzhaut),
+for his C browser engine and the work used in developing Nixplorer. Nixplorer
+incorporates HTML character-reference and CSS colour data from the project.
+Original copyright (C) 2022 Dajo Frey and GNU LGPL notices are retained with
+those contributions.
 
 ---
+
 ## Wallpapers
 
 Special thanks to all the individuals who helped submit wallpapers for this project:

@@ -3,7 +3,7 @@
 #include "../dom/document.h"
 #include "../parser/css_color.h"
 #define BROWSER_CSS_RULES 160
-#define BROWSER_CSS_PROPERTIES 42
+#define BROWSER_CSS_PROPERTIES 43
 #define BROWSER_GRID_TRACKS 8
 #define BROWSER_CURRENT_COLOR BROWSER_CSS_CURRENT_COLOR
 enum { BROWSER_TOP, BROWSER_RIGHT, BROWSER_BOTTOM, BROWSER_LEFT };
@@ -19,6 +19,7 @@ typedef struct {
     unsigned color, background, painted_background; /* Resolved against the containing backdrop. */
     unsigned text_rgb, text_alpha, background_rgb, background_alpha, border_alpha;
     int text_transform, visibility_hidden;
+    int font_size, root_font_size, viewport_width, viewport_height, line_height_value;
     int bold, display, pre, align, underline, background_set; /* decoration bits: underline=1, strike=2, overline=4 */
     int margin[4], padding[4];
     /* Widths: -1=auto, -(percentage+2)=percentage, otherwise pixels. */

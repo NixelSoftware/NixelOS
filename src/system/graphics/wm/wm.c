@@ -682,7 +682,22 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
         return 0;
     }
 
-    if (drawing->operation == USER_WINDOW_DRAW_IMAGE) {
+    if (drawing->operation == USER_WINDOW_DRAW_TEXT_SCALED) {
+        if (!text || drawing->width < 4 || drawing->width > 32 || drawing->height < 8 || drawing->height > 64 ||
+            drawing->x < 0 || drawing->y < 18 || drawing->x >= window->w || drawing->y > window->h - drawing->height) return -1;
+        unsigned advance = (unsigned)drawing->width, height = (unsigned)drawing->height;
+        unsigned count = (unsigned)(window->w - drawing->x) / advance;
+        if (count > USER_WINDOW_TEXT_MAX - 1) count = USER_WINDOW_TEXT_MAX - 1;
+        for (unsigned i = 0; i < count && text[i]; i++) {
+            unsigned char ch = (unsigned char)text[i]; if (ch >= 128) ch = '?';
+            for (unsigned y = 0; y < height; y++) for (unsigned x = 0; x < advance; x++)
+                if (font_8x8[ch][y * 8 / height] & (0x80u >> (x * 8 / advance)))
+                    user_surface_set_pixel(slot, drawing->x + (int)(i * advance + x), drawing->y + (int)y, drawing->color);
+        }
+        return 0;
+    }
+
+    if (drawing->operation == USER_WINDOW_DRAW_IMAGE || drawing->operation == USER_WINDOW_DRAW_IMAGE_CLIPPED) {
         static uint32_t decoded[PNG_TARGET_W * PNG_TARGET_H];
         if (!image_data || !drawing->data_length ||
             drawing->width <= 0 || drawing->height <= 0 ||
@@ -690,12 +705,28 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
             !wm_api->graphics.png_decode_and_resize ||
             !wm_api->graphics.png_decode_and_resize(
                 image_data, drawing->data_length, decoded)) return -1;
+        int clip_top = 18, clip_bottom = window->h;
+        if (drawing->operation == USER_WINDOW_DRAW_IMAGE_CLIPPED) {
+            clip_top = (int)(drawing->color >> 16); clip_bottom = (int)(drawing->color & 65535u);
+            if (clip_top < 18 || clip_bottom > window->h || clip_top >= clip_bottom) return -1;
+        }
         for (int32_t y = 0; y < drawing->height; y++) {
+            if (drawing->y + y < clip_top || drawing->y + y >= clip_bottom) continue;
             int32_t source_y = (y * PNG_TARGET_H) / drawing->height;
             for (int32_t x = 0; x < drawing->width; x++) {
                 int32_t source_x = (x * PNG_TARGET_W) / drawing->width;
-                user_surface_set_pixel(slot, drawing->x + x, drawing->y + y,
-                    decoded[source_y * PNG_TARGET_W + source_x]);
+                uint32_t pixel = decoded[source_y * PNG_TARGET_W + source_x];
+                unsigned alpha = pixel >> 24;
+                if (!alpha) continue;
+                if (alpha < 255) {
+                    const uint32_t* under = user_surface_pixel(slot, (uint32_t)(drawing->x + x), (uint32_t)(drawing->y + y));
+                    if (!under) continue;
+                    unsigned rgb = 0;
+                    for (unsigned shift = 0; shift <= 16; shift += 8)
+                        rgb |= (((((pixel >> shift) & 255) * alpha + ((*under >> shift) & 255) * (255 - alpha) + 127) / 255) << shift);
+                    pixel = rgb;
+                }
+                user_surface_set_pixel(slot, drawing->x + x, drawing->y + y, pixel & 0xffffffu);
             }
         }
         return 0;

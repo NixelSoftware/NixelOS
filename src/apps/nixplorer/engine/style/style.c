@@ -1,13 +1,10 @@
 #include "style.h"
+#include "selectors.h"
 #include "../parser/html.h"
 #include "../parser/css_grid.h"
 
 static int space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 static char lower(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
-static int ident(char c) {
-    return (lower(c) >= 'a' && lower(c) <= 'z') ||
-           (c >= '0' && c <= '9') || c == '-' || c == '_';
-}
 static const char *skip(const char *p, const char *end) {
     for (;;) {
         while (p < end && space(*p)) p++;
@@ -131,75 +128,6 @@ void browser_stylesheet_collect(browser_stylesheet *sheet, const browser_documen
     }
 }
 
-typedef struct { const char *p, *end; int direct; } component;
-static int attribute_word(const browser_node *n, const char *attr, const char *p, const char *end, int word) {
-    char value[256];
-    if (!browser_node_attr(n, attr, value, sizeof(value))) return 0;
-    const char *v = value;
-    do {
-        if (word) while (space(*v)) v++;
-        const char *stop = v;
-        while (*stop && (!word || !space(*stop))) stop++;
-        const char *a = v, *b = p;
-        while (a < stop && b < end && *a == *b) { a++; b++; }
-        if (a == stop && b == end) return 1;
-        if (!word) break;
-        v = stop;
-    } while (*v);
-    return 0;
-}
-static int compound(const browser_node *node, const char *p, const char *end, unsigned *specificity) {
-    unsigned score = 0;
-    if (p < end && *p == '*') p++;
-    else if (p < end && ident(*p)) {
-        const char *name = p;
-        while (p < end && ident(*p)) p++;
-        if (node && !equal(name, p, node->tag, 1)) return 0;
-        score++;
-    }
-    while (p < end) {
-        char kind = *p++;
-        if (kind != '.' && kind != '#') return 0; /* Unsupported selectors never broaden matches. */
-        const char *name = p;
-        while (p < end && ident(*p)) p++;
-        if (name == p) return 0;
-        if (node && !attribute_word(node, kind == '#' ? "id" : "class", name, p, kind == '.')) return 0;
-        score += kind == '#' ? 65536u : 256u;
-    }
-    *specificity += score;
-    return 1;
-}
-static int match_components(const browser_document *doc, int node, component *parts, int part, unsigned *budget) {
-    if (!*budget) return 0;
-    --*budget;
-    unsigned unused = 0;
-    if (node <= 0 || !compound(&doc->nodes[node], parts[part].p, parts[part].end, &unused)) return 0;
-    if (!part) return 1;
-    int parent = doc->nodes[node].parent;
-    if (parts[part].direct) return match_components(doc, parent, parts, part - 1, budget);
-    while (parent > 0) {
-        if (match_components(doc, parent, parts, part - 1, budget)) return 1;
-        parent = doc->nodes[parent].parent;
-    }
-    return 0;
-}
-static int matches(const browser_document *doc, int node, const browser_css_rule *rule, unsigned *score) {
-    component parts[16]; int count = 0, direct = 0;
-    const char *p = rule->selector, *end = rule->selector_end;
-    *score = 0;
-    while ((p = skip(p, end)) < end) {
-        if (count == 16 || *p == '>') return 0;
-        component *part = &parts[count++];
-        part->p = p; part->direct = direct;
-        while (p < end && !space(*p) && *p != '>') p++;
-        part->end = p;
-        if (!compound(0, part->p, part->end, score)) return 0;
-        p = skip(p, end); direct = 0;
-        if (p < end && *p == '>') { direct = 1; p = skip(p + 1, end); if (p == end) return 0; }
-    }
-    unsigned budget = 4096;
-    return count && match_components(doc, node, parts, count - 1, &budget);
-}
 enum {
     P_COLOR, P_BG, P_BOLD, P_DISPLAY, P_PRE, P_ALIGN, P_UNDERLINE,
     P_MARGIN_TOP, P_MARGIN_RIGHT, P_MARGIN_BOTTOM, P_MARGIN_LEFT,
@@ -209,7 +137,7 @@ enum {
     P_FLEX_DIRECTION, P_FLEX_WRAP, P_JUSTIFY, P_ALIGN_ITEMS, P_ROW_GAP, P_COLUMN_GAP,
     P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_ALIGN_SELF,
     P_GRID_TRACKS, P_GRID_AUTO_ROWS, P_GRID_COLUMN, P_GRID_SPAN, P_JUSTIFY_ITEMS, P_JUSTIFY_SELF,
-    P_TEXT_TRANSFORM, P_VISIBILITY
+    P_TEXT_TRANSFORM, P_VISIBILITY, P_FONT_SIZE
 };
 static void apply_property(browser_style *s, unsigned *ranks, unsigned priority, int property, int value) {
     if (priority < ranks[property]) return;
@@ -232,7 +160,7 @@ static void apply_property(browser_style *s, unsigned *ranks, unsigned priority,
         case P_BORDER_COLOR: s->border_color = (unsigned)value; break;
         case P_BORDER_STYLE: s->border_solid = value; break;
         case P_BOX_SIZING: s->border_box = value; break;
-        case P_LINE_HEIGHT: s->line_height = value; break;
+        case P_LINE_HEIGHT: s->line_height_value = value; break;
         case P_FLEX_DIRECTION: s->flex_column = value; break;
         case P_FLEX_WRAP: s->flex_wrap = value; break;
         case P_JUSTIFY: s->justify = value; break;
@@ -250,24 +178,81 @@ static void apply_property(browser_style *s, unsigned *ranks, unsigned priority,
         case P_JUSTIFY_SELF: s->justify_self = value; break;
         case P_TEXT_TRANSFORM: s->text_transform = value; break;
         case P_VISIBILITY: s->visibility_hidden = value; break;
+        case P_FONT_SIZE: s->font_size = value; break;
     }
 }
-/* Length encoding: -1=auto; -(percentage+2)=percentage; nonnegative=px. */
+/* Relative lengths stay encoded until font size and viewport are known. */
 static int length_value(const char *v, const char *end, int auto_ok, int percent_ok, int *value) {
     if (auto_ok && equal(v, end, "auto", 1)) { *value = -1; return 1; }
-    const char *p = v; int number = 0;
-    while (p < end && *p >= '0' && *p <= '9') {
-        number = number * 10 + *p++ - '0';
-        if (number > 4096) return 0;
+    const char *p = v; int whole = 0, fraction = 0, scale = 1, digits = 0;
+    while (p < end && *p >= '0' && *p <= '9') { whole = whole * 10 + *p++ - '0'; digits++; if (whole > 4096) return 0; }
+    if (p < end && *p == '.') {
+        const char *start = ++p;
+        while (p < end && *p >= '0' && *p <= '9') { if (scale < 1000) { fraction = fraction * 10 + *p - '0'; scale *= 10; } p++; digits++; }
+        if (p == start) return 0;
     }
-    if (p == v) return 0;
-    if (percent_ok && equal(p, end, "%", 0)) {
-        if (number > 100) return 0;
-        *value = -number - 2; return 1;
+    if (!digits) return 0;
+    int fixed = whole * 1000 + fraction * 1000 / scale;
+    if (percent_ok && equal(p, end, "%", 0)) { if (fraction || whole > 100) return 0; *value = -whole - 2; return 1; }
+    const char *units[] = {"em", "rem", "vw", "vh", "vmin", "vmax"};
+    for (int i = 0; i < 6; i++) if (equal(p, end, units[i], 1)) {
+        if (fixed > 999999) return 0;
+        *value = -(10000000 + i * 1000000 + fixed); return 1;
     }
-    if (!equal(p, end, "px", 1) && !(number == 0 && p == end)) return 0;
-    *value = number; return 1;
+    if (!equal(p, end, "px", 1) && !(fixed == 0 && p == end)) return 0;
+    *value = (fixed + 500) / 1000; return 1;
 }
+static int resolve_length(int value, const browser_style *s, int em) {
+    if (value > -10000000) return value;
+    int encoded = -value - 10000000, unit = encoded / 1000000, fixed = encoded % 1000000;
+    int base = em;
+    if (unit == 1) base = s->root_font_size;
+    else if (unit == 2) base = s->viewport_width;
+    else if (unit == 3) base = s->viewport_height;
+    else if (unit == 4) base = s->viewport_width < s->viewport_height ? s->viewport_width : s->viewport_height;
+    else if (unit == 5) base = s->viewport_width > s->viewport_height ? s->viewport_width : s->viewport_height;
+    int divisor = unit >= 2 ? 100000 : 1000;
+    /* Bound before multiplication to keep arithmetic safe on i386. */
+    if (base > 4096) base = 4096;
+    if (base < 0) base = 0;
+    if (fixed > 4096 * divisor / (base ? base : 1)) return 4096;
+    return (fixed * base + divisor / 2) / divisor;
+}
+static int line_height_value(const char *v, const char *end, int *value) {
+    if (equal(v, end, "normal", 1)) { *value = 0; return 1; }
+    if (length_value(v, end, 0, 1, value)) return 1;
+    const char *p = v; int whole = 0, fraction = 0, scale = 1, digits = 0;
+    while (p < end && *p >= '0' && *p <= '9') { whole = whole * 10 + *p++ - '0'; digits++; if (whole > 8) return 0; }
+    if (p < end && *p == '.') {
+        const char *start = ++p;
+        while (p < end && *p >= '0' && *p <= '9') { if (scale < 1000) { fraction = fraction * 10 + *p - '0'; scale *= 10; } p++; digits++; }
+        if (p == start) return 0;
+    }
+    if (!digits || p != end) return 0;
+    *value = -20000000 - whole * 1000 - fraction * 1000 / scale; return 1;
+}
+static void font_declaration(browser_style *s, unsigned *ranks, unsigned priority, const char *v, const char *end) {
+    const char *p = v; int weight = 0, size = 0, line = 0, found = 0;
+    while ((p = skip(p, end)) < end) {
+        const char *stop = p; while (stop < end && !space(*stop) && *stop != '/') stop++;
+        if (length_value(p, stop, 0, 1, &size)) { p = stop; found = 1; break; }
+        if (equal(p, stop, "bold", 1) || equal(p, stop, "bolder", 1)) weight = 1;
+        else if (!equal(p, stop, "normal", 1) && !equal(p, stop, "italic", 1) && !equal(p, stop, "oblique", 1)) return;
+        p = stop;
+    }
+    if (!found) return;
+    p = skip(p, end);
+    if (p < end && *p == '/') {
+        p = skip(p + 1, end); const char *stop = p; while (stop < end && !space(*stop)) stop++;
+        if (!line_height_value(p, stop, &line)) return;
+        p = skip(stop, end);
+    }
+    if (p == end) return; /* A font family is required, even with the native fallback. */
+    apply_property(s, ranks, priority, P_FONT_SIZE, size);
+    apply_property(s, ranks, priority, P_LINE_HEIGHT, line);
+    apply_property(s, ranks, priority, P_BOLD, weight);
+}
+
 static int border_width_value(const char *v, const char *end, int *value) {
     if (equal(v, end, "thin", 1)) { *value = 1; return 1; }
     if (equal(v, end, "medium", 1)) { *value = 3; return 1; }
@@ -482,23 +467,8 @@ static void box_declaration(browser_style *s, const browser_style *parent, unsig
         if (equal(v, end, "border-box", 1) || equal(v, end, "content-box", 1))
             apply_property(s, ranks, priority, P_BOX_SIZING, equal(v, end, "border-box", 1));
     } else if (equal(name, name_end, "line-height", 1)) {
-        if (equal(v, end, "inherit", 1)) value = parent->line_height;
-        else if (equal(v, end, "normal", 1)) value = 12;
-        else if (!length_value(v, end, 0, 0, &value)) {
-            /* Fixed font metrics: unitless values multiply the 12px glyph line. */
-            const char *p = v; int whole = 0, fraction = 0, scale = 1;
-            while (p < end && *p >= '0' && *p <= '9') { whole = whole * 10 + *p++ - '0'; if (whole > 8) return; }
-            if (p == v) return;
-            if (p < end && *p == '.') {
-                const char *digits = ++p;
-                while (p < end && *p >= '0' && *p <= '9' && scale < 1000) { fraction = fraction * 10 + *p++ - '0'; scale *= 10; }
-                if (p == digits) return;
-            }
-            if (p != end) return;
-            value = whole * 12 + fraction * 12 / scale;
-        }
-        if (value < 12) value = 12;
-        if (value > 96) value = 96;
+        if (equal(v, end, "inherit", 1)) value = parent->line_height_value;
+        else if (!line_height_value(v, end, &value)) return;
         apply_property(s, ranks, priority, P_LINE_HEIGHT, value);
     } else flex_declaration(s, ranks, priority, name, name_end, v, end);
 }
@@ -528,6 +498,14 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             if (inherit) { property = P_BG; value = (int)parent->background_rgb; alpha = parent->background_alpha; }
             else if (equal(v, ve, "initial", 1) || equal(v, ve, "unset", 1)) { property = P_BG; alpha = 0; }
             else if (browser_css_parse_color(v, ve, &candidate)) { property = P_BG; value = (int)candidate.rgb; alpha = candidate.alpha; }
+        } else if (equal(p, name_end, "font", 1)) {
+            font_declaration(style, ranks, priority, v, ve);
+        } else if (equal(p, name_end, "font-size", 1)) {
+            if (inherit) { property = P_FONT_SIZE; value = parent->font_size; }
+            else if (length_value(v, ve, 0, 1, &value)) property = P_FONT_SIZE;
+            else if (equal(v, ve, "medium", 1) || equal(v, ve, "initial", 1)) { property = P_FONT_SIZE; value = 16; }
+            else if (equal(v, ve, "small", 1)) { property = P_FONT_SIZE; value = 12; }
+            else if (equal(v, ve, "large", 1)) { property = P_FONT_SIZE; value = 20; }
         } else if (equal(p, name_end, "font-weight", 1)) {
             if (inherit) { property = P_BOLD; value = parent->bold; }
             else if (equal(v, ve, "bold", 1) || equal(v, ve, "bolder", 1) || equal(v, ve, "700", 0) || equal(v, ve, "800", 0) || equal(v, ve, "900", 0)) { property = P_BOLD; value = 1; }
@@ -614,7 +592,7 @@ void browser_style_compute(const browser_document *doc, int index,
     unsigned ranks[BROWSER_CSS_PROPERTIES] = {0};
     for (int i = 0; i < sheet->count; i++) {
         unsigned specificity;
-        if (matches(doc, index, &sheet->rules[i], &specificity))
+        if (browser_css_matches(doc, index, sheet->rules[i].selector, sheet->rules[i].selector_end, &specificity))
             declarations(style, ranks, specificity + 1, sheet->rules[i].declarations, sheet->rules[i].declarations_end, parent);
     }
     char inline_style[768];
@@ -624,6 +602,33 @@ void browser_style_compute(const browser_document *doc, int index,
     }
     char hidden_attr[1];
     if (browser_node_attr(node, "hidden", hidden_attr, sizeof(hidden_attr))) style->display = BROWSER_HIDDEN;
+    int font = style->font_size;
+    if (font <= -2 && font > -10000000) font = parent->font_size * (-font - 2) / 100;
+    else font = resolve_length(font, style, parent->font_size);
+    if (font < 8) font = 8;
+    if (font > 64) font = 64;
+    style->font_size = font;
+    if (browser_node_is(node, "html")) style->root_font_size = font;
+    for (int i = 0; i < 4; i++) {
+        style->margin[i] = resolve_length(style->margin[i], style, font);
+        style->padding[i] = resolve_length(style->padding[i], style, font);
+    }
+    style->width = resolve_length(style->width, style, font);
+    style->max_width = resolve_length(style->max_width, style, font);
+    style->height = resolve_length(style->height, style, font);
+    style->min_height = resolve_length(style->min_height, style, font);
+    style->border_width = resolve_length(style->border_width, style, font);
+    style->row_gap = resolve_length(style->row_gap, style, font);
+    style->column_gap = resolve_length(style->column_gap, style, font);
+    style->flex_basis = resolve_length(style->flex_basis, style, font);
+    int line = style->line_height_value;
+    if (line <= -20000000) line = font * (-line - 20000000) / 1000;
+    else if (line <= -2 && line > -10000000) line = font * (-line - 2) / 100;
+    else if (!line) line = font * 3 / 2;
+    else line = resolve_length(line, style, font);
+    if (line < font) line = font;
+    if (line > 128) line = 128;
+    style->line_height = line;
     unsigned bg = style->background_rgb == BROWSER_CURRENT_COLOR ? style->text_rgb : style->background_rgb;
     unsigned bg_alpha = style->background_rgb == BROWSER_CURRENT_COLOR ? style->text_alpha : style->background_alpha;
     style->background = browser_css_blend(bg, bg_alpha, parent->painted_background);

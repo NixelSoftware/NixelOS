@@ -16,7 +16,9 @@ typedef enum {
     USER_WINDOW_DRAW_FILL = 1,
     USER_WINDOW_DRAW_TEXT = 2,
     USER_WINDOW_DRAW_BUTTON = 3,
-    USER_WINDOW_DRAW_IMAGE = 4
+    USER_WINDOW_DRAW_IMAGE = 4,
+    USER_WINDOW_DRAW_TEXT_SCALED = 5, /* width=advance (4..32), height=glyph size (8..64) */
+    USER_WINDOW_DRAW_IMAGE_CLIPPED = 6 /* color=(clip_top<<16)|clip_bottom, window-relative */
 } user_window_draw_op_t;
 
 typedef struct {

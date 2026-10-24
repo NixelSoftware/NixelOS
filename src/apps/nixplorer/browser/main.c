@@ -17,8 +17,8 @@
 #define COLOR_H1          0x00800000
 #define COLOR_H2          0x00000080
 
-#define MAX_URL_LEN       128
-#define MAX_HTML_BUF      16384
+#define MAX_URL_LEN       512
+#define MAX_HTML_BUF      65536
 #define MAX_RENDER_LINES  128
 #define LINE_MAX_CHARS    64
 #define MAX_PAGE_IMAGES   4
@@ -32,10 +32,11 @@
 typedef struct {
     char text[LINE_MAX_CHARS];
     uint32_t colors[LINE_MAX_CHARS], backgrounds[LINE_MAX_CHARS];
-    uint8_t flags[LINE_MAX_CHARS];
+    uint8_t flags[LINE_MAX_CHARS], font_sizes[LINE_MAX_CHARS];
     int indent, offset, top, height;
     int8_t image_index;
     uint8_t hidden_image;
+    int image_width, image_height;
 } render_line_t;
 
 typedef struct { char url[MAX_URL_LEN]; int line, start, length, anchor; } link_t;
@@ -98,11 +99,11 @@ static void browser_user_draw_button(int32_t x, int32_t y, int32_t width,
                             label, COLOR_WIN_BG, pressed, 0, 0);
 }
 
-static void browser_user_png_render(const uint8_t* data, uint32_t length,
+static int browser_user_png_render(const uint8_t* data, uint32_t length,
                                     int32_t x, int32_t y, int32_t width,
                                     int32_t height) {
-    (void)browser_user_draw(USER_WINDOW_DRAW_IMAGE, x, y, width, height,
-                            0, 0, 0, data, length);
+    return browser_user_draw(USER_WINDOW_DRAW_IMAGE_CLIPPED, x, y, width, height,
+                            0, (56u << 16) | (uint32_t)(browser_win.h - 30), 0, data, length);
 }
 
 static void browser_user_present(void) {
@@ -132,7 +133,7 @@ static int  scroll_y = 0;
 static uint8_t  document_body_buf[MAX_HTML_BUF];
 static uint32_t document_body_len = 0;
 
-static uint8_t  resource_body_buf[32768];
+static uint8_t  resource_body_buf[65536];
 static uint32_t resource_body_len = 0;
 
 
@@ -226,7 +227,7 @@ static int num_boxes, layout_y, layout_right, layout_height;
 static unsigned page_background = COLOR_WHITE;
 static char page_url[MAX_URL_LEN], page_base_url[MAX_URL_LEN];
 #define MAX_PAGE_STYLESHEETS 4
-#define MAX_STYLESHEET_SIZE 8192
+#define MAX_STYLESHEET_SIZE 32768
 static uint8_t stylesheet_pool[MAX_PAGE_STYLESHEETS][MAX_STYLESHEET_SIZE];
 static unsigned num_stylesheets;
 static int resource_unavailable;
@@ -240,7 +241,7 @@ static int load_stylesheet(void* context, const char* url, const char** data, un
     *data = (const char*)stylesheet_pool[num_stylesheets++]; *length = size;
     return 1;
 }
-static int layout_length, layout_indent, layout_align, layout_pending_space;
+static int layout_length, layout_pixels, layout_indent, layout_align, layout_pending_space;
 static int layout_truncated;
 
 static int text_length(const char* text) { int n = 0; while (text[n]) n++; return n; }
@@ -252,13 +253,13 @@ static void layout_flush(int force) {
     line->text[layout_length] = 0;
     line->indent = layout_indent;
     int available = layout_right - layout_indent;
-    int extra = available - layout_length * 8;
+    int extra = available - layout_pixels;
     line->offset = layout_indent + (extra > 0 ? (layout_align == BROWSER_ALIGN_CENTER ? extra / 2 : layout_align == BROWSER_ALIGN_RIGHT ? extra : 0) : 0);
     line->image_index = -1;
     line->top = layout_y; line->height = layout_height < 12 ? 12 : layout_height;
     layout_y += line->height;
     num_lines++;
-    layout_length = 0; layout_pending_space = 0; layout_height = 12;
+    layout_length = layout_pixels = 0; layout_pending_space = 0; layout_height = 12;
 }
 static int layout_columns(int indent) {
     int columns = (layout_right - indent) / 8;
@@ -268,14 +269,21 @@ static int layout_columns(int indent) {
 }
 static void layout_char(char ch, const browser_style* style, int indent, int anchor) {
     if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
-    if (layout_length >= layout_columns(indent)) layout_flush(0);
+    int font_size = style->font_size < 8 ? 8 : style->font_size;
+    if (font_size / 2 > layout_right - indent) font_size = (layout_right - indent) * 2;
+    if (font_size < 8) font_size = 8;
+    int advance = font_size / 2;
+    if (layout_length && (layout_length == LINE_MAX_CHARS - 1 || layout_pixels + advance > layout_right - indent)) layout_flush(0);
     if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     if (!layout_length) { layout_indent = indent; layout_align = style->align; }
     if (style->line_height > layout_height) layout_height = style->line_height;
+    if (font_size > layout_height) layout_height = font_size;
     render_line_t* line = &lines[num_lines];
     if (style->text_transform == 1 && ch >= 'a' && ch <= 'z') ch -= 32;
     if (style->text_transform == 2 && ch >= 'A' && ch <= 'Z') ch += 32;
     line->text[layout_length] = ch;
+    line->font_sizes[layout_length] = (uint8_t)font_size;
+    layout_pixels += advance;
     line->colors[layout_length] = style->color;
     line->backgrounds[layout_length] = style->background;
     line->flags[layout_length] = (style->bold ? 1 : 0) | ((style->underline & 1) ? 2 : 0) |
@@ -329,7 +337,7 @@ static void layout_text(const char* p, const char* end, const browser_style* sty
             const char* word = p;
             int word_length = 1;
             while (word < end && *word != ' ' && *word != '\n' && *word != '\r' && *word != '\t' && word_length < LINE_MAX_CHARS) { word_length++; word++; }
-            if (layout_length + 1 + word_length > layout_columns(indent)) layout_flush(0);
+            if (layout_pixels + (1 + word_length) * (style->font_size / 2) > layout_right - indent) layout_flush(0);
             else layout_char(' ', style, indent, anchor);
         }
         layout_char(ch, style, indent, anchor);
@@ -383,7 +391,8 @@ static void layout_control(int index, int form, const browser_style* style, int 
     if (layout_pending_space && layout_length) layout_char(' ', style, indent, -1);
     layout_pending_space = 0;
     c->line = num_lines; c->start = layout_length; c->width = width;
-    while (width--) layout_char(' ', style, indent, -1);
+    browser_style field_style = *style; field_style.font_size = 16;
+    while (width--) layout_char(' ', &field_style, indent, -1);
 }
 static int collect_form(const browser_node* node) {
     if (num_forms == MAX_FORMS) { layout_truncated = 1; return -1; }
@@ -431,7 +440,8 @@ static int flex_intrinsic_width(int index, int available) {
                 unsigned cp = (unsigned char)*p, n = browser_html_reference(p, node->end, 0, &cp);
                 p += n ? n : 1;
                 if (cp == ' ' || cp == '\n' || cp == '\r' || cp == '\t') { pending = current != 0; continue; }
-                current += pending ? 16 : 8; pending = 0;
+                int advance = node_styles[i].font_size / 2;
+                current += pending ? advance * 2 : advance; pending = 0;
                 if (current >= available) return available;
             }
         }
@@ -675,12 +685,32 @@ static void layout_node(int index, int form, int indent, int anchor, unsigned de
         browser_node_attr(node, "src", src, sizeof(src));
         browser_node_attr(node, "alt", alt, sizeof(alt));
         uint32_t size = 0;
-        if (src[0] && num_images < MAX_PAGE_IMAGES && layout_right - indent >= USER_WINDOW_IMAGE_TARGET_W &&
+        if (src[0] && num_images < MAX_PAGE_IMAGES && layout_right - indent >= 8 &&
             num_lines < MAX_RENDER_LINES && fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) {
             render_line_t* line = &lines[num_lines++];
             image_sizes[num_images] = size;
             line->image_index = num_images++; line->offset = indent; line->indent = indent; line->text[0] = 0;
-            line->top = layout_y; line->height = USER_WINDOW_IMAGE_TARGET_H + 4; line->hidden_image = style->visibility_hidden;
+            int width = 64, height = 64;
+            const uint8_t* png = image_pool[line->image_index];
+            if (size >= 24 && png[0] == 137 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G') {
+                unsigned w = ((unsigned)png[16]<<24)|((unsigned)png[17]<<16)|((unsigned)png[18]<<8)|png[19];
+                unsigned h = ((unsigned)png[20]<<24)|((unsigned)png[21]<<16)|((unsigned)png[22]<<8)|png[23];
+                if (w && h && w <= 513 && h <= 513) { width = (int)w; height = (int)h; }
+            }
+            char attr[16];
+            if (browser_node_attr(node, "width", attr, sizeof(attr))) { int n=0; for(int i=0;attr[i]>='0'&&attr[i]<='9'&&n<512;i++)n=n*10+attr[i]-'0'; if(n>0&&n<=512){height=height*n/width;width=n;} }
+            int css_width = style->width;
+            if (css_width <= -2) css_width = (layout_right - indent) * (-css_width - 2) / 100;
+            if (css_width >= 0) { int n=css_width; if(n<1)n=1;if(n>512)n=512; height=height*n/width;width=n; }
+            if (browser_node_attr(node, "height", attr, sizeof(attr))) { int n=0; for(int i=0;attr[i]>='0'&&attr[i]<='9'&&n<512;i++)n=n*10+attr[i]-'0'; if(n>0&&n<=512)height=n; }
+            if (style->height >= 0) height=style->height;
+            if (width > layout_right - indent) { height = height * (layout_right - indent) / width; width = layout_right - indent; }
+            if (height < 1) height=1;
+            if (height > 512) height=512;
+            line->image_width=width;line->image_height=height;
+            int extra = layout_right - indent - width;
+            line->offset = indent + (style->align == BROWSER_ALIGN_CENTER ? extra / 2 : style->align == BROWSER_ALIGN_RIGHT ? extra : 0);
+            line->top = layout_y; line->height = height + 4; line->hidden_image = style->visibility_hidden;
             layout_y += line->height;
         } else {
             layout_literal(alt[0] ? alt : "[Image]", style, indent, anchor); layout_flush(0);
@@ -703,7 +733,7 @@ finish:
 static void parse_and_layout_html(const char* doc, uint32_t len) {
     num_lines = num_images = num_links = num_controls = num_forms = 0;
     scroll_y = 0; active_control = -1; control_editing = 0;
-    layout_length = layout_indent = layout_pending_space = layout_truncated = 0;
+    layout_length = layout_pixels = layout_indent = layout_pending_space = layout_truncated = 0;
     layout_align = BROWSER_ALIGN_LEFT; page_background = COLOR_WHITE;
     num_boxes = layout_y = 0; layout_height = 12; layout_right = browser_win.w - 36;
     copy_string(page_url, sizeof(page_url), url_input);
@@ -723,7 +753,8 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
     browser_stylesheet_collect(&page_stylesheet, &page_document, load_stylesheet, 0);
     browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
                           .line_height = 12, .width = -1, .max_width = -1, .height = -1,
-                          .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE};
+                          .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE,
+                          .font_size = 16, .root_font_size = 16, .viewport_width = browser_win.w - 36, .viewport_height = browser_win.h - 76};
     node_styles[0] = root;
     for (int i = 1; i < page_document.count; i++)
         browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
@@ -740,8 +771,16 @@ static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t
     browser_user_fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
 }
 
+static int render_char_offset(int line, int count) {
+    int pixels = 0;
+    for (int i = 0; i < count && lines[line].text[i]; i++) pixels += lines[line].font_sizes[i] / 2;
+    return pixels;
+}
+static void draw_styled_text(int x, int y, const char* text, unsigned color, int size) {
+    (void)browser_user_draw(USER_WINDOW_DRAW_TEXT_SCALED, x, y, size / 2, size, text, color, 0, 0, 0);
+}
 static void draw_control(const control_t* control, int row_x, int row_y) {
-    int x = row_x + control->start * 8, width = control->width;
+    int x = row_x + render_char_offset(control->line, control->start), width = control->width;
     if (width <= 0 || control->visibility_hidden) return;
     char label[LINE_MAX_CHARS]; int used = 0;
     if (control->type == CONTROL_CHECKBOX || control->type == CONTROL_RADIO) {
@@ -814,10 +853,17 @@ static void browser_draw(browser_window_t* win) {
     int32_t url_w = w - 110;
     int32_t url_h = 20;
     draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_WHITE);
-    browser_user_draw_string(url_x + 4, url_y + 4, url_input, COLOR_BLACK);
+    char visible_url[64];
+    int visible_chars = (url_w - 12) / 8;
+    if (visible_chars > 62) visible_chars = 62;
+    int url_start = url_cursor >= visible_chars ? url_cursor - visible_chars + 1 : 0;
+    int displayed = 0;
+    while (url_input[url_start + displayed] && displayed < visible_chars) { visible_url[displayed] = url_input[url_start + displayed]; displayed++; }
+    visible_url[displayed] = 0;
+    browser_user_draw_string(url_x + 4, url_y + 4, visible_url, COLOR_BLACK);
 
     if (win->focused) {
-        browser_user_draw_string(url_x + 4 + (url_cursor * 8), url_y + 4, "_", COLOR_BLACK);
+        browser_user_draw_string(url_x + 4 + ((url_cursor - url_start) * 8), url_y + 4, "_", COLOR_BLACK);
     }
 
     browser_user_draw_button(x + w - 60, y + 3, 50, 22, "Go", 0);
@@ -837,10 +883,11 @@ static void browser_draw(browser_window_t* win) {
         if (row_top + height <= page_top) continue;
         if (row_top >= page_bottom) continue;
         if (lines[i].image_index >= 0) {
-            if (lines[i].hidden_image || row_top < page_top || row_top + USER_WINDOW_IMAGE_TARGET_H > page_bottom) continue;
+            if (lines[i].hidden_image) continue;
             int img_x = canvas_x + 8 + lines[i].offset;
             int idx = lines[i].image_index;
-            browser_user_png_render(image_pool[idx], image_sizes[idx], img_x, row_top, USER_WINDOW_IMAGE_TARGET_W, USER_WINDOW_IMAGE_TARGET_H);
+            if (browser_user_png_render(image_pool[idx], image_sizes[idx], img_x, row_top, lines[i].image_width, lines[i].image_height) < 0)
+                browser_user_draw_string(img_x, row_top, "[Image decode failed]", COLOR_DARK_GRAY);
             continue;
         }
         int row_x = canvas_x + 8 + lines[i].offset;
@@ -848,19 +895,21 @@ static void browser_draw(browser_window_t* win) {
         for (int start = 0; lines[i].text[start];) {
             int stop = start + 1;
             while (lines[i].text[stop] && lines[i].colors[stop] == lines[i].colors[start] &&
-                   lines[i].backgrounds[stop] == lines[i].backgrounds[start] && lines[i].flags[stop] == lines[i].flags[start]) stop++;
+                   lines[i].backgrounds[stop] == lines[i].backgrounds[start] && lines[i].flags[stop] == lines[i].flags[start] && lines[i].font_sizes[stop] == lines[i].font_sizes[start]) stop++;
             if (lines[i].flags[start] & 16) { start = stop; continue; }
             char run[LINE_MAX_CHARS];
             for (int j = start; j < stop; j++) run[j - start] = lines[i].text[j];
             run[stop - start] = 0;
-            int run_x = row_x + start * 8, width = (stop - start) * 8;
+            int size = lines[i].font_sizes[start];
+            int run_x = row_x + render_char_offset(i, start), width = (stop - start) * (size / 2);
+            int glyph_y = row_top + (height - size) / 2;
             paint_clipped(run_x, row_top, width, height, lines[i].backgrounds[start], canvas_x + 8, page_top, canvas_x + canvas_w - 8, page_bottom);
-            if (text_y >= page_top && text_y + 12 <= page_bottom) {
-                browser_user_draw_string(run_x, text_y, run, lines[i].colors[start]);
-                if (lines[i].flags[start] & 1) browser_user_draw_string(run_x + 1, text_y, run, lines[i].colors[start]);
-                if (lines[i].flags[start] & 4) browser_user_fill_rect(run_x, text_y + 5, width, 1, lines[i].colors[start]);
-                if (lines[i].flags[start] & 8) browser_user_fill_rect(run_x, text_y, width, 1, lines[i].colors[start]);
-                if (lines[i].flags[start] & 2) browser_user_fill_rect(run_x, text_y + 10, width, 1, lines[i].colors[start]);
+            if (glyph_y >= page_top && glyph_y + size <= page_bottom) {
+                draw_styled_text(run_x, glyph_y, run, lines[i].colors[start], size);
+                if (lines[i].flags[start] & 1) draw_styled_text(run_x + 1, glyph_y, run, lines[i].colors[start], size);
+                if (lines[i].flags[start] & 4) browser_user_fill_rect(run_x, glyph_y + size / 2, width, 1, lines[i].colors[start]);
+                if (lines[i].flags[start] & 8) browser_user_fill_rect(run_x, glyph_y, width, 1, lines[i].colors[start]);
+                if (lines[i].flags[start] & 2) browser_user_fill_rect(run_x, glyph_y + size - 2, width, 1, lines[i].colors[start]);
             }
             start = stop;
         }
@@ -1133,16 +1182,17 @@ static void browser_handle_mouse(browser_window_t* win, int32_t lx, int32_t ly, 
     int row = -1;
     for (int i = 0; i < num_lines; i++) {
         int top = canvas_y + 6 + lines[i].top - scroll_y;
-        int glyph_y = top + (lines[i].height - 12) / 2;
-        if (glyph_y < canvas_y + 6 || glyph_y + 12 > canvas_y + canvas_h - 4) continue;
+        int glyph_y = top;
+        if (glyph_y + lines[i].height <= canvas_y + 6 || glyph_y >= canvas_y + canvas_h - 4) continue;
         int row_left = 18 + lines[i].offset;
-        int row_width = lines[i].image_index >= 0 ? USER_WINDOW_IMAGE_TARGET_W : text_length(lines[i].text) * 8;
-        if (ly >= glyph_y && ly < glyph_y + 12 && lx >= row_left && lx < row_left + row_width) { row = i; break; }
+        int row_width = lines[i].image_index >= 0 ? lines[i].image_width : render_char_offset(i, text_length(lines[i].text));
+        if (ly >= glyph_y && ly < glyph_y + lines[i].height && lx >= row_left && lx < row_left + row_width) { row = i; break; }
     }
     if (row < 0 || lines[row].image_index >= 0) return;
     int local_x = lx - 18 - lines[row].offset;
     if (local_x < 0) return;
-    int col = local_x / 8;
+    int col = 0;
+    while (lines[row].text[col] && render_char_offset(row, col + 1) <= local_x) col++;
     for (int i = 0; i < num_controls; i++) {
         control_t* c = &controls[i];
         if (c->line != row || c->disabled || c->visibility_hidden || col < c->start || col >= c->start + c->width) continue;
@@ -1251,7 +1301,7 @@ static void browser_handle_key(browser_window_t* win, char c) {
 }
 
 void user_main(const char* arguments) {
-    (void)arguments;
+    if (arguments && arguments[0]) { copy_string(url_input, sizeof(url_input), arguments); url_cursor = text_length(url_input); }
     browser_win.x = 80;
     browser_win.y = 40;
     browser_win.w = 480;

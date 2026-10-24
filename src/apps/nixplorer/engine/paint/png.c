@@ -14,7 +14,6 @@ static uint32_t raw_len = 0;
 
 
 static uint32_t cur_row_pixels[MAX_CANVAS_DIM];
-static uint32_t prev_row_pixels[MAX_CANVAS_DIM];
 static uint8_t  prev_raw_scanline[MAX_SCANLINE];
 
 static inline uint32_t read_be32(const uint8_t* p) {
@@ -30,6 +29,7 @@ typedef struct {
     uint32_t byte_pos;
     uint32_t bit_buf;
     int num_bits;
+    int failed;
 } bit_reader_t;
 
 static uint32_t read_bits(bit_reader_t* br, int count) {
@@ -41,6 +41,7 @@ static uint32_t read_bits(bit_reader_t* br, int count) {
             break;
         }
     }
+    if (br->num_bits < count) { br->failed = 1; return 0; }
     uint32_t val = br->bit_buf & ((1U << count) - 1);
     br->bit_buf >>= count;
     br->num_bits -= count;
@@ -78,8 +79,9 @@ static int decode_huffman_symbol(bit_reader_t* br, const huff_tree_t* tree) {
 
     for (int len = 1; len <= 15; len++) {
         code |= (int)read_bits(br, 1);
+        if (br->failed) return -1;
         int count = tree->counts[len];
-        if (code - count < first) {
+        if (code >= first && code - first < count) {
             return tree->symbols[index + (code - first)];
         }
         index += count;
@@ -111,8 +113,8 @@ static const uint8_t cl_order[19] = {
 };
 
 static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32_t out_max, uint32_t* out_len) {
-    if (in_len < 6) return 0;
-    bit_reader_t br = { in + 2, in_len - 6, 0, 0, 0 };
+    if (in_len < 6 || (in[0] & 15) != 8 || (in[0] >> 4) > 7 || (((unsigned)in[0] << 8) | in[1]) % 31 || (in[1] & 32)) return 0;
+    bit_reader_t br = { in + 2, in_len - 6, 0, 0, 0, 0 };
 
     uint32_t dest_idx = 0;
     int bfinal = 0;
@@ -121,6 +123,7 @@ static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32
     huff_tree_t dist_tree;
 
     while (!bfinal) {
+        if (br.failed) return 0;
         bfinal = (int)read_bits(&br, 1);
         int btype = (int)read_bits(&br, 2);
 
@@ -129,6 +132,8 @@ static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32
             br.num_bits = 0;
             if (br.byte_pos + 4 > br.src_len) return 0;
             uint16_t len = (uint16_t)(br.src[br.byte_pos] | ((uint16_t)br.src[br.byte_pos + 1] << 8));
+            uint16_t inverse = (uint16_t)(br.src[br.byte_pos + 2] | ((uint16_t)br.src[br.byte_pos + 3] << 8));
+            if ((uint16_t)(len ^ inverse) != 0xffffu || len > out_max - dest_idx) return 0;
             br.byte_pos += 4;
             for (uint16_t i = 0; i < len && dest_idx < out_max; i++) {
                 if (br.byte_pos >= br.src_len) return 0;
@@ -159,21 +164,26 @@ static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32
                 build_huffman_tree(&cl_tree, cl_lens, 19);
 
                 uint8_t total_lens[320] = {0};
+                if (hlit > 286 || hdist > 32 || br.failed) return 0;
                 int idx = 0;
                 while (idx < hlit + hdist) {
                     int sym = decode_huffman_symbol(&br, &cl_tree);
+                    if (sym < 0 || br.failed) return 0;
                     if (sym < 16) {
                         total_lens[idx++] = (uint8_t)sym;
                     } else if (sym == 16) {
                         int count = (int)read_bits(&br, 2) + 3;
-                        uint8_t prev = (idx > 0) ? total_lens[idx - 1] : 0;
+                        if (!idx || count > hlit + hdist - idx) return 0;
+                        uint8_t prev = total_lens[idx - 1];
                         while (count-- && idx < 320) total_lens[idx++] = prev;
                     } else if (sym == 17) {
                         int count = (int)read_bits(&br, 3) + 3;
-                        while (count-- && idx < 320) total_lens[idx++] = 0;
+                        if (count > hlit + hdist - idx) return 0;
+                        while (count--) total_lens[idx++] = 0;
                     } else if (sym == 18) {
                         int count = (int)read_bits(&br, 7) + 11;
-                        while (count-- && idx < 320) total_lens[idx++] = 0;
+                        if (count > hlit + hdist - idx) return 0;
+                        while (count--) total_lens[idx++] = 0;
                     } else {
                         return 0;
                     }
@@ -184,9 +194,11 @@ static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32
 
             while (1) {
                 int sym = decode_huffman_symbol(&br, &lit_tree);
-                if (sym < 0 || sym == 256) break;
+                if (sym < 0 || br.failed) return 0;
+                if (sym == 256) break;
                 if (sym < 256) {
-                    if (dest_idx < out_max) out[dest_idx++] = (uint8_t)sym;
+                    if (dest_idx == out_max) return 0;
+                    out[dest_idx++] = (uint8_t)sym;
                 } else {
                     sym -= 257;
                     if (sym >= 29) return 0;
@@ -195,7 +207,7 @@ static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32
                     if (dist_sym < 0 || dist_sym >= 30) return 0;
                     int dist = dist_bases[dist_sym] + (int)read_bits(&br, dist_extra[dist_sym]);
 
-                    if (dist > (int)dest_idx) return 0;
+                    if (dist > (int)dest_idx || (uint32_t)length > out_max - dest_idx || br.failed) return 0;
                     uint32_t copy_src = dest_idx - dist;
                     while (length-- && dest_idx < out_max) {
                         out[dest_idx++] = out[copy_src++];
@@ -206,6 +218,10 @@ static int inflate_zlib(const uint8_t* in, uint32_t in_len, uint8_t* out, uint32
             return 0;
         }
     }
+    if (br.failed) return 0;
+    uint32_t a = 1, b = 0;
+    for (uint32_t i = 0; i < dest_idx; i++) { a = (a + out[i]) % 65521u; b = (b + a) % 65521u; }
+    if ((b << 16 | a) != read_be32(in + in_len - 4)) return 0;
     *out_len = dest_idx;
     return 1;
 }
@@ -231,116 +247,90 @@ static uint8_t paeth_predictor(int a, int b, int c) {
 
 
 
+static uint32_t png_crc(const uint8_t* p, uint32_t n) {
+    uint32_t crc = 0xffffffffu;
+    while (n--) {
+        crc ^= *p++;
+        for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return crc ^ 0xffffffffu;
+}
 int png_decode_and_resize(const uint8_t* data, uint32_t len, uint32_t out_pixels[PNG_TARGET_W * PNG_TARGET_H]) {
-    if (!data || len < 29) return 0;
-
-    
-    if (data[0] != 0x89 || data[1] != 'P' || data[2] != 'N' || data[3] != 'G' ||
-        data[4] != 0x0D || data[5] != 0x0A || data[6] != 0x1A || data[7] != 0x0A) {
-        return 0;
-    }
-
-    uint32_t width = 0, height = 0;
-    uint8_t bit_depth = 0, color_type = 0;
+    static const uint8_t signature[8] = {137,80,78,71,13,10,26,10};
+    if (!data || !out_pixels || len < 33) return 0;
+    for (unsigned i = 0; i < 8; i++) if (data[i] != signature[i]) return 0;
+    uint32_t width = 0, height = 0, palette[256], palette_count = 0;
+    uint8_t depth = 0, type = 0; int ihdr = 0, ended = 0;
+    uint32_t transparent_gray = 0xffffffffu, transparent_rgb = 0xffffffffu;
     idat_len = 0;
-
-    uint32_t offset = 8;
-    while (offset + 8 <= len) {
-        uint32_t chunk_len = read_be32(data + offset);
-        uint32_t chunk_type = read_be32(data + offset + 4);
-        const uint8_t* chunk_data = data + offset + 8;
-
-        if (offset + 12 + chunk_len > len) break;
-
-        if (chunk_type == 0x49484452) { 
-            width = read_be32(chunk_data);
-            height = read_be32(chunk_data + 4);
-            bit_depth = chunk_data[8];
-            color_type = chunk_data[9];
-
-            if (bit_depth != 8 || (color_type != 2 && color_type != 6)) {
-                return 0;
-            }
-            if (width == 0 || height == 0 || width > MAX_CANVAS_DIM || height > MAX_CANVAS_DIM) {
-                return 0; 
-            }
-        } else if (chunk_type == 0x49444154) { 
-            for (uint32_t i = 0; i < chunk_len && idat_len < MAX_RAW_IDAT; i++) {
-                idat_stream[idat_len++] = chunk_data[i];
-            }
-        } else if (chunk_type == 0x49454E44) { 
-            break;
-        }
-
-        offset += 12 + chunk_len;
+    for (uint32_t offset = 8; offset <= len - 12;) {
+        uint32_t size = read_be32(data + offset), kind = read_be32(data + offset + 4);
+        if (size > len - offset - 12 || png_crc(data + offset + 4, size + 4) != read_be32(data + offset + 8 + size)) return 0;
+        const uint8_t* chunk = data + offset + 8;
+        if (!ihdr && kind != 0x49484452u) return 0;
+        if (kind == 0x49484452u) {
+            if (ihdr || size != 13) return 0;
+            width = read_be32(chunk); height = read_be32(chunk + 4); depth = chunk[8]; type = chunk[9];
+            if (!width || !height || width > MAX_CANVAS_DIM || height > MAX_CANVAS_DIM || chunk[10] || chunk[11] || chunk[12]) return 0;
+            if ((type == 0 || type == 3) ? (depth != 1 && depth != 2 && depth != 4 && depth != 8) : ((type != 2 && type != 4 && type != 6) || depth != 8)) return 0;
+            ihdr = 1;
+        } else if (kind == 0x504c5445u) {
+            if (!size || size % 3 || size > 768 || idat_len) return 0;
+            palette_count = size / 3;
+            for (uint32_t i = 0; i < palette_count; i++) palette[i] = 0xff000000u | ((uint32_t)chunk[i*3] << 16) | ((uint32_t)chunk[i*3+1] << 8) | chunk[i*3+2];
+        } else if (kind == 0x74524e53u) {
+            if (idat_len) return 0;
+            if (type == 3) {
+                if (!palette_count || size > palette_count) return 0;
+                for (uint32_t i = 0; i < size; i++) palette[i] = (palette[i] & 0xffffffu) | ((uint32_t)chunk[i] << 24);
+            } else if (type == 0 && size == 2) transparent_gray = ((uint32_t)chunk[0] << 8) | chunk[1];
+            else if (type == 2 && size == 6) {
+                if (chunk[0] || chunk[2] || chunk[4]) return 0;
+                transparent_rgb = ((uint32_t)chunk[1] << 16) | ((uint32_t)chunk[3] << 8) | chunk[5];
+            } else return 0;
+        } else if (kind == 0x49444154u) {
+            if (size > sizeof(idat_stream) - idat_len) return 0;
+            for (uint32_t i = 0; i < size; i++) idat_stream[idat_len++] = chunk[i];
+        } else if (kind == 0x49454e44u) { if (size) return 0; ended = 1; break; }
+        else if (!(data[offset + 4] & 32)) return 0; /* Unknown critical chunk. */
+        offset += size + 12;
     }
-
-    if (width == 0 || height == 0 || idat_len == 0) return 0;
-
-    
-    if (!inflate_zlib(idat_stream, idat_len, raw_pixels, sizeof(raw_pixels), &raw_len)) {
-        return 0;
-    }
-
-    int bytes_per_pixel = (color_type == 6) ? 4 : 3;
-    uint32_t stride = width * bytes_per_pixel;
-    uint32_t raw_ptr = 0;
-
-    
-    for (uint32_t i = 0; i < stride; i++) prev_raw_scanline[i] = 0;
-    for (uint32_t i = 0; i < width; i++) prev_row_pixels[i] = 0;
-
-    
+    if (!ended || !ihdr || !idat_len || (type == 3 && (!palette_count || palette_count > (1u << depth)))) return 0;
+    unsigned channels = type == 2 ? 3 : type == 4 ? 2 : type == 6 ? 4 : 1;
+    unsigned stride = (width * channels * depth + 7) / 8, filter_bytes = (channels * depth + 7) / 8;
+    if ((stride + 1) > sizeof(raw_pixels) / height) return 0;
+    if (!inflate_zlib(idat_stream, idat_len, raw_pixels, sizeof(raw_pixels), &raw_len) || raw_len != (stride + 1) * height) return 0;
+    for (unsigned i = 0; i < stride; i++) prev_raw_scanline[i] = 0;
     for (uint32_t y = 0; y < height; y++) {
-        if (raw_ptr >= raw_len) break;
-        uint8_t filter_type = raw_pixels[raw_ptr++];
-        uint8_t* scanline = &raw_pixels[raw_ptr];
-        raw_ptr += stride;
-
+        uint8_t filter = raw_pixels[y * (stride + 1)];
+        uint8_t* scan = raw_pixels + y * (stride + 1) + 1;
+        if (filter > 4) return 0;
+        for (unsigned i = 0; i < stride; i++) {
+            unsigned left = i >= filter_bytes ? scan[i - filter_bytes] : 0;
+            unsigned up = prev_raw_scanline[i], upper_left = i >= filter_bytes ? prev_raw_scanline[i - filter_bytes] : 0;
+            if (filter == 1) scan[i] += left;
+            else if (filter == 2) scan[i] += up;
+            else if (filter == 3) scan[i] += (left + up) / 2;
+            else if (filter == 4) scan[i] += paeth_predictor(left, up, upper_left);
+        }
         for (uint32_t x = 0; x < width; x++) {
-            uint32_t px_offset = x * bytes_per_pixel;
-            for (int b = 0; b < bytes_per_pixel; b++) {
-                uint8_t left = (x > 0) ? scanline[px_offset + b - bytes_per_pixel] : 0;
-                uint8_t up = (y > 0) ? prev_raw_scanline[px_offset + b] : 0;
-                uint8_t up_left = (y > 0 && x > 0) ? prev_raw_scanline[px_offset + b - bytes_per_pixel] : 0;
-
-                uint8_t raw_val = scanline[px_offset + b];
-                if (filter_type == 1) { 
-                    scanline[px_offset + b] = raw_val + left;
-                } else if (filter_type == 2) { 
-                    scanline[px_offset + b] = raw_val + up;
-                } else if (filter_type == 3) { 
-                    scanline[px_offset + b] = raw_val + ((left + up) >> 1);
-                } else if (filter_type == 4) { 
-                    scanline[px_offset + b] = raw_val + paeth_predictor(left, up, up_left);
-                }
+            unsigned sample = depth < 8 ? (scan[(x * depth) / 8] >> (8 - depth - (x * depth) % 8)) & ((1u << depth) - 1) : scan[x * channels];
+            unsigned rgb, alpha = 255;
+            if (type == 3) { if (sample >= palette_count) return 0; cur_row_pixels[x] = palette[sample]; continue; }
+            if (type == 0 || type == 4) {
+                unsigned gray = sample * 255 / ((1u << depth) - 1);
+                rgb = gray * 0x010101u;
+                if (type == 4) alpha = scan[x * 2 + 1]; else if (sample == transparent_gray) alpha = 0;
+            } else {
+                const uint8_t* pixel = scan + x * channels;
+                rgb = ((unsigned)pixel[0] << 16) | ((unsigned)pixel[1] << 8) | pixel[2];
+                if (type == 6) alpha = pixel[3]; else if (rgb == transparent_rgb) alpha = 0;
             }
-
-            uint8_t r = scanline[px_offset + 0];
-            uint8_t g = scanline[px_offset + 1];
-            uint8_t b = scanline[px_offset + 2];
-            uint8_t a = (color_type == 6) ? scanline[px_offset + 3] : 0xFF;
-
-            cur_row_pixels[x] = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+            cur_row_pixels[x] = rgb | (alpha << 24);
         }
-
-        
-        for (uint32_t i = 0; i < stride; i++) {
-            prev_raw_scanline[i] = scanline[i];
-        }
-
-        
-        for (int dy = 0; dy < PNG_TARGET_H; dy++) {
-            uint32_t mapped_src_y = (dy * height) / PNG_TARGET_H;
-            if (mapped_src_y == y) {
-                
-                for (int dx = 0; dx < PNG_TARGET_W; dx++) {
-                    uint32_t src_x = (dx * width) / PNG_TARGET_W;
-                    out_pixels[dy * PNG_TARGET_W + dx] = cur_row_pixels[src_x];
-                }
-            }
-        }
+        for (unsigned i = 0; i < stride; i++) prev_raw_scanline[i] = scan[i];
+        for (unsigned dy = 0; dy < PNG_TARGET_H; dy++) if ((dy * height) / PNG_TARGET_H == y)
+            for (unsigned dx = 0; dx < PNG_TARGET_W; dx++) out_pixels[dy * PNG_TARGET_W + dx] = cur_row_pixels[(dx * width) / PNG_TARGET_W];
     }
-
     return 1;
 }

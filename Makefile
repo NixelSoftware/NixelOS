@@ -127,6 +127,7 @@ BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/font/font.c \
              $(NIXPLORER_DIR)/engine/dom/document.c \
              $(NIXPLORER_DIR)/engine/style/style.c \
+             $(NIXPLORER_DIR)/engine/style/selectors.c \
              $(NIXPLORER_DIR)/engine/layout/box.c \
              $(NIXPLORER_DIR)/engine/layout/flex.c \
              $(NIXPLORER_DIR)/engine/layout/grid.c \

@@ -552,7 +552,8 @@ static void syscall_dispatch_impl(registers_t* regs) {
             }
             drawing = *(const user_window_draw_t*)address;
             if (drawing.operation == USER_WINDOW_DRAW_TEXT ||
-                drawing.operation == USER_WINDOW_DRAW_BUTTON) {
+                drawing.operation == USER_WINDOW_DRAW_BUTTON ||
+                drawing.operation == USER_WINDOW_DRAW_TEXT_SCALED) {
                 uint32_t length = 0;
                 while (length < sizeof(text)) {
                     uint32_t current = (uint32_t)drawing.text + length;
@@ -569,7 +570,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     return;
                 }
                 text_pointer = text;
-            } else if (drawing.operation == USER_WINDOW_DRAW_IMAGE) {
+            } else if (drawing.operation == USER_WINDOW_DRAW_IMAGE || drawing.operation == USER_WINDOW_DRAW_IMAGE_CLIPPED) {
                 uint32_t image_address = (uint32_t)drawing.data;
                 if (!drawing.data_length || drawing.data_length > SYS_WINDOW_IMAGE_MAX ||
                     !user_readable(image_address, drawing.data_length)) {
