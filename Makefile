@@ -84,7 +84,8 @@ KERNEL_C := \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
   src/system/icons/network.h src/kernel/hal/audio.c \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
-  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c
+  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c \
+  src/kernel/login.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm

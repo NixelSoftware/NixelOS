@@ -61,6 +61,7 @@ static uint8_t api_ipv4_send(uint32_t destination_ip, uint8_t protocol,
                              const uint8_t* payload, uint32_t length);
 static uint8_t api_dns_resolve(const char* hostname, uint32_t* address);
 extern void irq0_timer_handler(void);
+extern void login_screen_task(void* arg);
 
 volatile uint32_t frame_timer = 0;
 static uint8_t needs_redraw = 1;
@@ -443,6 +444,9 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     }
     scheduler_start();
     debug_print("[INIT] EEVDF scheduler started: 1000 Hz, independent services\n");
+    int login_pid = task_create(login_screen_task, 0, "login");
+    if (login_pid < 0) __builtin_trap();
+    task_wait(login_pid);
     if (task_create(desktop_service, 0, "wm") < 0) __builtin_trap();
     for (;;) task_sleep_ms(1000);
 }
