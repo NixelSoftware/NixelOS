@@ -15,5 +15,6 @@ void *malloc(size_t);
 void *realloc(void *,size_t);
 void free(void *);
 int atoi(const char *);
+unsigned long long strtoull(const char *,char **,int);
 long strtol(const char *,char **,int);
 #endif

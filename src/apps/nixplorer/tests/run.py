@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix="netzhaut-tests-") as directory:
     subprocess.run([
         os.environ.get("CC", "cc"), "-O1", "-g", "-fno-builtin", "-DNH_NIXEL", "-DNH_NIXEL_HOST_TEST", "-U__unix__", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I" + str(engine / "platform/netzhaut"),
-        str(Path(__file__).with_name("original.c")), str(Path(__file__).with_name("format.c")), str(engine / "platform/netzhaut/Probe.c"), *map(str, sources), "-o", str(exe),
+        str(Path(__file__).with_name("original.c")), str(Path(__file__).with_name("format.c")), str(Path(__file__).with_name("compat.c")), str(engine / "platform/netzhaut/Probe.c"), *map(str, sources), "-lm", "-o", str(exe),
     ], check=True, cwd=root)
     # The production allocator is a static arena; leak checks below use its own counters.
     env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")

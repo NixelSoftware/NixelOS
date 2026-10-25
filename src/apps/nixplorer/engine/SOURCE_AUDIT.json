@@ -864,6 +864,8 @@
     "lib/nh-css/Parser/ComponentParser.c",
     "lib/nh-css/Parser/ComponentParser.h",
     "lib/nh-css/Parser/Parser.c",
+    "lib/nh-css/Parser/Parser.h",
+    "lib/nh-css/Parser/SelectorParser.c",
     "lib/nh-css/Parser/TokenParser.c",
     "lib/nh-css/Parser/TokenParser.h",
     "lib/nh-css/Parser/Tokenizer.c",

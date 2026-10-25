@@ -8,16 +8,18 @@
 #include <stdio.h>
 
 void check_format(void);
+void check_compat(void);
 
 int main(void) {
     check_format();
+    check_compat();
     for (int i = 0; i < 64; ++i) assert(nh_nixel_probe());
     void *p = nh_core_allocate(17);
     assert(p && ((uintptr_t)p % 16) == 0);
     ((unsigned char *)p)[16] = 0x7a;
     void *grown = nh_core_reallocate(p, 4096);
     assert(grown && ((unsigned char *)grown)[16] == 0x7a);
-    assert(nh_core_reallocate(grown, 1024u * 1024u) == 0);
+    assert(nh_core_reallocate(grown, 4u * 1024u * 1024u) == 0);
     assert(((unsigned char *)grown)[16] == 0x7a);
     nh_core_free(grown);
     assert(nh_nixel_heap_used() == 0);
@@ -31,6 +33,8 @@ int main(void) {
     assert(nh_encoding_getDescription(0x110000) == 0);
     assert(nh_encoding_getDescription(0x628) == arabic);
     printf("Original WebIDL parser/runtime and DOM inheritance/text checks passed (%zu bytes).\n", nh_nixel_heap_used());
+    assert(nh_nixel_probe_html());
+    printf("Original HTML parser/tree-construction check passed (%zu bytes).\n", nh_nixel_heap_used());
     puts("Original Netzhaut core/encoding and OS allocator checks passed.");
     return 0;
 }

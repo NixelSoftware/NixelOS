@@ -73,7 +73,7 @@ static nh_css_SelectorParser nh_css_initSelectorParser(
 static nh_css_SelectorParseNode *nh_css_allocateNonTerminal(
     NH_CSS_SELECTOR_PARSE_NODE type)
 {
-    nh_css_SelectorParseNode *Node_p = nh_core_allocate(sizeof(nh_css_SelectorParseNode));
+    nh_css_SelectorParseNode *Node_p = (nh_css_SelectorParseNode *)nh_core_allocate(sizeof(nh_css_SelectorParseNode));
     NH_CORE_CHECK_MEM_2(NULL, Node_p)
 
     Node_p->type = type;
@@ -86,7 +86,7 @@ static nh_css_SelectorParseNode *nh_css_allocateNonTerminal(
 static nh_css_SelectorParseNode *nh_css_appendTerminal(
     nh_css_SelectorParseNode *NonTerminal_p, nh_css_Token *Token_p)
 {
-    nh_css_SelectorParseNode *Terminal_p = nh_core_allocate(sizeof(nh_css_SelectorParseNode));
+    nh_css_SelectorParseNode *Terminal_p = (nh_css_SelectorParseNode *)nh_core_allocate(sizeof(nh_css_SelectorParseNode));
     NH_CORE_CHECK_MEM_2(NULL, Terminal_p)
 
     Terminal_p->type = NH_CSS_SELECTOR_PARSE_NODE_TERMINAL;

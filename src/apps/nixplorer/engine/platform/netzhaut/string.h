@@ -12,4 +12,5 @@ char *strcpy(char *, const char *);
 char *strncpy(char *, const char *, size_t);
 char *strchr(const char *, int);
 char *strstr(const char *, const char *);
+char *strpbrk(const char *,const char *);
 #endif

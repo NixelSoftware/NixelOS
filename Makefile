@@ -169,7 +169,34 @@ NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
               $(NIXPLORER_DIR)/engine/lib/nh-html/Interfaces/Document.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/StaticLoader.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/UnicodeData.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Math.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Convert.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-network/HTTPClient.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-api/nh-network.c \
+              $(NIXPLORER_DIR)/engine/platform/tcp.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Network.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Strings.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Scan.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/Format.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Common/Log.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/CounterStyleRule.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/Document.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/Rule.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/RuleList.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/StyleDeclaration.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/StyleRule.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/StyleSheet.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Interfaces/StyleSheetList.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Parser/ComponentParser.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Parser/Parser.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Parser/SelectorParser.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Parser/TokenParser.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Parser/Tokenizer.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Common/IndexMap.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Interfaces/HTMLImageElement.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Interfaces/HTMLElement.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/WebIDL.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/HTMLProbe.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/DOMProbe.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/Runtime.c
 BROWSER_C := $(NIXPLORER_DIR)/browser/main.c $(NETZHAUT_C) \

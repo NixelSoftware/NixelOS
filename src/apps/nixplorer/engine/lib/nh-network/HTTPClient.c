@@ -10,6 +10,16 @@
 
 #include "HTTPClient.h"
 
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <stdint.h>
+#ifdef NH_NIXEL
+#include "../../platform/netzhaut/Network.h"
+#else
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
@@ -32,6 +42,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#endif
+
 #if defined(__ANDROID__)
     #include <dirent.h>
     #include <openssl/pem.h>
@@ -48,7 +60,9 @@
 
 typedef struct nh_network_HTTPConnection {
     int fd;
+#ifndef NH_NIXEL
     SSL *SSL_p;
+#endif
     char buffer_p[NH_NETWORK_HTTP_BUFFER_SIZE];
     size_t position;
     size_t length;
@@ -60,8 +74,10 @@ typedef struct nh_network_HTTPBuffer {
     size_t capacity;
 } nh_network_HTTPBuffer;
 
+#ifndef NH_NIXEL
 static pthread_once_t NH_NETWORK_SSL_ONCE = PTHREAD_ONCE_INIT;
 static SSL_CTX *NH_NETWORK_SSL_CONTEXT_P = NULL;
+#endif
 
 // HELPERS =========================================================================================
 
@@ -91,6 +107,7 @@ static bool nh_network_appendToBuffer(
     return true;
 }
 
+#ifndef NH_NIXEL
 #if defined(__ANDROID__)
 // Android keeps its trust store as one PEM file per certificate, named by the legacy OpenSSL
 // subject hash, so OpenSSL's directory lookup cannot find them. Load every file instead.
@@ -157,6 +174,8 @@ static void nh_network_createSSLContextOnce()
     NH_NETWORK_SSL_CONTEXT_P = Context_p;
 }
 
+#endif
+
 // URL =============================================================================================
 
 static bool nh_network_parseHTTPURL(
@@ -210,6 +229,7 @@ static bool nh_network_parseHTTPURL(
 
 // CONNECTION ======================================================================================
 
+#ifndef NH_NIXEL
 static void nh_network_setSocketTimeouts(
     int fd, int timeoutSeconds)
 {
@@ -224,9 +244,14 @@ static void nh_network_setSocketTimeouts(
 #endif
 }
 
+#endif
+
 static int nh_network_connectTCP(
     const char *host_p, const char *port_p, int timeoutSeconds, nh_api_HTTPResponse *Response_p)
 {
+#ifdef NH_NIXEL
+    return nh_nixel_net_connect(host_p,port_p,timeoutSeconds,Response_p->error_p,sizeof(Response_p->error_p));
+#else
     struct addrinfo Hints;
     memset(&Hints, 0, sizeof(Hints));
     Hints.ai_family = AF_UNSPEC;
@@ -271,8 +296,10 @@ static int nh_network_connectTCP(
     freeaddrinfo(Info_p);
     if (fd < 0) {nh_network_setError(Response_p, "Could not connect to %s:%s", host_p, port_p);}
     return fd;
+#endif
 }
 
+#ifndef NH_NIXEL
 static bool nh_network_startTLS(
     nh_network_HTTPConnection *Connection_p, const char *host_p, nh_api_HTTPResponse *Response_p)
 {
@@ -312,16 +339,24 @@ static bool nh_network_startTLS(
     return true;
 }
 
+#endif
+
 static void nh_network_closeConnection(
     nh_network_HTTPConnection *Connection_p)
 {
+#ifndef NH_NIXEL
     if (Connection_p->SSL_p) {
         SSL_shutdown(Connection_p->SSL_p);
         SSL_free(Connection_p->SSL_p);
         Connection_p->SSL_p = NULL;
     }
+#endif
     if (Connection_p->fd >= 0) {
+#ifdef NH_NIXEL
+        nh_nixel_net_close(Connection_p->fd);
+#else
         close(Connection_p->fd);
+#endif
         Connection_p->fd = -1;
     }
 }
@@ -331,6 +366,10 @@ static bool nh_network_writeAll(
 {
     while (size > 0) {
         long written = 0;
+#ifdef NH_NIXEL
+        written=nh_nixel_net_send(Connection_p->fd,data_p,size);
+        if(written<=0)return false;
+#else
         if (Connection_p->SSL_p) {
             int chunk = size > (1 << 30) ? (1 << 30) : (int)size;
             written = SSL_write(Connection_p->SSL_p, data_p, chunk);
@@ -340,6 +379,7 @@ static bool nh_network_writeAll(
             if (written < 0 && errno == EINTR) {continue;}
             if (written <= 0) {return false;}
         }
+#endif
         data_p += written;
         size -= (size_t)written;
     }
@@ -352,6 +392,9 @@ static bool nh_network_writeAll(
 static long nh_network_readRaw(
     nh_network_HTTPConnection *Connection_p, char *buffer_p, size_t size)
 {
+#ifdef NH_NIXEL
+    return nh_nixel_net_receive(Connection_p->fd,buffer_p,size);
+#else
     if (Connection_p->SSL_p) {
         int chunk = size > (1 << 30) ? (1 << 30) : (int)size;
         int read = SSL_read(Connection_p->SSL_p, buffer_p, chunk);
@@ -368,6 +411,7 @@ static long nh_network_readRaw(
         if (read < 0 && errno == EINTR) {continue;}
         return read;
     }
+#endif
 }
 
 static bool nh_network_fillBuffer(
@@ -646,6 +690,12 @@ int nh_network_performHTTPRequest(
         return -1;
     }
 
+#ifdef NH_NIXEL
+    if(tls) {
+        nh_network_setError(Response_p,"HTTPS/TLS is not available on Nixel");
+        return -1;
+    }
+#endif
     const char *method_p = Request_p->method_p ? Request_p->method_p : "GET";
     int timeoutSeconds = Request_p->timeoutSeconds > 0 ? Request_p->timeoutSeconds : 30;
 
@@ -657,7 +707,9 @@ int nh_network_performHTTPRequest(
     Connection_p->fd = nh_network_connectTCP(host_p, port_p, timeoutSeconds, Response_p);
 
     bool ok = Connection_p->fd >= 0;
+#ifndef NH_NIXEL
     if (ok && tls) {ok = nh_network_startTLS(Connection_p, host_p, Response_p);}
+#endif
     if (ok) {ok = nh_network_sendRequest(Connection_p, Request_p, method_p, host_p, port_p, tls, target_p, Response_p);}
     if (ok) {ok = nh_network_receiveResponse(Connection_p, Request_p, method_p, Response_p);}
 
@@ -704,6 +756,7 @@ int nh_network_getHTTPHeader(
     return 0;
 }
 
+#ifndef NH_NIXEL
 // LOOPBACK ========================================================================================
 
 int nh_network_openLoopbackListener(
@@ -789,3 +842,5 @@ void nh_network_closeLoopbackListener(
 {
     if (listener >= 0) {close(listener);}
 }
+
+#endif /* Desktop loopback server requires listening socket APIs. */

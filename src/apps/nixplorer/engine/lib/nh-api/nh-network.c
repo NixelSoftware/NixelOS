@@ -20,8 +20,12 @@
 static void *nh_api_loadNetworkSymbol(
     const char *name_p)
 {
+#ifdef NH_NIXEL
+    return nh_core_loadExistingSymbol(NH_MODULE_NETWORK,0,name_p);
+#else
     nh_core_Loader *Loader_p = nh_api_getLoader();
     return !Loader_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_NETWORK, 0, (char*)name_p);
+#endif
 }
 
 // FUNCTIONS =======================================================================================

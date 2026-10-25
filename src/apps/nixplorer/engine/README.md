@@ -2,8 +2,8 @@
 
 This is an incomplete source port of Netzhaut. **Page loading and rendering are
 unavailable.** The OS application currently verifies original core/encoding,
-WebIDL parsing, interface-object creation, DOM lists, inherited DOM objects and
-Unicode text storage. There is no native browser-engine fallback.
+WebIDL parsing, interface-object creation, DOM lists, inherited DOM objects,
+Unicode text storage, and original HTML document/tree construction. There is no native browser-engine fallback.
 
 The supplied engine remains in `bin/` and `lib/`. Six missing original WebIDL
 runtime files were recovered from upstream history; their commit and hashes are
@@ -15,9 +15,9 @@ Nixel's APP1 entry and window/event handling live in `../browser/`. Its bring-up
 checks call the original engine implementations. The upstream browser executable
 entry remains its original `TODO`; it is not a working browser launcher.
 
-`NETZHAUT_C` lists the actual sources compiled for Nixel. Original HTML tokenizer,
-tree constructor and parser files now compile, but their document-processing path
-is not yet integrated. Linker garbage collection removes unreachable functions;
+`NETZHAUT_C` lists the actual sources compiled for Nixel. The original HTML tokenizer,
+tree constructor and parser now execute a document integration check. Full page
+loading and rendering are still not integrated. Linker garbage collection removes unreachable functions;
 compiling a source does not mean every function in it is linked or operational.
 
 Build and validation:
@@ -27,7 +27,8 @@ Build and validation:
 - `make browser.bin`: build the diagnostic application. It requires
   `UNICODE.DAT` in the guest filesystem to run WebIDL checks.
 - `make test-nixplorer`: sanitizer checks using the production sources and
-  original generated IDL fragments, including inherited DOM objects and Unicode.
+  original generated IDL fragments, inherited DOM objects, Unicode, and HTML
+  document/tree-construction output.
 - `make check-netzhaut`: verify original-source preservation and compile the
   original engine entry paths. Currently eight of ten syntax probes pass;
   layout and renderer probes still fail on graphics dependencies.
@@ -43,3 +44,8 @@ routines still consume those descriptions. The source table remains present.
 See [PORTING.md](PORTING.md) for source provenance, compatibility edits,
 verification results and remaining dependencies. Original license notices remain
 intact; see `LICENSE.LGPL`.
+
+The browser chrome is restored: editable URL field, Go button, inset page area,
+and the original `Ready` status. Enter and Go report the current loading limit;
+no network/page rendering is implied. Launch arguments populate the URL field.
+The status window no longer replaces the browser interface.

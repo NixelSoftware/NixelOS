@@ -2,6 +2,7 @@
 #include "../../lib/nh-core/Loader/Loader.h"
 #include "../../lib/nh-webidl/Runtime/Object.h"
 #include <string.h>
+#include "../../lib/nh-network/HTTPClient.h"
 
 #define DOM_INITIALIZERS(X) \
     X(Attr) X(CharacterData) X(Comment) X(Document) X(DocumentType) \
@@ -32,6 +33,11 @@ int nh_core_getModuleIndex(char *name) {
 }
 void *nh_core_loadExistingSymbol(NH_MODULE_E module, int major, const char *name) {
     if (major != 0 || !name) return 0;
+    if(module==NH_MODULE_NETWORK) {
+        if(!strcmp(name,"nh_network_performHTTPRequest"))return (void *)nh_network_performHTTPRequest;
+        if(!strcmp(name,"nh_network_freeHTTPResponse"))return (void *)nh_network_freeHTTPResponse;
+        if(!strcmp(name,"nh_network_getHTTPHeader"))return (void *)nh_network_getHTTPHeader;
+    }
     for (unsigned i = 0; i < sizeof(entries)/sizeof(entries[0]); ++i)
         if (entries[i].module == module && !strcmp(entries[i].name, name))
             return (void *)entries[i].function;

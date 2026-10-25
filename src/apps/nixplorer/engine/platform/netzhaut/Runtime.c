@@ -6,7 +6,12 @@
 #include <string.h>
 
 /* All allocations remain inside the process's 2 MiB user mapping. */
-#define NH_HEAP_SIZE (768u * 1024u)
+#ifdef NH_NIXEL_HOST_TEST
+/* Host tests use 64-bit pointers; the guest uses 32-bit engine structures. */
+#define NH_HEAP_SIZE (1536u * 1024u)
+#else
+#define NH_HEAP_SIZE (1280u * 1024u)
+#endif
 typedef union Block Block;
 union __attribute__((aligned(16))) Block {
     struct { size_t size; Block *next; int available; } h;

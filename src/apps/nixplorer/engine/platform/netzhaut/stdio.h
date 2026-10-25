@@ -4,6 +4,7 @@
 #include <stdarg.h>
 /* Integer/string formatting is supplied by Format.c. Floating formats and
  * streams remain unsupported; the formatter returns -1 for unknown formats. */
+int sscanf(const char *,const char *,...);
 int snprintf(char *, size_t, const char *, ...);
 void perror(const char *);
 int sprintf(char *, const char *, ...);
