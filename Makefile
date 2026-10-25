@@ -97,7 +97,7 @@ APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
         shutdlg
 # Temporary Fastfetch image inclusion for testing.
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
-.PHONY: all run clean clean-build
+.PHONY: all run clean clean-build test-nixplorer
 all: os.img
 
 .PHONY: fastfetch.bin
@@ -120,31 +120,82 @@ $(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True); Path('src/apps/$*/entry.o').unlink(missing_ok=True); Path('src/apps/$*/main.o').unlink(missing_ok=True)"
 
 NIXPLORER_DIR := src/apps/nixplorer
-BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
-             $(NIXPLORER_DIR)/engine/net/http.c \
-             $(NIXPLORER_DIR)/engine/net/response.c \
-             $(NIXPLORER_DIR)/engine/platform/tcp.c \
-             $(NIXPLORER_DIR)/engine/parser/html.c \
-             $(NIXPLORER_DIR)/engine/font/font.c \
-             $(NIXPLORER_DIR)/engine/dom/document.c \
-             $(NIXPLORER_DIR)/engine/style/style.c \
-             $(NIXPLORER_DIR)/engine/style/selectors.c \
-             $(NIXPLORER_DIR)/engine/layout/box.c \
-             $(NIXPLORER_DIR)/engine/layout/flex.c \
-             $(NIXPLORER_DIR)/engine/layout/grid.c \
-             $(NIXPLORER_DIR)/engine/parser/css_grid.c \
-             $(NIXPLORER_DIR)/engine/parser/css_color.c
+# Original Netzhaut sources currently linked into the OS port diagnostic shell.
+# WebIDL/DOM execute through the original implementations; HTML is compiled.
+# CSS/layout/rendering remain audited by check-netzhaut; never replaced.
+NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/Array.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/List.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/ArrayList.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/LinkedList.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/Stack.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/String.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-encoding/Encodings/UTF8.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-encoding/Encodings/UTF32.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-encoding/Base/UnicodeDataHelper.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-encoding/Base/UnicodeData.gen.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/Util/HashMap.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/External/c_hashmap/hashmap.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Runtime/Object.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Runtime/Type.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Runtime/String.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Builtin.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Global.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Interface.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Parser.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Tokenizer.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Common/IndexMap.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-webidl/Common/Log.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Attr.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/CharacterData.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Comment.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Document.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/DocumentType.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Element.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/EventTarget.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/NamedNodeMap.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Node.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/NodeList.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Text.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/AdoptionAgencyAlgorithm.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/Algorithms.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/Elements.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/NamedCharacterReferences.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/Parser.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/Tokenizer.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/TreeConstruction.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/TreeConstructionHelper.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Common/Log.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Interfaces/Document.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/StaticLoader.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/UnicodeData.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Format.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/DOMProbe.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Runtime.c
+BROWSER_C := $(NIXPLORER_DIR)/browser/main.c $(NETZHAUT_C) \
+             $(NIXPLORER_DIR)/engine/platform/netzhaut/Probe.c
 BROWSER_OBJ := $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
-BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
+BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/lib/*/*/*.h) \
+                   $(wildcard $(NIXPLORER_DIR)/engine/lib/nh-api/*.h) \
+                   $(wildcard $(NIXPLORER_DIR)/engine/platform/*.h) \
+                   $(wildcard $(NIXPLORER_DIR)/engine/platform/netzhaut/*.h)
+$(BROWSER_C:.c=.o): CFLAGS += -DNH_NIXEL -U__unix__ -I$(NIXPLORER_DIR)/engine/platform/netzhaut -fno-builtin -ffunction-sections -fdata-sections
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
-$(NIXPLORER_DIR)/engine/parser/html.o: $(NIXPLORER_DIR)/engine/parser/entities.inc
-$(NIXPLORER_DIR)/engine/parser/css_color.o: $(NIXPLORER_DIR)/engine/parser/colors.inc
+$(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Builtin.o: $(wildcard $(NIXPLORER_DIR)/engine/lib/nh-webidl/Specifications/*/*.idl.inc)
+.PHONY: check-netzhaut
+check-netzhaut:
+	$(PYTHON) $(NIXPLORER_DIR)/tests/check_original.py
+
 src/system/graphics/image/png.o: $(NIXPLORER_DIR)/engine/paint/png.c $(NIXPLORER_DIR)/engine/paint/png.h
 
-browser.bin: Makefile $(BROWSER_OBJ)
-	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(NIXPLORER_DIR)/browser/browser.tmp
+browser.bin: Makefile $(NIXPLORER_DIR)/browser/browser.ld src/apps/nixplorer/tests/check_image.py $(NIXPLORER_DIR)/engine/lib/nh-webidl/Specifications/DOM/NodeList.idl.inc $(BROWSER_OBJ)
+	$(LD) $(LDFLAGS) --omagic --gc-sections -T $(NIXPLORER_DIR)/browser/browser.ld $(filter %.o,$^) -o $(NIXPLORER_DIR)/browser/browser.tmp
+	$(PYTHON) src/apps/nixplorer/tests/check_image.py $(NIXPLORER_DIR)/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in '$(NIXPLORER_DIR)/browser/browser.tmp $(BROWSER_OBJ)'.split()]"
+
+test-nixplorer: UNICODE.DAT
+	$(PYTHON) $(NIXPLORER_DIR)/tests/run.py
 
 src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp
@@ -158,9 +209,12 @@ src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
 	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
 	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sys.exit(subprocess.call(['$(NASM)','-f','bin','-D',f'KERNEL_SECTORS={(n+511)//512}','-D',f'KERNEL_SIZE_BYTES={n}','src/boot/boot_stage2.asm','-o','src/boot_stage2.bin']))"
 
+UNICODE.DAT: $(NIXPLORER_DIR)/engine/lib/nh-encoding/Base/UnicodeData.gen.c $(NIXPLORER_DIR)/engine/platform/netzhaut/pack_unicode.py
+	$(PYTHON) $(NIXPLORER_DIR)/engine/platform/netzhaut/pack_unicode.py $< $@
+
 RESOURCE_WAVS := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() == '.wav'))")
 
-os.img: $(RESOURCE_WAVS) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
+os.img: UNICODE.DAT $(RESOURCE_WAVS) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
 	$(PYTHON) mkfat32.py os.img.new
 	$(PYTHON) -c "from pathlib import Path; p=Path('os.img.new'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d); p.replace('os.img')"
 	$(MAKE) clean-build

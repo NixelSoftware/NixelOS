@@ -1,0 +1,1 @@
+double pow(double, double);

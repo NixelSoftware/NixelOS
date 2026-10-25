@@ -5,3 +5,5 @@
 os
 struct
 *pyc
+# Complete Netzhaut Unicode table, generated from the supplied source.
+/UNICODE.DAT

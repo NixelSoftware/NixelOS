@@ -1,0 +1,27 @@
+#ifndef NH_GFX_METAL_H
+#define NH_GFX_METAL_H
+
+#include "../Common/Includes.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct nh_gfx_MetalDevice nh_gfx_MetalDevice;
+
+// Global Metal context
+typedef struct nh_gfx_Metal {
+    nh_gfx_MetalDevice *Device_p;
+} nh_gfx_Metal;
+
+extern nh_gfx_Metal NH_METAL;
+
+// Metal initialization/termination
+NH_API_RESULT nh_gfx_initMetal(void);
+NH_API_RESULT nh_gfx_terminateMetal(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // NH_GFX_METAL_H 

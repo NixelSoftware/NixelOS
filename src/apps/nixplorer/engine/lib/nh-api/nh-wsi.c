@@ -1,0 +1,77 @@
+// LICENSE NOTICE ==================================================================================
+
+/**
+ * Netzhaut - Web Browser Engine
+ * Copyright (C) 2022  Dajo Frey
+ * Published under GNU LGPL. See Netzhaut/LICENSE.LGPL file.
+ */
+
+// INCLUDES ========================================================================================
+
+#include "nh-wsi.h"
+#include "../nh-core/Loader/Loader.h"
+
+#include <dlfcn.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// FUNCTIONS =======================================================================================
+
+nh_api_Window *nh_api_createWindow(
+    char *namespace_p, nh_api_SurfaceRequirements *Requirements_p)
+{
+    typedef nh_api_Window *(*nh_wsi_createWindow_f)(char *namespace_p, nh_api_SurfaceRequirements *Requirements_p);
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    nh_wsi_createWindow_f createWindow_f = !Loader_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_WSI, 0, "nh_wsi_createWindow");
+    return createWindow_f ? createWindow_f(namespace_p, Requirements_p) : NULL;
+}
+
+#if defined(__ANDROID__)
+NH_API_RESULT nh_api_setAndroidApp(
+    struct android_app *app_p)
+{
+    typedef NH_API_RESULT (*nh_wsi_setAndroidApp_f)(struct android_app *app_p);
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    nh_wsi_setAndroidApp_f setAndroidApp_f = !Loader_p ? NULL :
+        Loader_p->loadSymbol_f(NH_MODULE_WSI, 0, "nh_wsi_setAndroidApp");
+    return setAndroidApp_f ? setAndroidApp_f(app_p) : NH_API_ERROR_BAD_STATE;
+}
+#endif
+
+NH_API_RESULT nh_api_setWindowEventListener(
+    nh_api_Window *Window_p, nh_api_windowCallback_f callback_f)
+{
+    typedef NH_API_RESULT (*nh_wsi_setEventListener_f)(nh_api_Window *Window_p, nh_api_windowCallback_f callback_f);
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    nh_wsi_setEventListener_f setEventListener_f = !Loader_p || !Window_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_WSI, 0, "nh_wsi_setEventListener");
+    return setEventListener_f ? setEventListener_f(Window_p, callback_f) : NH_API_ERROR_BAD_STATE;
+}
+
+NH_API_RESULT nh_api_moveWindow(
+    nh_api_Window *Window_p)
+{
+    typedef NH_API_RESULT (*nh_wsi_moveWindow_f)(nh_api_Window *Window_p);
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    nh_wsi_moveWindow_f moveWindow_f = !Loader_p || !Window_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_WSI, 0, "nh_wsi_moveWindow");
+    return moveWindow_f ? moveWindow_f(Window_p) : NH_API_ERROR_BAD_STATE;
+}
+
+NH_API_RESULT nh_api_showKeyboard(
+    nh_api_Window *Window_p)
+{
+    typedef NH_API_RESULT (*nh_wsi_showKeyboard_f)(nh_api_Window *Window_p);
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    nh_wsi_showKeyboard_f showKeyboard_f = !Loader_p || !Window_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_WSI, 0, "nh_wsi_showKeyboard");
+    return showKeyboard_f ? showKeyboard_f(Window_p) : NH_API_ERROR_BAD_STATE;
+}
+
+NH_API_RESULT nh_api_hideKeyboard(
+    nh_api_Window *Window_p)
+{
+    typedef NH_API_RESULT (*nh_wsi_hideKeyboard_f)(nh_api_Window *Window_p);
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    nh_wsi_hideKeyboard_f hideKeyboard_f = !Loader_p || !Window_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_WSI, 0, "nh_wsi_hideKeyboard");
+    return hideKeyboard_f ? hideKeyboard_f(Window_p) : NH_API_ERROR_BAD_STATE;
+}

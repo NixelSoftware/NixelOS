@@ -1,0 +1,59 @@
+// LICENSE NOTICE ==================================================================================
+
+/**
+ * Netzhaut - Web Browser Engine
+ * Copyright (C) 2022  Dajo Frey
+ * Published under GNU LGPL. See Netzhaut/LICENSE.LGPL file.
+ */
+
+// INCLUDES ========================================================================================
+
+#include "SurfaceRequirements.h"
+#include "Viewport.h"
+
+#if defined(NH_PLATFORM_UNIX)
+    #include "../Vulkan/Vulkan.h"
+    #include "../Vulkan/Render.h"
+#endif
+
+#include "../OpenGL/Render.h"
+#include "../OpenGL/ContextX11.h"
+#include "../Common/Config.h"
+
+#include "../../nh-core/System/Memory.h"
+#include "../../nh-core/Util/List.h"
+#include "../../nh-core/System/Thread.h"
+
+#include "../../nh-wsi/Window/Window.h"
+
+#include <string.h>
+#include <limits.h>
+
+// FUNCTIONS =======================================================================================
+
+static nh_gfx_SurfaceRequirements Requirements;
+
+nh_gfx_SurfaceRequirements *nh_gfx_getSurfaceRequirements()
+{
+    return &Requirements;
+}
+
+NH_API_RESULT nh_gfx_createSurfaceRequirements()
+{
+#if defined(NH_PLATFORM_UNIX)
+    nh_gfx_createOpenGLX11ContextRequirements(&Requirements.OpenGL);
+#endif
+
+    nh_gfx_Config Config = nh_gfx_getConfig();
+    Requirements.api = Config.api;
+
+    return NH_API_SUCCESS;
+}
+
+NH_API_RESULT nh_gfx_freeSurfaceRequirements()
+{
+#if defined(NH_PLATFORM_UNIX)
+    nh_gfx_freeOpenGLX11ContextRequirements(&Requirements.OpenGL);
+#endif
+    return NH_API_SUCCESS;
+}
