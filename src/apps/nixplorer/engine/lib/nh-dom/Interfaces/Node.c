@@ -76,12 +76,11 @@ static NH_API_RESULT nh_dom_setNodeType(
             NODE_TYPE = (void*)11;
         }
 
-        if (NODE_TYPE) {return NH_API_SUCCESS;}
 
         Child_p = Child_p->Child_p;
     }
 
-    return NH_API_ERROR_BAD_STATE;
+    return NODE_TYPE ? NH_API_SUCCESS : NH_API_ERROR_BAD_STATE;
 }
 
 // NOTE Keep public otherwise can't be loaded.
@@ -111,13 +110,15 @@ NH_API_RESULT nh_dom_initializeNode(
 NH_API_RESULT nh_dom_appendToNode(
     nh_webidl_Object *Node_p, nh_webidl_Object *Child_p)
 {
-    return nh_dom_appendToNodeList(Node_p->Attributes.pp[7], Child_p);
+    return nh_dom_insertBefore(Node_p, Child_p, NULL);
 }
 
 NH_API_RESULT nh_dom_insertIntoNode(
     nh_webidl_Object *Node_p, nh_webidl_Object *Child_p, NH_WEBIDL_UNSIGNED_LONG index)
 {
-    return nh_dom_insertIntoNodeList(Node_p->Attributes.pp[7], Child_p, index);
+    nh_core_List *children = nh_dom_getNodeChildren(Node_p);
+    if (index > children->size) {return NH_API_ERROR_BAD_STATE;}
+    return nh_dom_insertBefore(Node_p, Child_p, index < children->size ? children->pp[index] : NULL);
 }
 
 nh_core_List *nh_dom_getNodeChildren(
@@ -130,6 +131,7 @@ NH_API_RESULT nh_dom_setNodeDocument(
     nh_webidl_Object *Node_p, nh_webidl_Object *NodeDocument_p)
 {
     ((nh_dom_Internal*)Node_p->internal_p)->Document_p = NodeDocument_p;
+    Node_p->Attributes.pp[4] = (unsigned long)Node_p->Attributes.pp[0] == 9 ? NULL : NodeDocument_p;
     return NH_API_SUCCESS;
 }
 
@@ -181,9 +183,10 @@ NH_API_RESULT nh_dom_setUpdateAnnotationsFlag(
 void nh_dom_setParentNode(
     nh_webidl_Object *Node_p, nh_webidl_Object *Parent_p)
 {
-    if (nh_webidl_getObject(Parent_p, "DOM", "Element")) {
+    if (Parent_p && nh_webidl_getObject(Parent_p, "DOM", "Element")) {
        Node_p->Attributes.pp[6] = Parent_p;
     }
+    else {Node_p->Attributes.pp[6] = NULL;}
     Node_p->Attributes.pp[5] = Parent_p;
 }
 

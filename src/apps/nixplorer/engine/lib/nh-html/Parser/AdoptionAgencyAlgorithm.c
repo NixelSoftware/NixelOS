@@ -10,6 +10,7 @@
 
 #include "TreeConstructionHelper.h"
 #include "AdoptionAgencyAlgorithm.h"
+#include "../Interfaces/HTMLElement.h"
 #include "Algorithms.h"
 
 #include "../../nh-dom/Interfaces/Attr.h"
@@ -30,136 +31,84 @@
 
 // ADOPTION AGENCY ALGORITHM =======================================================================
 
-bool inB = false;
-
-typedef struct nh_html_AdoptionAgencyBookmark {
-    int left;
-    int right;
-} nh_html_AdoptionAgencyBookmark;
-
-static void nh_html_runAdoptionAgencyAlgorithmInnerLoop(
-    nh_html_Parser *Parser_p, nh_webidl_Object *FormattingElement_p, nh_webidl_Object *FurthestBlock_p, 
-    nh_html_AdoptionAgencyBookmark *Bookmark_p)
-{
-    nh_webidl_Object *Node_p = FurthestBlock_p;
-    nh_webidl_Object *LastNode_p = Node_p;
-
-    int innerLoopCounter = 0;
-
-    while (++innerLoopCounter)
-    {
-        // TODO
-        exit(0);
-    }
-
-    return;
+static long position(nh_core_List *list,nh_webidl_Object *object) {
+    for(unsigned long i=0;i<list->size;i++)if(list->pp[i]==object)return i;
+    return -1;
 }
-
-static void nh_html_runAdoptionAgencyAlgorithmOuterLoop(
-    nh_html_Parser *Parser_p, nh_encoding_UTF8String *Subject_p)
-{
-    int counter = 0;
-
-    while (true) 
-    {
-        if (counter >= 8) {break;}
-        counter++;
-    
-        nh_webidl_Object *FormattingElement_p = NULL;
-        for (int i = Parser_p->ActiveFormattingElements.size - 1; i >= 0; --i) 
-        {
-            FormattingElement_p = Parser_p->ActiveFormattingElements.pp[i];
-            if (!FormattingElement_p) {break;} // check marker
-            nh_webidl_Object *Element_p = NH_WEBIDL_GET_DOM_ELEMENT(FormattingElement_p);
-            if (Element_p && !strcmp(nh_dom_getLocalName(Element_p)->p, Subject_p->p)) {
-                break;
-            }
-            FormattingElement_p = NULL;
+static NH_API_RESULT any_other_end_tag(nh_html_Parser *p,const char *subject) {
+    for(unsigned long i=p->OpenElements.size;i;i--) {
+        nh_webidl_Object *o=p->OpenElements.pp[i-1];
+        if(!strcmp(nh_dom_getLocalName(NH_WEBIDL_GET_DOM_ELEMENT(o))->p,subject)) {
+            NH_CORE_CHECK(nh_html_generateImpliedEndTags(p,(char *)subject))
+            while(p->OpenElements.size>=i)nh_html_popCurrentNode(p);
+            return NH_API_SUCCESS;
         }
-   
-        if (!FormattingElement_p) {
-            // TODO 
-            break;
-        }
-
-        if (!nh_core_inList(&Parser_p->OpenElements, FormattingElement_p)) {
-            // parse error
-            nh_core_removeFromList2(&Parser_p->ActiveFormattingElements, false, FormattingElement_p);
-            break; 
-        }
-
-        if (!nh_html_hasElementInScope(Parser_p, Subject_p->p)) {
-            // parse error
-            break;
-        }
-    
-        if (nh_html_getCurrentNode(Parser_p) != FormattingElement_p) {
-            // parse error
-        }
-    
-        nh_webidl_Object *FurthestBlock_p = NULL;
-        for (unsigned long i = nh_core_getListIndex(&Parser_p->OpenElements, FormattingElement_p) + 1; i < Parser_p->OpenElements.size; ++i) {
-            nh_webidl_Object *Tmp_p = Parser_p->OpenElements.pp[i];       
-            if (nh_html_inSpecialCategory(Tmp_p)) {
-                FurthestBlock_p = Tmp_p;
-            }
-        }
-    
-        if (!FurthestBlock_p) {
-            for (unsigned long i = nh_core_getListIndex(&Parser_p->OpenElements, FormattingElement_p) - 1; i >= 0; ++i) {
-                nh_webidl_Object *Pop_p = nh_html_popCurrentNode(Parser_p);
-                if (Pop_p == FormattingElement_p) {
-                    break;
-                }
-            }
-            nh_core_removeFromList2(&Parser_p->ActiveFormattingElements, false, FormattingElement_p);
-            break;
-        }
-    
-        nh_webidl_Object *CommonAncestor_p = Parser_p->OpenElements.pp[nh_core_getListIndex(&Parser_p->OpenElements, FurthestBlock_p) - 1]; 
-    
-        nh_html_AdoptionAgencyBookmark Bookmark;
-        Bookmark.left = 0;
-        Bookmark.right = 0;
-        bool countRight = true;
-        for (int i = Parser_p->ActiveFormattingElements.size - 1; i >= 0; --i) 
-        {
-            nh_webidl_Object *Tmp_p = Parser_p->ActiveFormattingElements.pp[i];
-            if (Tmp_p == FormattingElement_p) {countRight = false;}
-            else if (countRight) {Bookmark.right++;}
-            else {Bookmark.left++;}
-        }
-    
-        nh_html_runAdoptionAgencyAlgorithmInnerLoop(Parser_p, FormattingElement_p, FurthestBlock_p, &Bookmark);
-
-        // TODO
-
-        exit(0);
+        if(nh_html_inSpecialCategory(o))break;
     }
-
-    return;
+    return NH_API_SUCCESS;
 }
-
-void nh_html_runAdoptionAgencyAlgorithm(
-    nh_html_Parser *Parser_p, nh_html_Token *Token_p)
-{
-    nh_encoding_UTF8String *Subject_p = &Token_p->StartOrEndTag.TagName;
-    nh_webidl_Object *CurrentNode_p = nh_html_getCurrentNode(Parser_p);
-    nh_webidl_Object *Element_p = NH_WEBIDL_GET_DOM_ELEMENT(CurrentNode_p);
-
-
-    if (!strcmp(Subject_p->p, "b")) {inB = true;}
-
-
-    if (Element_p && !strcmp(nh_dom_getLocalName(Element_p)->p, Subject_p->p)) {
-        if (!nh_core_inList(&Parser_p->ActiveFormattingElements, CurrentNode_p)) {
-            nh_html_popCurrentNode(Parser_p);
-            return;
-        }
+/* The original adoption-agency skeleton now uses the DOM's validated move
+ * operations for both formatting reconstruction and misnested block content. */
+NH_API_RESULT nh_html_runAdoptionAgencyAlgorithm(nh_html_Parser *p,nh_html_Token *token) {
+    const char *subject=token->StartOrEndTag.TagName.p;
+    nh_webidl_Object *current=nh_html_getCurrentNode(p);
+    if(!strcmp(nh_dom_getLocalName(NH_WEBIDL_GET_DOM_ELEMENT(current))->p,subject)&&position(&p->ActiveFormattingElements,current)<0) {
+        nh_html_popCurrentNode(p);return NH_API_SUCCESS;
     }
-
-    nh_html_runAdoptionAgencyAlgorithmOuterLoop(Parser_p, Subject_p);
-
-    return;
+    for(unsigned outer=0;outer<8;outer++) {
+        nh_webidl_Object *format=NULL;
+        for(unsigned long i=p->ActiveFormattingElements.size;i;i--) {
+            nh_webidl_Object *o=p->ActiveFormattingElements.pp[i-1];
+            if(!o)break;
+            if(!strcmp(nh_dom_getLocalName(NH_WEBIDL_GET_DOM_ELEMENT(o))->p,subject)){format=o;break;}
+        }
+        if(!format)return any_other_end_tag(p,subject);
+        long fi=position(&p->OpenElements,format);
+        if(fi<0){nh_core_removeFromList2(&p->ActiveFormattingElements,false,format);return NH_API_SUCCESS;}
+        if(!nh_html_hasElementInScope(p,(char *)subject))return NH_API_SUCCESS;
+        nh_webidl_Object *furthest=NULL;
+        long furthestIndex=-1;
+        for(unsigned long i=fi+1;i<p->OpenElements.size;i++)if(nh_html_inSpecialCategory(p->OpenElements.pp[i])){furthest=p->OpenElements.pp[i];furthestIndex=i;break;}
+        if(!furthest) {
+            while(p->OpenElements.size>(unsigned long)fi)nh_html_popCurrentNode(p);
+            nh_core_removeFromList2(&p->ActiveFormattingElements,false,format);return NH_API_SUCCESS;
+        }
+        if(fi==0)return NH_API_ERROR_BAD_STATE;
+        nh_webidl_Object *ancestor=p->OpenElements.pp[fi-1],*last=furthest;
+        long bookmark=position(&p->ActiveFormattingElements,format),index=furthestIndex;
+        for(unsigned inner=1;index>0;inner++) {
+            nh_webidl_Object *o=p->OpenElements.pp[--index];
+            if(o==format)break;
+            long active=position(&p->ActiveFormattingElements,o);
+            if(inner>3&&active>=0) {
+                nh_core_removeFromList(&p->ActiveFormattingElements,false,active);
+                if(active<bookmark)bookmark--;
+                active=-1;
+            }
+            if(active<0){nh_core_removeFromList(&p->OpenElements,false,index);continue;}
+            nh_html_Token *saved=nh_html_getToken(NH_WEBIDL_GET_HTML_ELEMENT(o));
+            nh_webidl_Object *copy=nh_html_createElementForToken(saved,&NH_WEBIDL_HTML_NAMESPACE,ancestor);
+            if(!copy)return NH_API_ERROR_MEMORY_ALLOCATION;
+            p->ActiveFormattingElements.pp[active]=copy;p->OpenElements.pp[index]=copy;
+            if(last==furthest)bookmark=active+1;
+            NH_CORE_CHECK(nh_dom_appendToNode(NH_WEBIDL_GET_DOM_NODE(copy),last))
+            last=copy;
+        }
+        nh_webidl_Object *target=ancestor;
+        bool savedFoster=p->fosterParenting;p->fosterParenting=true;
+        NH_WEBIDL_UNSIGNED_LONG insertion=nh_html_getAppropriatePlaceForInsertingNode(p,&target);
+        p->fosterParenting=savedFoster;
+        NH_CORE_CHECK(nh_dom_insertIntoNode(NH_WEBIDL_GET_DOM_NODE(target),last,insertion))
+        nh_webidl_Object *copy=nh_html_createElementForToken(nh_html_getToken(NH_WEBIDL_GET_HTML_ELEMENT(format)),&NH_WEBIDL_HTML_NAMESPACE,furthest);
+        if(!copy)return NH_API_ERROR_MEMORY_ALLOCATION;
+        nh_core_List *children=nh_dom_getNodeChildren(NH_WEBIDL_GET_DOM_NODE(furthest));
+        while(children->size){NH_CORE_CHECK(nh_dom_appendToNode(NH_WEBIDL_GET_DOM_NODE(copy),children->pp[0]))}
+        NH_CORE_CHECK(nh_dom_appendToNode(NH_WEBIDL_GET_DOM_NODE(furthest),copy))
+        long active=position(&p->ActiveFormattingElements,format);
+        if(active>=0){nh_core_removeFromList(&p->ActiveFormattingElements,false,active);if(active<bookmark)bookmark--;}
+        NH_CORE_CHECK(nh_core_insertIntoList(&p->ActiveFormattingElements,copy,bookmark))
+        nh_core_removeFromList2(&p->OpenElements,false,format);
+        NH_CORE_CHECK(nh_core_insertIntoList(&p->OpenElements,copy,position(&p->OpenElements,furthest)+1))
+    }
+    return NH_API_SUCCESS;
 }
-

@@ -98,31 +98,21 @@ static nh_css_SelectorParseNode *nh_css_appendTerminal(
     return Terminal_p;
 }
 
-static nh_css_SelectorParseNode *nh_css_parseCombinator(
-    nh_css_SelectorParser *Parser_p)
-{
-    if (Parser_p->Tokens_pp[0]->type == NH_CSS_TOKEN_DELIM) 
-    {
-        if (Parser_p->Tokens_pp[0]->Delim.value == '>' || Parser_p->Tokens_pp[0]->Delim.value == '+' || Parser_p->Tokens_pp[0]->Delim.value == '~') 
-        {
-            nh_css_SelectorParseNode *Combinator_p = nh_css_allocateNonTerminal(NH_CSS_SELECTOR_PARSE_NODE_COMBINATOR);
-            NH_CORE_CHECK_MEM_2(NULL, Combinator_p)
-            NH_CORE_CHECK_NULL_2(NULL, nh_css_appendTerminal(Combinator_p, Parser_p->Tokens_pp[0]))
-            Parser_p->Tokens_pp = &Parser_p->Tokens_pp[1];
-            return Combinator_p;
+static nh_css_SelectorParseNode *nh_css_parseCombinator(nh_css_SelectorParser *parser) {
+    nh_css_SelectorParser local=*parser;
+    nh_css_Token *token=NULL;
+    while(local.Tokens_pp[0]->type==NH_CSS_TOKEN_WHITESPACE){token=local.Tokens_pp[0];local.Tokens_pp++;}
+    if(local.Tokens_pp[0]->type==NH_CSS_TOKEN_DELIM) {
+        unsigned cp=local.Tokens_pp[0]->Delim.value;
+        if(cp=='>'||cp=='+'||cp=='~') {
+            token=local.Tokens_pp[0];local.Tokens_pp++;
+            while(local.Tokens_pp[0]->type==NH_CSS_TOKEN_WHITESPACE)local.Tokens_pp++;
         }
     }
-
-    if (Parser_p->Tokens_pp[0]->type == NH_CSS_TOKEN_WHITESPACE) 
-    {
-        nh_css_SelectorParseNode *Combinator_p = nh_css_allocateNonTerminal(NH_CSS_SELECTOR_PARSE_NODE_COMBINATOR);
-        NH_CORE_CHECK_MEM_2(NULL, Combinator_p)
-        NH_CORE_CHECK_NULL_2(NULL, nh_css_appendTerminal(Combinator_p, Parser_p->Tokens_pp[0]))
-        Parser_p->Tokens_pp = &Parser_p->Tokens_pp[1];
-        return Combinator_p;
-    }
- 
-    return NULL;
+    if(!token)return NULL;
+    nh_css_SelectorParseNode *combinator=nh_css_allocateNonTerminal(NH_CSS_SELECTOR_PARSE_NODE_COMBINATOR);
+    if(!combinator||!nh_css_appendTerminal(combinator,token))return NULL;
+    *parser=local;return combinator;
 }
 
 static nh_css_SelectorParseNode *nh_css_parseNsPrefix(

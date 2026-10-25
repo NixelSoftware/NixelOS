@@ -451,7 +451,7 @@ nh_core_Array nh_css_parseComponentValues(
     while (Parser_p->length && Parser_p->Tokens_pp[0]->type != NH_CSS_TOKEN_EOF)
     {
         nh_css_ComponentValue Value;
-        if (nh_css_parseComponentValue(Parser_p, &Value) == NH_API_SUCCESS) {
+        if (nh_css_consumeComponentValue(Parser_p, &Value) == NH_API_SUCCESS) {
             nh_css_ComponentValue *Value_p = (nh_css_ComponentValue *)nh_core_incrementArray(&ComponentValues);
             *Value_p = Value;
         }

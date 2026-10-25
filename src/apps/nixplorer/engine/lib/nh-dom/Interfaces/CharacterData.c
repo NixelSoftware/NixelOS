@@ -9,6 +9,8 @@
 // INCLUDES ========================================================================================
 
 #include "CharacterData.h"
+#include "Node.h"
+#include "../../nh-webidl/Runtime/Object.h"
 
 #include "../../nh-webidl/Runtime/String.h"
 #include "../../nh-core/System/Memory.h"
@@ -31,7 +33,10 @@ NH_API_RESULT nh_dom_initializeCharacterData(
     NH_CORE_CHECK_MEM(CharacterData_p->Attributes.pp[DATA])
 
     *((nh_encoding_UTF8String*)CharacterData_p->Attributes.pp[DATA]) = nh_encoding_initUTF8(64);
-    CharacterData_p->Attributes.pp[LENGTH] = &((nh_encoding_UTF8String*)CharacterData_p->Attributes.pp[DATA])->length;
+    CharacterData_p->internal_p = nh_core_allocate(sizeof(unsigned long));
+    NH_CORE_CHECK_MEM(CharacterData_p->internal_p)
+    *(unsigned long *)CharacterData_p->internal_p = 0;
+    CharacterData_p->Attributes.pp[LENGTH] = CharacterData_p->internal_p;
 
     return NH_API_SUCCESS;
 }
@@ -43,6 +48,9 @@ NH_API_RESULT nh_dom_appendToCharacterData(
         CharacterData_p->Attributes.pp[DATA], DOMString.p, DOMString.length
     ))
 
+    extern unsigned long nh_dom_countUTF16(nh_encoding_UTF8String);
+    *(unsigned long *)CharacterData_p->internal_p += nh_dom_countUTF16(DOMString);
+    nh_dom_setUpdateAnnotationsFlag(NH_WEBIDL_GET_DOM_NODE(CharacterData_p), true);
     return NH_API_SUCCESS;
 }
 

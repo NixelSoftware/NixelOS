@@ -73,6 +73,19 @@
         nh_webidl_Object *Node_p
     );
 
+unsigned nh_dom_getNodeType(nh_webidl_Object *);
+nh_webidl_Object *nh_dom_getFirstChild(nh_webidl_Object *);
+nh_webidl_Object *nh_dom_getLastChild(nh_webidl_Object *);
+nh_webidl_Object *nh_dom_getPreviousSibling(nh_webidl_Object *);
+nh_webidl_Object *nh_dom_getNextSibling(nh_webidl_Object *);
+nh_webidl_Object *nh_dom_getRootNode(nh_webidl_Object *);
+bool nh_dom_contains(nh_webidl_Object *,nh_webidl_Object *);
+bool nh_dom_isConnected(nh_webidl_Object *);
+NH_API_RESULT nh_dom_insertBefore(nh_webidl_Object *,nh_webidl_Object *,nh_webidl_Object *);
+NH_API_RESULT nh_dom_removeChild(nh_webidl_Object *,nh_webidl_Object *);
+NH_API_RESULT nh_dom_replaceChild(nh_webidl_Object *,nh_webidl_Object *,nh_webidl_Object *);
+nh_webidl_Object *nh_dom_createDocumentFragment(nh_webidl_Object *);
+
 /** @} */
 
 #endif

@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+void check_dom(void);
 void check_format(void);
 void check_network(void);
 void check_compat(void);
@@ -85,6 +86,7 @@ int main(void) {
     assert(browsing);
     assert(((nh_html_DocumentContext *)browsing)->browsingContext);
     assert(nh_api_loadBytes(browsing, "", 0) == NH_API_ERROR_BAD_STATE);
+    check_dom();
     puts("Original Netzhaut core/encoding and OS allocator checks passed.");
     return 0;
 }

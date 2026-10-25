@@ -7,7 +7,7 @@
 #ifdef NH_NIXEL_HOST_TEST
 #include "Render.h"
 #include "../../lib/nh-css/Main/Canvas.h"
-static unsigned drawn, styled, background, scaled;
+static unsigned drawn, styled, background, scaled, maximum_size;
 static void probe_rect(void *u,int x,int y,int w,int h,nh_css_Color c) {
     (void)u;
     if(x<0||y<0||x+w>460||y+h>284)return;
@@ -18,6 +18,7 @@ static void probe_glyph(void *u,int x,int y,int size,NH_ENCODING_UTF32 cp,nh_css
     static const NH_ENCODING_UTF32 expected[]={'N','e','t','z','h','a','u','t',' ',0x628};
     if(drawn<10&&cp==expected[drawn]&&x>=0&&y>=0&&x+size/2<=460&&y+size<=284&&
        c.r>0.95f&&c.r<0.96f&&c.g>0.002f&&c.g<0.003f&&c.b>0.41f&&c.b<0.42f)styled++;
+    if(size>maximum_size)maximum_size=size;
     if(size>16)scaled++;
     drawn++;
 }
@@ -97,8 +98,17 @@ int nh_nixel_probe_html(void) {
 #ifdef NH_NIXEL_HOST_TEST
     char headings[]="<!doctype html><html><head></head><body><h1>Heading</h1><p>Body</p></body></html>";
     if(nh_api_loadBytes(context,headings,sizeof(headings)-1)!=NH_API_SUCCESS)return 0;
-    drawn=styled=background=scaled=0;
+    drawn=styled=background=scaled=maximum_size=0;
     if(nh_renderer_drawDocument(engine,&target)!=NH_API_SUCCESS || drawn!=11 || !scaled)return 0;
+#endif
+#ifdef NH_NIXEL_HOST_TEST
+    unsigned unscaled_size=maximum_size;
+    target.scale_percent=80;
+    nh_api_PixelSize compact=nh_nixel_canvas_size(&target);
+    if(compact.width!=575||compact.height!=355)return 0;
+    if(nh_css_addCanvasType(engine,nh_css_createCanvasType(compact))!=NH_API_SUCCESS)return 0;
+    drawn=maximum_size=0;
+    if(nh_renderer_drawDocument(engine,&target)!=NH_API_SUCCESS||drawn!=11||maximum_size>=unscaled_size)return 0;
 #endif
     return !nh_nixel_failed();
 }

@@ -18,7 +18,7 @@
  *  @{
  */
 
-    void nh_html_runAdoptionAgencyAlgorithm(
+    NH_API_RESULT nh_html_runAdoptionAgencyAlgorithm(
         nh_html_Parser *Parser_p, nh_html_Token *Token_p
     );
 

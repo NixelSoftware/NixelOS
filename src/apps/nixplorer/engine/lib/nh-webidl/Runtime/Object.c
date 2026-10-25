@@ -100,7 +100,7 @@ static nh_webidl_Object *nh_webidl_createObjectFromInterfaceWithChild(
     // CRITICAL DESIGN DECISION: In the next line nh_core_loadExisitingSymbol() is used, which means that 
     // modules are expected to be loaded manually. This avoids unnecessary dependencies.
     init_f initNewObject_f = nh_core_loadExistingSymbol(_module, 0, funcName_p);
-    if (initNewObject_f) {initNewObject_f(Object_p);} 
+    if (initNewObject_f) {if (initNewObject_f(Object_p) != NH_API_SUCCESS) return NULL;}
     else {
         char message_p[255];
         sprintf(message_p, "Object initializer %s couldn't be found.", funcName_p);

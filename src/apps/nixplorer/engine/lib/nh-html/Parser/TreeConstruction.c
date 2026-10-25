@@ -30,6 +30,8 @@
 
 // DECLARE =========================================================================================
 
+static NH_API_RESULT close_template(nh_html_Parser *);
+
 static NH_API_RESULT nh_html_reprocessToken(
     nh_html_Parser *Parser_p, NH_HTML_INSERTION_MODE insertionMode
 );
@@ -438,7 +440,8 @@ static NH_API_RESULT nh_html_processInHead(
                 }
                 case NH_HTML_TAG_SCRIPT :
                 {
-                    // TODO
+                    NH_CORE_CHECK(nh_html_parseRAWTEXTOrRCDATA(Parser_p, Parser_p->Token_p, true))
+                    Parser_p->Tokenizer_p->state = NH_HTML_TOKENIZATION_STATE_SCRIPT_DATA;
                     break;
                 }
                 case NH_HTML_TAG_TEMPLATE :
@@ -447,7 +450,7 @@ static NH_API_RESULT nh_html_processInHead(
                     NH_CORE_CHECK(nh_html_insertMarker(Parser_p))
                     Parser_p->framesetOk = false;
                     Parser_p->insertionMode = NH_HTML_INSERTION_MODE_IN_TEMPLATE;
-                    // TODO Push "in template" onto the stack of template insertion modes so that it is the new current template insertion mode.
+                    nh_core_pushStack(&Parser_p->TemplateInsertionModes, (void *)(unsigned long)NH_HTML_INSERTION_MODE_IN_TEMPLATE);
                     break;
                 }
                 case NH_HTML_TAG_HEAD :
@@ -491,7 +494,7 @@ static NH_API_RESULT nh_html_processInHead(
                 }
                 case NH_HTML_TAG_TEMPLATE :
                 {
-                    // TODO
+                    NH_CORE_CHECK(close_template(Parser_p))
                     break;
                 }
                 default :
@@ -1094,9 +1097,12 @@ static NH_API_RESULT nh_html_processInBody(
                 Parser_p->framesetOk = false;
                 break;
             }
-            case NH_HTML_TAG_TABLE : 
+            case NH_HTML_TAG_TABLE :
             {
-                // TODO
+                if (nh_html_hasElementInButtonScope(Parser_p, "p")) {NH_CORE_CHECK(nh_html_closePElement(Parser_p))}
+                NH_CORE_CHECK_NULL(nh_html_insertHTMLElement(Parser_p, Parser_p->Token_p))
+                Parser_p->framesetOk = false;
+                Parser_p->insertionMode = NH_HTML_INSERTION_MODE_IN_TABLE;
                 break;
             }
             case NH_HTML_TAG_AREA   :
@@ -1231,14 +1237,13 @@ static NH_API_RESULT nh_html_processInBody(
                 return NH_API_SUCCESS; 
             }
             case NH_HTML_TAG_MATH :
-            {
-                // TODO
-                return NH_API_SUCCESS;
-            }
             case NH_HTML_TAG_SVG :
             {
-                // TODO
-                return NH_API_SUCCESS;
+                NH_CORE_CHECK(nh_html_reconstructActiveFormattingElements(Parser_p))
+                nh_encoding_UTF8String *ns=Parser_p->Token_p->StartOrEndTag.tag==NH_HTML_TAG_SVG?&NH_WEBIDL_SVG_NAMESPACE:&NH_WEBIDL_MATHML_NAMESPACE;
+                NH_CORE_CHECK_NULL(nh_html_insertForeignElement(Parser_p,Parser_p->Token_p,ns))
+                if(Parser_p->Token_p->StartOrEndTag.selfClosing)nh_html_popCurrentNode(Parser_p);
+                break;
             }
             case NH_HTML_TAG_CAPTION  :
             case NH_HTML_TAG_COL      :
@@ -1420,7 +1425,7 @@ static NH_API_RESULT nh_html_processInBody(
             case NH_HTML_TAG_TT     :
             case NH_HTML_TAG_U      :
             {
-                nh_html_runAdoptionAgencyAlgorithm(Parser_p, Parser_p->Token_p);
+                NH_CORE_CHECK(nh_html_runAdoptionAgencyAlgorithm(Parser_p, Parser_p->Token_p))
                 break;
             }
             case NH_HTML_TAG_APPLET  :
@@ -1497,16 +1502,9 @@ static NH_API_RESULT nh_html_processText(
         }
         case NH_HTML_TOKEN_END_TAG :
         {
-            if (Parser_p->Token_p->StartOrEndTag.tag == NH_HTML_TAG_SCRIPT)
-            {
-                puts("TODO SCRIPT ENDTAG");
-                exit(0);
-                // TODO
-            }
-            else {
-                NH_CORE_CHECK_NULL(nh_html_popCurrentNode(Parser_p))
-                Parser_p->insertionMode = Parser_p->originalInsertionMode;
-            }
+            /* Script nodes and text are retained; execution is a separate step. */
+            NH_CORE_CHECK_NULL(nh_html_popCurrentNode(Parser_p))
+            Parser_p->insertionMode = Parser_p->originalInsertionMode;
             break;
         }
     }
@@ -1625,11 +1623,25 @@ static NH_API_RESULT nh_html_processAfterAfterBody(
     return NH_API_SUCCESS;
 }
 
+#include "InsertionModes.inc"
+
 static NH_API_RESULT nh_html_processToken(
     nh_html_Parser *Parser_p)
 {
+    if (Parser_p->Token_p->type == NH_HTML_TOKEN_END_TAG && Parser_p->Token_p->StartOrEndTag.tag == NH_HTML_TAG_TEMPLATE)
+        return close_template(Parser_p);
     switch (Parser_p->insertionMode)
     {
+        case NH_HTML_INSERTION_MODE_IN_TABLE:
+        case NH_HTML_INSERTION_MODE_IN_TABLE_TEXT:
+        case NH_HTML_INSERTION_MODE_IN_CAPTION:
+        case NH_HTML_INSERTION_MODE_IN_COLUMN_GROUP:
+        case NH_HTML_INSERTION_MODE_IN_TABLE_BODY:
+        case NH_HTML_INSERTION_MODE_IN_ROW:
+        case NH_HTML_INSERTION_MODE_IN_CELL: return nh_html_processTable(Parser_p);
+        case NH_HTML_INSERTION_MODE_IN_SELECT:
+        case NH_HTML_INSERTION_MODE_IN_SELECT_IN_TABLE: return nh_html_processSelect(Parser_p);
+        case NH_HTML_INSERTION_MODE_IN_TEMPLATE: return nh_html_processTemplate(Parser_p);
         case NH_HTML_INSERTION_MODE_INITIAL          : return nh_html_processInitial(Parser_p);
         case NH_HTML_INSERTION_MODE_BEFORE_HTML      : return nh_html_processBeforeHTML(Parser_p);
         case NH_HTML_INSERTION_MODE_BEFORE_HEAD      : return nh_html_processBeforeHead(Parser_p);
@@ -1670,7 +1682,29 @@ NH_API_RESULT nh_html_dispatchTreeConstruction(
         NH_CORE_CHECK(nh_html_processToken(Parser_p))
     }
     else {
-        exit(0);
+        nh_webidl_Object *element=NH_WEBIDL_GET_DOM_ELEMENT(AdjustedCurrentNode_p);
+        const char *name=nh_dom_getLocalName(element)->p;
+        if(Parser_p->Token_p->type==NH_HTML_TOKEN_CHARACTER) {
+            NH_CORE_CHECK(nh_html_insertCharacter(Parser_p,NULL,NULL))
+        } else if(Parser_p->Token_p->type==NH_HTML_TOKEN_COMMENT) {
+            NH_CORE_CHECK(nh_html_insertComment(Parser_p,NULL))
+        } else if(Parser_p->Token_p->type==NH_HTML_TOKEN_START_TAG) {
+            if(!strcmp(name,"foreignobject")||!strcmp(name,"annotation-xml")) {
+                NH_CORE_CHECK(nh_html_processToken(Parser_p))
+            } else {
+                NH_CORE_CHECK_NULL(nh_html_insertForeignElement(Parser_p,Parser_p->Token_p,nh_dom_getNamespaceURI(element)))
+                if(Parser_p->Token_p->StartOrEndTag.selfClosing)nh_html_popCurrentNode(Parser_p);
+            }
+        } else if(Parser_p->Token_p->type==NH_HTML_TOKEN_END_TAG) {
+            for(unsigned long i=Parser_p->OpenElements.size;i;i--) {
+                nh_webidl_Object *e=NH_WEBIDL_GET_DOM_ELEMENT(Parser_p->OpenElements.pp[i-1]);
+                if(!strcmp(nh_dom_getLocalName(e)->p,Parser_p->Token_p->StartOrEndTag.TagName.p)) {
+                    while(Parser_p->OpenElements.size>=i)nh_html_popCurrentNode(Parser_p);
+                    break;
+                }
+                if(nh_dom_getNamespaceURI(e)==&NH_WEBIDL_HTML_NAMESPACE) {NH_CORE_CHECK(nh_html_processToken(Parser_p)) break;}
+            }
+        }
     }
 
     return NH_API_SUCCESS;

@@ -64,12 +64,15 @@ nh_webidl_Object *nh_html_createElementForToken(
     if (Object_p == NULL) {return NULL;}
 
     nh_dom_setParentNode(NH_WEBIDL_GET_DOM_NODE(Object_p), IntendedParent_p);
-    nh_html_setToken(NH_WEBIDL_GET_HTML_ELEMENT(Object_p), Token_p);
+    if (NH_WEBIDL_GET_HTML_ELEMENT(Object_p)) nh_html_setToken(NH_WEBIDL_GET_HTML_ELEMENT(Object_p), Token_p);
+    if (!strcmp(Object_p->Interface_p->name_p,"HTMLTemplateElement") && Object_p->Attributes.pp[0])
+        nh_dom_setNodeDocument(NH_WEBIDL_GET_DOM_NODE(Object_p->Attributes.pp[0]),Document_p);
 
     for (int i = 0; i < Token_p->StartOrEndTag.Attributes.length; ++i) {
         nh_html_Attribute *Attribute_p = &((nh_html_Attribute*)Token_p->StartOrEndTag.Attributes.p)[i];
+        if (nh_dom_getAttrByLocalName(NH_WEBIDL_GET_DOM_ELEMENT(Object_p),Attribute_p->Name.p)) continue;
         nh_webidl_Object *Attr_p = nh_dom_createAttr(
-            Document_p, &Attribute_p->Name, &NH_WEBIDL_HTML_NAMESPACE, NULL, NH_WEBIDL_GET_DOM_ELEMENT(Object_p), &Attribute_p->Value
+            Document_p, &Attribute_p->Name, NULL, NULL, NH_WEBIDL_GET_DOM_ELEMENT(Object_p), &Attribute_p->Value
         );
         nh_dom_appendAttr(NH_WEBIDL_GET_DOM_ELEMENT(Object_p), Attr_p);
     }
@@ -94,15 +97,33 @@ NH_WEBIDL_UNSIGNED_LONG nh_html_getAppropriatePlaceForInsertingNode(
     NH_WEBIDL_UNSIGNED_LONG adjustedInsertionPosition = 0;
 
     if (Parser_p->fosterParenting && (!strcmp((*Target_pp)->Interface_p->name_p, "HTMLTableElement") || !strcmp((*Target_pp)->Interface_p->name_p, "HTMLTableSectionElement") || !strcmp((*Target_pp)->Interface_p->name_p, "HTMLTableRowElement"))) {
-        puts("TODO foster parenting");
-        exit(0);
+        long table=-1,templateIndex=-1;
+        for(unsigned long i=0;i<Parser_p->OpenElements.size;i++) {
+            nh_webidl_Object *e=NH_WEBIDL_GET_DOM_ELEMENT(Parser_p->OpenElements.pp[i]);
+            const char *name=e?nh_dom_getLocalName(e)->p:"";
+            if(!strcmp(name,"table"))table=i;
+            if(!strcmp(name,"template"))templateIndex=i;
+        }
+        if(templateIndex>=0&&templateIndex>table) {
+            *Target_pp=((nh_webidl_Object *)Parser_p->OpenElements.pp[templateIndex])->Attributes.pp[0];
+        } else if(table>=0) {
+            nh_webidl_Object *element=Parser_p->OpenElements.pp[table];
+            nh_webidl_Object *parent=nh_dom_getParentNode(NH_WEBIDL_GET_DOM_NODE(element));
+            if(parent) {
+                *Target_pp=parent;
+                nh_core_List *children=nh_dom_getNodeChildren(NH_WEBIDL_GET_DOM_NODE(parent));
+                for(unsigned long i=0;i<children->size;i++)if(children->pp[i]==element)return i;
+            } else *Target_pp=Parser_p->OpenElements.pp[table?table-1:0];
+        } else *Target_pp=Parser_p->OpenElements.pp[0];
+        adjustedInsertionPosition=nh_dom_getNodeChildren(NH_WEBIDL_GET_DOM_NODE(*Target_pp))->size;
     }
     else {
         adjustedInsertionPosition = NH_WEBIDL_GET_DOM_NODEListLength(nh_webidl_getAttribute(*Target_pp, "childNodes"));
     }
 
     if (!strcmp((*Target_pp)->Interface_p->name_p, "HTMLTemplateElement")) {
-        // TODO
+        *Target_pp=(*Target_pp)->Attributes.pp[0];
+        adjustedInsertionPosition=nh_dom_getNodeChildren(NH_WEBIDL_GET_DOM_NODE(*Target_pp))->size;
     }
 
     return adjustedInsertionPosition;
@@ -249,28 +270,17 @@ NH_API_RESULT nh_html_reconstructActiveFormattingElements(
         return NH_API_SUCCESS;
     }
 
-    RECONSTRUCT_REWIND: {
-        if (index == 0) {goto RECONSTRUCT_CREATE;}
-    
-        Entry_p = Parser_p->ActiveFormattingElements.pp[--index];
-       
-        if (Entry_p != NULL && !nh_core_inList(&Parser_p->OpenElements, Entry_p)) {
-            goto RECONSTRUCT_REWIND;
-        }
+    while(index>0) {
+        nh_webidl_Object *previous=Parser_p->ActiveFormattingElements.pp[index-1];
+        if(!previous||nh_core_inList(&Parser_p->OpenElements,previous))break;
+        index--;
     }
-
-    RECONSTRUCT_ADVANCE: {
-        Entry_p = Parser_p->ActiveFormattingElements.pp[--index];
-    }
-
-    RECONSTRUCT_CREATE: {
-        nh_html_Token *Token_p = nh_html_getToken(NH_WEBIDL_GET_HTML_ELEMENT(Entry_p)); 
-        nh_webidl_Object *NewElement_p = nh_html_insertHTMLElement(Parser_p, Token_p);
-        NH_CORE_CHECK_NULL(NewElement_p)
-      
-        Parser_p->ActiveFormattingElements.pp[index] = NewElement_p;
-    
-        if (index > 0) {goto RECONSTRUCT_ADVANCE;}
+    for(;index<Parser_p->ActiveFormattingElements.size;index++) {
+        Entry_p=Parser_p->ActiveFormattingElements.pp[index];
+        nh_html_Token *token=nh_html_getToken(NH_WEBIDL_GET_HTML_ELEMENT(Entry_p));
+        nh_webidl_Object *copy=nh_html_insertHTMLElement(Parser_p,token);
+        NH_CORE_CHECK_NULL(copy)
+        Parser_p->ActiveFormattingElements.pp[index]=copy;
     }
 
     return NH_API_SUCCESS;

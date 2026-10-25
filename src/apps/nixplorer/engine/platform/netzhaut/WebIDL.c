@@ -4,6 +4,7 @@
 #include "../../lib/nh-webidl/Utils/Builtin.h"
 #include <string.h>
 int nh_nixel_load_fragment(const char *specification, const char *fragment) {
+    if (!strcmp(specification,"DOM") && !strcmp(fragment,"CDATASection")) fragment="CDataSection";
     if (nh_webidl_getFragment((char *)specification, (char *)fragment)) return 1;
     unsigned index = 0;
     char name[128];

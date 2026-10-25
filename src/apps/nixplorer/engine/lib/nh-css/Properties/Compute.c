@@ -1442,7 +1442,7 @@ NH_API_RESULT nh_css_freeComputedValues(
 
     for (int i = 0; i < ComputedValues_p->size; ++i) {
         nh_css_Value *Value_p = ComputedValues_p->pp[i];
-        if (Value_p->Common.scope == NH_CSS_VALUE_SCOPE_COMPUTED) {
+        if (Value_p && Value_p->Common.scope == NH_CSS_VALUE_SCOPE_COMPUTED) {
             if (nh_css_isStringValue(Value_p)) {
                 nh_encoding_freeUTF8(&Value_p->String);
             }

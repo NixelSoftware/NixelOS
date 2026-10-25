@@ -11,9 +11,12 @@ recorded in `SOURCE_AUDIT.json`. Compatibility edits reconnect them to the
 snapshot's existing interface registry. WebIDL objects remain distinct from
 ECMAScript property objects; their data structures have not been merged.
 
+The desktop `nh-browser` entrypoint initializes the core runtime, runs its
+event loop, and terminates it cleanly. Set `NETZHAUT_CORE` when the core
+library is not discoverable through the platform's default loader path.
+
 Nixel's APP1 entry and window/event handling live in `../browser/`. Its bring-up
-checks call the original engine implementations. The upstream browser executable
-entry remains its original `TODO`; it is not a working browser launcher.
+checks call the original engine implementations.
 
 `NETZHAUT_C` lists the actual sources compiled for Nixel. The original HTML tokenizer,
 tree constructor and parser now execute a document integration check. Full page

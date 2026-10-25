@@ -111,6 +111,8 @@ contain these changes (some also correct object-type references):
   renderer.
   `platform/tcp.*` now supplies the active OS transport integration.
   `paint/png.*` remains shared with the kernel.
+- `bin/nh-browser/Main.c`: initializes the desktop core runtime, runs its event
+  loop, and terminates the runtime before returning success or failure.
 
 Do not reset the arena while registry objects or cached descriptions are live.
 Startup initializes the partial HTML registry without retaining a fixture document.

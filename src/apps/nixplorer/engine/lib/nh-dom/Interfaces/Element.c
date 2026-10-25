@@ -148,9 +148,9 @@ nh_webidl_Object *nh_dom_getAttrByNamespaceAndLocalName(
         nh_encoding_UTF8String *AttrNamespace_p = nh_dom_getAttrNamespace(Attr_p);
         nh_encoding_UTF8String *AttrLocalName_p = nh_dom_getAttrLocalName(Attr_p);
 
-        if (AttrNamespace_p &&  Namespace_p 
-        &&  !strcmp(AttrNamespace_p->p, Namespace_p->p) 
-        &&  !strcmp(AttrLocalName_p->p, LocalName_p->p)) {
+        bool sameNamespace = (!AttrNamespace_p || !AttrNamespace_p->length) && (!Namespace_p || !Namespace_p->length);
+        if (AttrNamespace_p && Namespace_p && !strcmp(AttrNamespace_p->p, Namespace_p->p)) sameNamespace = true;
+        if (sameNamespace && !strcmp(AttrLocalName_p->p, LocalName_p->p)) {
             return Attr_p;
         }
     }
@@ -185,13 +185,16 @@ NH_API_RESULT nh_dom_replaceAttr(
 
     for (int i = 0; i < AttrList_p->size; ++i) {
         if (AttrList_p->pp[i] == OldAttr_p) {
+            if (nh_dom_getAttrElement(NewAttr_p) && nh_dom_getAttrElement(NewAttr_p) != Element_p) return NH_API_ERROR_BAD_STATE;
             AttrList_p->pp[i] = NewAttr_p;
+            nh_dom_setAttrElement(OldAttr_p, NULL);
+            nh_dom_setAttrElement(NewAttr_p, Element_p);
+            nh_dom_setUpdateAnnotationsFlag(NH_WEBIDL_GET_DOM_NODE(Element_p), true);
+            return NH_API_SUCCESS;
         }
     }
 
-    // TODO set element
-
-    return NH_API_SUCCESS;
+    return NH_API_ERROR_BAD_STATE;
 }
 
 NH_API_RESULT nh_dom_appendAttr(
@@ -200,8 +203,10 @@ NH_API_RESULT nh_dom_appendAttr(
     // TODO handle attr changes
 
     nh_core_List *AttrList_p = nh_dom_getAttrList(((nh_webidl_Object*)Element_p)->Attributes.pp[9]);
-    nh_core_appendToList(AttrList_p, Attr_p);
+    if (nh_dom_getAttrElement(Attr_p) && nh_dom_getAttrElement(Attr_p) != Element_p) return NH_API_ERROR_BAD_STATE;
+    NH_CORE_CHECK(nh_core_appendToList(AttrList_p, Attr_p))
     nh_dom_setAttrElement(Attr_p, Element_p);
+    nh_dom_setUpdateAnnotationsFlag(NH_WEBIDL_GET_DOM_NODE(Element_p), true);
 
     return NH_API_SUCCESS;
 }
@@ -210,7 +215,7 @@ nh_webidl_Object *nh_dom_setAttr(
     nh_webidl_Object *Element_p, nh_webidl_Object *Attr_p)
 {
     nh_webidl_Object *AttrElement_p = nh_dom_getAttrElement(Attr_p);
-    if (AttrElement_p != NULL || Element_p != AttrElement_p) {
+    if (AttrElement_p != NULL && Element_p != AttrElement_p) {
         return NULL; 
     }
 

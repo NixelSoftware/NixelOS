@@ -12,6 +12,8 @@
 extern const char *NH_HTML_CHARACTER_REFERENCES_PP[];
 extern const NH_ENCODING_UTF32 NH_HTML_CHARACTER_REFERENCE_CODEPOINTS_P[];
 
+NH_ENCODING_UTF32 nh_html_matchCharacterReferencesPair(const char *,int *,NH_ENCODING_UTF32 *);
+
 NH_ENCODING_UTF32 nh_html_matchCharacterReferencesEntity( 
     const char *text_p, int *matched_length
 ); 

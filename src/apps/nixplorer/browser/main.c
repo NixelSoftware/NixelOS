@@ -10,6 +10,7 @@
 
 /* Browser chrome and OS input only. Page parsing/layout/rendering belong to
  * the supplied Netzhaut engine; the retired native engine is not a fallback. */
+#define PAGE_SCALE_PERCENT 80
 #define WIDTH 480
 #define HEIGHT 360
 #define ADDRESS_CAPACITY 512
@@ -27,6 +28,7 @@ static size_t response_size;
 static nh_api_DocumentContext *document_context;
 static nh_css_LayoutEngine *layout_engine;
 static int page_loaded;
+static int page_scroll, scroll_limit;
 static unsigned cursor;
 static int address_focused = 1;
 
@@ -61,6 +63,8 @@ static void page_glyph(void *user,int x,int y,int size,NH_ENCODING_UTF32 cp,nh_c
 static nh_nixel_DrawTarget page_target(void) {
     nh_nixel_DrawTarget target={0};
     target.width=WIDTH-20;target.height=HEIGHT-76;
+    target.scale_percent=PAGE_SCALE_PERCENT;
+    target.scroll=page_scroll;
     target.rectangle=page_rectangle;target.glyph=page_glyph;
     return target;
 }
@@ -120,6 +124,7 @@ static void navigate(void) {
     redraw();
     response_size=0;
     page_loaded=0;
+    page_scroll=scroll_limit=0;
     nh_api_HTTPRequest request={0};
     nh_api_HTTPResponse response;
     request.url_p=url;
@@ -134,7 +139,7 @@ static void navigate(void) {
             if(document_context) {
                 layout_engine=nh_css_createLayoutEngine((nh_html_DocumentContext *)document_context);
                 if(layout_engine) nh_css_addCanvasType(layout_engine,
-                    nh_css_createCanvasType((nh_api_PixelSize){WIDTH-20,HEIGHT-76}));
+                    nh_css_createCanvasType((nh_api_PixelSize){(WIDTH-20)*100/PAGE_SCALE_PERCENT,(HEIGHT-76)*100/PAGE_SCALE_PERCENT}));
             }
         }
         if (!document_context || !layout_engine ||
@@ -147,6 +152,8 @@ static void navigate(void) {
                 strcpy(page_info,"HTML loaded, but page layout failed.");
             } else {
                 page_loaded=1;
+                nh_nixel_DrawTarget target=page_target();
+                scroll_limit=nh_nixel_scroll_limit(layout_engine,&target);
             }
         }
     } else {
@@ -157,6 +164,19 @@ static void navigate(void) {
     nh_api_freeHTTPResponse(&response);
 }
 static void key(uint32_t value) {
+    if(!address_focused&&page_loaded) {
+        int next=page_scroll;
+        if(value==0x48)next-=24;
+        else if(value==0x50)next+=24;
+        else if(value==0x49)next-=HEIGHT-100;
+        else if(value==0x51)next+=HEIGHT-100;
+        else if(value==0x47)next=0;
+        else if(value==0x4f)next=scroll_limit;
+        else goto page_key_done;
+        page_scroll=next<0?0:next>scroll_limit?scroll_limit:next;
+        return;
+    }
+page_key_done:
     if(value=='\t') {address_focused=!address_focused;status="Ready";return;}
     if(value==27||value==1) {address_focused=0;status="Ready";return;}
     if(value=='\r'||value=='\n') {navigate();return;}

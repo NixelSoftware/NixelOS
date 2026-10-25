@@ -4491,87 +4491,60 @@ const NH_ENCODING_UTF32 NH_HTML_CHARACTER_REFERENCE_CODEPOINTS_P[] =
 
 // LOOKUP TRIE =====================================================================================
 
-#define MAX_CHILDREN 128  // ASCII characters needed
-
+/* Sparse edges retain the original trie lookup while avoiding 128 pointers
+ * for every prefix in the freestanding heap. */
 typedef struct nh_html_TrieNode {
-    struct nh_html_TrieNode *children[MAX_CHILDREN]; // Child nodes
-    NH_ENCODING_UTF32 value;
+    struct nh_html_TrieNode *child, *next;
+    unsigned char key;
+    NH_ENCODING_UTF32 value, second;
 } nh_html_TrieNode;
-
-static nh_html_TrieNode *Trie_p = NULL;
-
-static nh_html_TrieNode *nh_html_createTrieNode()
-{
-    nh_html_TrieNode *Node_p = (nh_html_TrieNode *)nh_core_allocate(sizeof(nh_html_TrieNode));
-    if (!Node_p) {
-        perror("Failed to allocate memory");
-        exit(EXIT_FAILURE);
-    }
-    memset(Node_p->children, 0, sizeof(Node_p->children));
-    Node_p->value = 0;
-    return Node_p;
+static nh_html_TrieNode *Trie_p;
+static nh_html_TrieNode *edge(nh_html_TrieNode *node,unsigned char key) {
+    for(nh_html_TrieNode *p=node?node->child:NULL;p;p=p->next)if(p->key==key)return p;
+    return NULL;
 }
-
-static void nh_html_insertTrieEntity(
-    nh_html_TrieNode *Root_p, const char *entity, NH_ENCODING_UTF32 value) 
-{
-    nh_html_TrieNode *Node_p = Root_p;
-    while (*entity) {
-        if (!Node_p->children[(unsigned char)*entity]) {
-            Node_p->children[(unsigned char)*entity] = nh_html_createTrieNode();
+static void release(nh_html_TrieNode *node) {
+    if(!node)return;
+    nh_html_TrieNode *child=node->child;
+    while(child){nh_html_TrieNode *next=child->next;release(child);child=next;}
+    nh_core_free(node);
+}
+void nh_html_freeCharacterReferencesTrie(void) {release(Trie_p);Trie_p=NULL;}
+typedef struct {const char *name;NH_ENCODING_UTF32 second;} Pair;
+#include "NamedCharacterReferencePairs.inc"
+NH_API_RESULT nh_html_initCharacterReferencesTrie(void) {
+    if(Trie_p)return NH_API_SUCCESS;
+    Trie_p=(nh_html_TrieNode *)nh_core_allocate(sizeof(*Trie_p));
+    if(!Trie_p)return NH_API_ERROR_MEMORY_ALLOCATION;
+    memset(Trie_p,0,sizeof(*Trie_p));
+    for(unsigned i=0;i<sizeof(NH_HTML_CHARACTER_REFERENCES_PP)/sizeof(*NH_HTML_CHARACTER_REFERENCES_PP);i++) {
+        nh_html_TrieNode *node=Trie_p;
+        const char *name=NH_HTML_CHARACTER_REFERENCES_PP[i];
+        for(const unsigned char *p=(const unsigned char *)name;*p;p++) {
+            nh_html_TrieNode *child=edge(node,*p);
+            if(!child) {
+                child=(nh_html_TrieNode *)nh_core_allocate(sizeof(*child));
+                if(!child){nh_html_freeCharacterReferencesTrie();return NH_API_ERROR_MEMORY_ALLOCATION;}
+                memset(child,0,sizeof(*child));child->key=*p;child->next=node->child;node->child=child;
+            }
+            node=child;
         }
-        Node_p = Node_p->children[(unsigned char)*entity];
-        entity++;
+        node->value=NH_HTML_CHARACTER_REFERENCE_CODEPOINTS_P[i];
+        for(unsigned j=0;j<sizeof(PAIRS)/sizeof(*PAIRS);j++)if(!strcmp(name,PAIRS[j].name)){node->second=PAIRS[j].second;break;}
     }
-    Node_p->value = value;
-}
-
-NH_ENCODING_UTF32 nh_html_matchCharacterReferencesEntity(
-    const char *text_p, int *matched_length) 
-{
-    nh_html_TrieNode *Node_p = Trie_p;
-    NH_ENCODING_UTF32 longest_match = 0;
-    int longest_length = 0;
-    int i = 0;
-
-    while (text_p[i] && Node_p->children[(unsigned char)text_p[i]]) {
-        Node_p = Node_p->children[(unsigned char)text_p[i]];
-        longest_length = ++i;
-        if (Node_p->value > 0) { // If it's a valid entity
-            longest_match = Node_p->value;
-        }
-    }
-
-    *matched_length = longest_length;
-    return longest_match;
-}
-
-static void nh_html_freeCharacterReferencesTrieNode(
-    nh_html_TrieNode *Root_p)
-{
-    if (!Root_p) return;
-    for (int i = 0; i < MAX_CHILDREN; i++) {
-        if (Root_p->children[i]) nh_html_freeCharacterReferencesTrieNode(Root_p->children[i]);
-    }
-    free(Root_p);
-}
-
-void nh_html_freeCharacterReferencesTrie()
-{
-    nh_html_freeCharacterReferencesTrieNode(Trie_p);
-}
-
-NH_API_RESULT nh_html_initCharacterReferencesTrie() 
-{
-    if (Trie_p != NULL) {
-        return NH_API_ERROR_BAD_STATE;
-    }
-
-    Trie_p = nh_html_createTrieNode();
-
-    for (int i = 0; i < sizeof(NH_HTML_CHARACTER_REFERENCES_PP)/sizeof(NH_HTML_CHARACTER_REFERENCES_PP[0]); ++i) {
-        nh_html_insertTrieEntity(Trie_p, NH_HTML_CHARACTER_REFERENCES_PP[i], NH_HTML_CHARACTER_REFERENCE_CODEPOINTS_P[i]);
-    }
-
     return NH_API_SUCCESS;
+}
+NH_ENCODING_UTF32 nh_html_matchCharacterReferencesPair(const char *text,int *length,NH_ENCODING_UTF32 *second) {
+    nh_html_TrieNode *node=Trie_p;
+    NH_ENCODING_UTF32 value=0;
+    *length=0;*second=0;
+    for(int i=0;text&&text[i]&&node;i++) {
+        node=edge(node,(unsigned char)text[i]);
+        if(node&&node->value){value=node->value;*second=node->second;*length=i+1;}
+    }
+    return value;
+}
+NH_ENCODING_UTF32 nh_html_matchCharacterReferencesEntity(const char *text,int *length) {
+    NH_ENCODING_UTF32 second;
+    return nh_html_matchCharacterReferencesPair(text,length,&second);
 }

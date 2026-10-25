@@ -1,7 +1,7 @@
 {
   "baseline": "Supplied Netzhaut import, before Nixel replacement branches",
   "original_sha256": {
-    "bin/nh-browser/Main.c": "7be73d70969b9bb94614bedfc1065a5b55067c54d88842a2b2939ba302169d22",
+    "bin/nh-browser/Main.c": "888e61cfe3cc26080c2347c63e4d3df51cf8abc358f5b4eee5f1ff8a36acc937",
     "bin/nh-css/Main.c": "b0de746ce3139547d3f122790d9993c56f5fe446ee9f5b3f02e748cd5acf9b0f",
     "bin/nh-ecmascript/Main.c": "a291ecb82d07113ce796198e7dd6ebbe10558525a21ce8854e490573bfd992e8",
     "bin/nh-html/Main.c": "1843aa75efd3fe1938b2eccd2a81aabe318956475c8b6834f1cc8197134ca4aa",
@@ -926,8 +926,11 @@
     "lib/nh-html/Interfaces/WindowProxy.c",
     "lib/nh-html/Interfaces/WindowProxy.h",
     "lib/nh-html/Parser/AdoptionAgencyAlgorithm.c",
+    "lib/nh-html/Parser/AdoptionAgencyAlgorithm.h",
     "lib/nh-html/Parser/Algorithms.c",
     "lib/nh-html/Parser/Algorithms.h",
+    "lib/nh-html/Parser/NamedCharacterReferences.c",
+    "lib/nh-html/Parser/NamedCharacterReferences.h",
     "lib/nh-html/Parser/Parser.c",
     "lib/nh-html/Parser/Parser.h",
     "lib/nh-html/Parser/Tokenizer.c",

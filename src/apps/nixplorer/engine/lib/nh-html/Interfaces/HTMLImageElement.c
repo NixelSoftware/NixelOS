@@ -86,6 +86,7 @@ void nh_html_updateImageData(
         NH_WEBIDL_GET_DOM_ELEMENT((nh_webidl_Object*)Image_p), "src"
     );
 
+    if (!Attr_p) return;
     nh_encoding_UTF8String *Value_p = nh_dom_getAttrValue(Attr_p);
 
     selectedSource_p = Value_p->p;

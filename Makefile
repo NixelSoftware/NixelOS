@@ -123,7 +123,12 @@ NIXPLORER_DIR := src/apps/nixplorer
 # Original Netzhaut sources currently linked into the OS port diagnostic shell.
 # WebIDL/DOM execute through the original implementations; HTML is compiled.
 # CSS/layout/rendering remain audited by check-netzhaut; never replaced.
-NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
+NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Queries.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Event.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Data.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Operations.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-dom/Interfaces/Tree.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
               $(NIXPLORER_DIR)/engine/lib/nh-core/Util/Array.c \
               $(NIXPLORER_DIR)/engine/lib/nh-core/Util/List.c \
               $(NIXPLORER_DIR)/engine/lib/nh-core/Util/ArrayList.c \
@@ -238,6 +243,8 @@ BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/lib/*/*/*.h) \
 $(BROWSER_C:.c=.o): CFLAGS += -DNH_NIXEL -U__unix__ -I$(NIXPLORER_DIR)/engine/platform/netzhaut -fno-builtin -ffunction-sections -fdata-sections
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
 $(NIXPLORER_DIR)/engine/lib/nh-webidl/Utils/Builtin.o: $(wildcard $(NIXPLORER_DIR)/engine/lib/nh-webidl/Specifications/*/*.idl.inc)
+$(NIXPLORER_DIR)/engine/lib/nh-html/Parser/TreeConstruction.o: $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/InsertionModes.inc
+$(NIXPLORER_DIR)/engine/lib/nh-html/Parser/NamedCharacterReferences.o: $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/NamedCharacterReferencePairs.inc
 .PHONY: check-netzhaut
 check-netzhaut:
 	$(PYTHON) $(NIXPLORER_DIR)/tests/check_original.py

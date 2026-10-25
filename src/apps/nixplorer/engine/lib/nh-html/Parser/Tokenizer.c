@@ -9,6 +9,10 @@
 // INCLUDES ========================================================================================
 
 #include "Tokenizer.h"
+#include "TreeConstructionHelper.h"
+#include "../../nh-dom/Interfaces/Element.h"
+#include "../../nh-webidl/Runtime/Object.h"
+#include "../../nh-webidl/Runtime/String.h"
 #include "Parser.h"
 #include "TreeConstruction.h"
 #include "NamedCharacterReferences.h"
@@ -1349,19 +1353,19 @@ static NH_API_RESULT nh_html_consumeBogusComment(
 static NH_API_RESULT nh_html_consumeMarkupDeclarationOpen(
     nh_html_Tokenizer *Tokenizer_p)
 {
-    if (Tokenizer_p->InputStream.length - (Tokenizer_p->index + 1) > 1) 
+    if (Tokenizer_p->InputStream.length - Tokenizer_p->index >= 2)
     {
         if (Tokenizer_p->InputStream.p[Tokenizer_p->index + 0] == 0x2D
         &&  Tokenizer_p->InputStream.p[Tokenizer_p->index + 1] == 0x2D) 
         {
-            Tokenizer_p->index += 2;
+            Tokenizer_p->index += 1;
             NH_CORE_CHECK(nh_html_newCommentToken(Tokenizer_p))
             Tokenizer_p->state = NH_HTML_TOKENIZATION_STATE_COMMENT_START;
             return NH_API_SUCCESS;
         }
     }
 
-    if (Tokenizer_p->InputStream.length - (Tokenizer_p->index + 1) > 6) 
+    if (Tokenizer_p->InputStream.length - Tokenizer_p->index >= 7)
     {
         if (Tokenizer_p->InputStream.p[Tokenizer_p->index + 0] == '['
         &&  Tokenizer_p->InputStream.p[Tokenizer_p->index + 1] == 'C'
@@ -1371,16 +1375,25 @@ static NH_API_RESULT nh_html_consumeMarkupDeclarationOpen(
         &&  Tokenizer_p->InputStream.p[Tokenizer_p->index + 5] == 'A'
         &&  Tokenizer_p->InputStream.p[Tokenizer_p->index + 6] == '[') 
         {
-            Tokenizer_p->index += 7;
-            printf("TODO HTML PARSER 13.2.5.42 Markup declaration open state\n");
-            exit(0);
+            nh_html_Parser *parser=Tokenizer_p->Parser_p;
+            nh_webidl_Object *current=nh_html_getAdjustedCurrentNode(parser);
+            nh_webidl_Object *element=current?NH_WEBIDL_GET_DOM_ELEMENT(current):NULL;
+            Tokenizer_p->index += 6;
+            if(element&&nh_dom_getNamespaceURI(element)!=&NH_WEBIDL_HTML_NAMESPACE) {
+                Tokenizer_p->state=NH_HTML_TOKENIZATION_STATE_CDATA_SECTION;
+            } else {
+                NH_CORE_CHECK(nh_html_newCommentToken(Tokenizer_p))
+                nh_core_appendToString(&Tokenizer_p->Token_p->CommentOrCharacter.Data,"[CDATA[",7);
+                Tokenizer_p->state=NH_HTML_TOKENIZATION_STATE_BOGUS_COMMENT;
+            }
+            return NH_API_SUCCESS;
         }
 
         nh_encoding_UTF8String Temporary = nh_encoding_initUTF8(7);
         nh_encoding_appendUTF8(&Temporary, &Tokenizer_p->InputStream.p[Tokenizer_p->index], 7);
 
         if (nh_encoding_isASCIICaseInsensitiveMatch(Temporary.p, "DOCTYPE")) {
-            Tokenizer_p->index += 7;
+            Tokenizer_p->index += 6;
             Tokenizer_p->state = NH_HTML_TOKENIZATION_STATE_DOCTYPE;
             nh_encoding_freeUTF8(&Temporary);
             return NH_API_SUCCESS;
@@ -2193,61 +2206,58 @@ static NH_API_RESULT nh_html_flushCharacterReference(
     return NH_API_SUCCESS;
 }
 
-static NH_API_RESULT nh_html_consumeCharacterReference(
-    nh_html_Tokenizer *Tokenizer_p)
-{
-    nh_html_resetTemporaryBuffer(Tokenizer_p);
-    NH_ENCODING_UTF32 ambersand = 0x26;
-    nh_webidl_appendToUSVString(&Tokenizer_p->TemporaryBuffer, &ambersand, 1); 
-
-    if (nh_encoding_isASCIIAlphaNumeric(Tokenizer_p->codepoint)) {
-        return nh_html_reconsume(Tokenizer_p, NH_HTML_TOKENIZATION_STATE_NAMED_CHARACTER_REFERENCE);
+static NH_API_RESULT nh_html_consumeNamedCharacterReference(nh_html_Tokenizer *t) {
+    NH_CORE_CHECK(nh_html_initCharacterReferencesTrie())
+    char name[64];unsigned length=0;
+    while(t->index+length<t->InputStream.length&&length<sizeof(name)-1) {
+        NH_ENCODING_UTF32 cp=t->InputStream.p[t->index+length];
+        if(!nh_encoding_isASCIIAlphaNumeric(cp)&&cp!=';')break;
+        name[length++]=(char)cp;
+        if(cp==';')break;
     }
-
-    if (Tokenizer_p->codepoint == 0x23) {
-        nh_webidl_appendToUSVString(&Tokenizer_p->TemporaryBuffer, &Tokenizer_p->codepoint, 1); 
-        Tokenizer_p->state = NH_HTML_TOKENIZATION_STATE_NUMERIC_CHARACTER_REFERENCE;
-        return NH_API_SUCCESS;
+    name[length]=0;
+    int matched=0;NH_ENCODING_UTF32 second=0;
+    NH_ENCODING_UTF32 value=nh_html_matchCharacterReferencesPair(name,&matched,&second);
+    bool attribute=t->returnState==NH_HTML_TOKENIZATION_STATE_ATTRIBUTE_VALUE_DOUBLE_QUOTED||
+        t->returnState==NH_HTML_TOKENIZATION_STATE_ATTRIBUTE_VALUE_SINGLE_QUOTED||
+        t->returnState==NH_HTML_TOKENIZATION_STATE_ATTRIBUTE_VALUE_UNQUOTED;
+    NH_ENCODING_UTF32 next=t->index+matched<t->InputStream.length?t->InputStream.p[t->index+matched]:0;
+    if(!value||(attribute&&name[matched-1]!=';'&&(next=='='||nh_encoding_isASCIIAlphaNumeric(next)))) {
+        NH_CORE_CHECK(nh_html_flushCharacterReference(t))
+        return nh_html_reconsume(t,t->returnState);
     }
-
-    NH_CORE_CHECK(nh_html_flushCharacterReference(Tokenizer_p))
-    NH_CORE_CHECK(nh_html_reconsume(Tokenizer_p, Tokenizer_p->returnState))
-
-    return NH_API_SUCCESS;
+    nh_html_resetTemporaryBuffer(t);
+    nh_webidl_appendToUSVString(&t->TemporaryBuffer,&value,1);
+    if(second)nh_webidl_appendToUSVString(&t->TemporaryBuffer,&second,1);
+    t->index+=matched-1;t->codepoint=t->InputStream.p[t->index];t->state=t->returnState;
+    return nh_html_flushCharacterReference(t);
 }
-
-// https://html.spec.whatwg.org/multipage/parsing.html#named-character-reference-state
-static NH_API_RESULT nh_html_consumeNamedCharacterReference(
-    nh_html_Tokenizer *Tokenizer_p)
-{
-    nh_html_resetTemporaryBuffer(Tokenizer_p);
-    NH_ENCODING_UTF32 bestMatch = 0;
-    int bestLength = 0;
-
-    while (Tokenizer_p->index < Tokenizer_p->InputStream.length) {
-        nh_webidl_appendToUSVString(&Tokenizer_p->TemporaryBuffer, Tokenizer_p->InputStream.p+Tokenizer_p->index, 1); 
-        nh_html_incrementTokenizer(Tokenizer_p);
-        int length = 0;
-        nh_encoding_UTF8String UTF8 = nh_encoding_encodeUTF8(Tokenizer_p->TemporaryBuffer.p, Tokenizer_p->TemporaryBuffer.length);
-        NH_ENCODING_UTF32 match = nh_html_matchCharacterReferencesEntity(UTF8.p, &length); 
-        nh_encoding_freeUTF8(&UTF8);
-        if (length == 0 || length <= bestLength) {
-            nh_html_decrementTokenizer(Tokenizer_p);
-            break;
+static NH_API_RESULT nh_html_consumeCharacterReference(nh_html_Tokenizer *t) {
+    nh_html_resetTemporaryBuffer(t);
+    NH_ENCODING_UTF32 amp='&';
+    nh_webidl_appendToUSVString(&t->TemporaryBuffer,&amp,1);
+    if(nh_encoding_isASCIIAlphaNumeric(t->codepoint))return nh_html_consumeNamedCharacterReference(t);
+    if(t->codepoint=='#') {
+        unsigned long start=t->index+1,i=start;unsigned base=10;
+        if(i<t->InputStream.length&&(t->InputStream.p[i]=='x'||t->InputStream.p[i]=='X')){base=16;i++;}
+        unsigned long digits=i;unsigned long value=0;
+        while(i<t->InputStream.length) {
+            unsigned cp=t->InputStream.p[i],digit=cp>='0'&&cp<='9'?cp-'0':cp>='a'&&cp<='f'?cp-'a'+10:cp>='A'&&cp<='F'?cp-'A'+10:99;
+            if(digit>=base)break;
+            value=value>0x10ffff?0x110000:value*base+digit;i++;
         }
-        bestMatch = match;
-        bestLength = length;
+        if(i!=digits) {
+            if(i<t->InputStream.length&&t->InputStream.p[i]==';')i++;
+            static const NH_ENCODING_UTF32 c1[32]={0x20ac,0x81,0x201a,0x192,0x201e,0x2026,0x2020,0x2021,0x2c6,0x2030,0x160,0x2039,0x152,0x8d,0x17d,0x8f,0x90,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x2dc,0x2122,0x161,0x203a,0x153,0x9d,0x17e,0x178};
+            NH_ENCODING_UTF32 cp=!value||value>0x10ffff||(value>=0xd800&&value<=0xdfff)?0xfffd:value;
+            if(cp>=0x80&&cp<=0x9f)cp=c1[cp-0x80];
+            nh_html_resetTemporaryBuffer(t);nh_webidl_appendToUSVString(&t->TemporaryBuffer,&cp,1);
+            t->index=i-1;t->codepoint=t->InputStream.p[t->index];t->state=t->returnState;
+            return nh_html_flushCharacterReference(t);
+        }
     }
-
-    if (bestMatch) {
-        nh_html_resetTemporaryBuffer(Tokenizer_p);
-        nh_webidl_appendToUSVString(&Tokenizer_p->TemporaryBuffer, &bestMatch, 1); 
-        NH_CORE_CHECK(nh_html_flushCharacterReference(Tokenizer_p))
-        return nh_html_reconsume(Tokenizer_p, Tokenizer_p->returnState);
-    }
-
-    NH_CORE_CHECK(nh_html_flushCharacterReference(Tokenizer_p))
-    return nh_html_reconsume(Tokenizer_p, NH_HTML_TOKENIZATION_STATE_AMBIGUOUS_AMPERSAND);
+    NH_CORE_CHECK(nh_html_flushCharacterReference(t))
+    return nh_html_reconsume(t,t->returnState);
 }
 
 // 13.2.5.74
@@ -2545,10 +2555,14 @@ static NH_API_RESULT nh_html_handleEOF(
             break;
 
         case NH_HTML_TOKENIZATION_STATE_CHARACTER_REFERENCE :
-        
+        {
+            nh_html_resetTemporaryBuffer(Tokenizer_p);
+            NH_ENCODING_UTF32 amp='&';
+            nh_webidl_appendToUSVString(&Tokenizer_p->TemporaryBuffer,&amp,1);
             NH_CORE_CHECK(nh_html_flushCharacterReference(Tokenizer_p))
             NH_CORE_CHECK(nh_html_reconsume(Tokenizer_p, Tokenizer_p->returnState))
             break;
+        }
     }
 
     return NH_API_SUCCESS;
@@ -2646,13 +2660,13 @@ static NH_API_RESULT nh_html_consume(
         case NH_HTML_TOKENIZATION_STATE_CDATA_SECTION_END                             : return nh_html_consumeCDATASectionEnd(Tokenizer_p);
         case NH_HTML_TOKENIZATION_STATE_CHARACTER_REFERENCE                           : return nh_html_consumeCharacterReference(Tokenizer_p);
         case NH_HTML_TOKENIZATION_STATE_NAMED_CHARACTER_REFERENCE                     : return nh_html_consumeNamedCharacterReference(Tokenizer_p);
-        case NH_HTML_TOKENIZATION_STATE_AMBIGUOUS_AMPERSAND                           : puts("bafsdssssssss"); exit(0); break; 
-        case NH_HTML_TOKENIZATION_STATE_NUMERIC_CHARACTER_REFERENCE                   : puts("bafsdssssssss"); exit(0); break; 
-        case NH_HTML_TOKENIZATION_STATE_HEXADECIMAL_CHARACTER_REFERENCE_START         : puts("bafsdssssssss"); exit(0); break; 
-        case NH_HTML_TOKENIZATION_STATE_DECIMAL_CHARACTER_REFERENCE_START             : puts("bafsdssssssss"); exit(0); break; 
-        case NH_HTML_TOKENIZATION_STATE_HEXADECIMAL_CHARACTER_REFERENCE               : puts("bafsdssssssss"); exit(0); break; 
-        case NH_HTML_TOKENIZATION_STATE_DECIMAL_CHARACTER_REFERENCE                   : puts("bafsdssssssss"); exit(0); break; 
-        case NH_HTML_TOKENIZATION_STATE_NUMERIC_CHARACTER_REFERENCE_END               : puts("bafsdssssssss"); exit(0); break; 
+        case NH_HTML_TOKENIZATION_STATE_AMBIGUOUS_AMPERSAND                           : return NH_API_ERROR_BAD_STATE;
+        case NH_HTML_TOKENIZATION_STATE_NUMERIC_CHARACTER_REFERENCE                   : return NH_API_ERROR_BAD_STATE;
+        case NH_HTML_TOKENIZATION_STATE_HEXADECIMAL_CHARACTER_REFERENCE_START         : return NH_API_ERROR_BAD_STATE;
+        case NH_HTML_TOKENIZATION_STATE_DECIMAL_CHARACTER_REFERENCE_START             : return NH_API_ERROR_BAD_STATE;
+        case NH_HTML_TOKENIZATION_STATE_HEXADECIMAL_CHARACTER_REFERENCE               : return NH_API_ERROR_BAD_STATE;
+        case NH_HTML_TOKENIZATION_STATE_DECIMAL_CHARACTER_REFERENCE                   : return NH_API_ERROR_BAD_STATE;
+        case NH_HTML_TOKENIZATION_STATE_NUMERIC_CHARACTER_REFERENCE_END               : return NH_API_ERROR_BAD_STATE;
 
     }
 

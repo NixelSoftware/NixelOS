@@ -51,7 +51,12 @@ nh_webidl_Object *nh_dom_createAttr(
     ((nh_webidl_Object*)Attr_p)->Attributes.pp[0] = Namespace_p;
     ((nh_webidl_Object*)Attr_p)->Attributes.pp[1] = NamespacePrefix_p;
     ((nh_webidl_Object*)Attr_p)->Attributes.pp[2] = LocalName_p;
-//    ((nh_webidl_Object*)Attr_p)->Attributes.pp[3] = nh_dom_allocateHTMLUppercasedQualifiedName(Element_p);
+    nh_encoding_UTF8String *QualifiedName_p = Attr_p->Attributes.pp[3];
+    if (NamespacePrefix_p && NamespacePrefix_p->length) {
+        nh_core_appendToString(QualifiedName_p, NamespacePrefix_p->p, NamespacePrefix_p->length);
+        nh_core_appendToString(QualifiedName_p, ":", 1);
+    }
+    nh_core_appendToString(QualifiedName_p, LocalName_p->p, LocalName_p->length);
     ((nh_webidl_Object*)Attr_p)->Attributes.pp[5] = OwnerElement_p;
     ((nh_webidl_Object*)Attr_p)->Attributes.pp[6] = (void*)1;
 

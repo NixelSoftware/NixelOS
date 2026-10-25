@@ -71,7 +71,7 @@ NH_API_RESULT nh_css_computeCanvas(
     Canvas_p->Floats = nh_core_initList(8);
     Canvas_p->LineBoxes = nh_core_initArray(sizeof(nh_css_LineBox), 8);
 
-    NH_CORE_CHECK(nh_css_createSourceTree(HTMLElement_p, StyleSheets_p, true, Canvas_p, &Canvas_p->SourceTree))
+    NH_CORE_CHECK(nh_css_createSourceTree(HTMLElement_p, StyleSheets_p, false, Canvas_p, &Canvas_p->SourceTree))
     NH_CORE_CHECK(nh_css_logSourceTree(Canvas_p, Canvas_p->SourceTree.Root_p))
 
     Canvas_p->BoxTree = nh_css_createBoxTree(Canvas_p->SourceTree.Root_p);
