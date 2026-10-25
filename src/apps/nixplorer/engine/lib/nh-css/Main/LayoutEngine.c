@@ -30,7 +30,7 @@
 #include "../../nh-dom/Interfaces/Node.h"
 
 #include "../../nh-html/Interfaces/Document.h"
-#include "../../nh-gfx/Base/Viewport.h"
+
 
 #include <math.h>
 #include <string.h>
@@ -62,7 +62,7 @@ static nh_css_Canvas *nh_css_getCanvas(
     nh_css_Layout *Layout_p, nh_api_CanvasType *Type_p)
 {
     nh_css_Canvas *Canvas_p = NULL;
-    for (int i = 0; Layout_p->Canvases.size; ++i) {
+    for (int i = 0; i < Layout_p->Canvases.size; ++i) {
         Canvas_p = Layout_p->Canvases.pp[i];
         if (Canvas_p->Type.Size.height == Type_p->Size.height && Canvas_p->Type.Size.width == Type_p->Size.width) {
             return Canvas_p;
@@ -97,7 +97,7 @@ static NH_API_RESULT nh_css_initializeLayout(
     return NH_API_SUCCESS;
 }
 
-static NH_API_RESULT nh_css_updateLayout(
+NH_API_RESULT nh_css_updateLayout(
     nh_css_LayoutEngine *LayoutEngine_p, bool *idle_p)
 {
     nh_webidl_Object *DocumentObject_p = LayoutEngine_p->DocumentContext_p->Document_p;
@@ -152,8 +152,14 @@ nh_css_LayoutEngine *nh_css_createLayoutEngine(
 {
     if (DocumentContext_p->LayoutEngine_p) {return NULL;}
 
-    nh_css_LayoutEngine *LayoutEngine_p = 
-        nh_core_activateWorkload(nh_css_initLayoutEngine, nh_css_runLayoutEngine, NULL, NULL,  DocumentContext_p, true);
+#ifdef NH_NIXEL
+    nh_core_Workload Workload = {0};
+    Workload.args_p = DocumentContext_p;
+    nh_css_LayoutEngine *LayoutEngine_p = nh_css_initLayoutEngine(&Workload);
+#else
+    nh_css_LayoutEngine *LayoutEngine_p =
+        nh_core_activateWorkload(nh_css_initLayoutEngine, nh_css_runLayoutEngine, NULL, NULL, DocumentContext_p, true);
+#endif
 
     DocumentContext_p->LayoutEngine_p = LayoutEngine_p;
 

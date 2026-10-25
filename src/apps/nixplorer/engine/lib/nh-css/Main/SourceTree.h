@@ -60,7 +60,7 @@ typedef struct nh_css_SourceTree {
 // FUNCTIONS =======================================================================================
 
 NH_API_RESULT nh_css_createSourceTree(
-    void *HTML_p, void *StyleSheets_p, bool updateAll,
+    nh_webidl_Object *HTML_p, nh_webidl_Object *StyleSheets_p, bool updateAll,
     void *canvas_p, nh_css_SourceTree *Result_p
 );
 

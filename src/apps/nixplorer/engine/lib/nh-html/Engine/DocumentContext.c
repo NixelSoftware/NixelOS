@@ -42,17 +42,24 @@ static nh_html_DocumentContext nh_html_initDocumentContext()
 nh_html_DocumentContext *nh_html_createDocumentContext(
     bool browsingContext)
 {
-    nh_html_DocumentContext *DocumentContext_p = nh_core_allocate(sizeof(nh_html_DocumentContext));
+    if (NH_HTML_DOCUMENT_CONTEXTS.chunkSize == 0) {
+        NH_HTML_DOCUMENT_CONTEXTS = nh_core_initList(64);
+    }
+    nh_html_DocumentContext *DocumentContext_p = (nh_html_DocumentContext *)nh_core_allocate(sizeof(nh_html_DocumentContext));
     NH_CORE_CHECK_MEM_2(NULL, DocumentContext_p)
 
     *DocumentContext_p = nh_html_initDocumentContext();
+    DocumentContext_p->browsingContext = browsingContext;
 
 //    if (browsingContext) {
 //        DocumentContext_p->BrowsingContextGroup_p = nh_html_createBrowsingContextGroup();
 //        NH_CORE_CHECK_MEM(NULL, DocumentContext_p->BrowsingContextGroup_p)
 //    }
 
-    nh_core_appendToList(&NH_HTML_DOCUMENT_CONTEXTS, DocumentContext_p);
+    if (nh_core_appendToList(&NH_HTML_DOCUMENT_CONTEXTS, DocumentContext_p) != NH_API_SUCCESS) {
+        nh_core_free(DocumentContext_p);
+        return NULL;
+    }
 
     return DocumentContext_p;
 }
@@ -65,12 +72,20 @@ NH_API_RESULT nh_html_loadBytes(
 
     NH_CORE_CHECK_NULL(Context_p)
 
+    if (!bytes_p && size) {return NH_API_ERROR_NULL_POINTER;}
+    /* UTF-8 decoding and arrays use native unsigned-long lengths. */
+    if (size > (unsigned long)-1 / sizeof(NH_ENCODING_UTF32)) {return NH_API_ERROR_BAD_STATE;}
+    if (Context_p->browsingContext) {return NH_API_ERROR_BAD_STATE;}
+
     if (!Context_p->browsingContext) 
     {
-        nh_encoding_UTF32String String = nh_encoding_decodeUTF8(bytes_p, size, NULL);
+        nh_encoding_UTF32String String = nh_encoding_decodeUTF8((unsigned char *)bytes_p, size, NULL);
 
         nh_webidl_Object *Document_p = nh_html_createDocument(Context_p);
-        NH_CORE_CHECK_NULL(Document_p)
+        if (!Document_p) {
+            nh_encoding_freeUTF32(&String);
+            return NH_API_ERROR_MEMORY_ALLOCATION;
+        }
 
         if (Context_p->LayoutEngine_p) 
         {
@@ -84,9 +99,11 @@ NH_API_RESULT nh_html_loadBytes(
         char logId_p[127] = {0};
         sprintf(logId_p, "%p", Document_p);
 
-        NH_CORE_CHECK(nh_html_parseDocument(logId_p, String, Document_p))
+        NH_API_RESULT result = nh_html_parseDocument(logId_p, String, Document_p);
+        nh_encoding_freeUTF32(&String);
+        NH_CORE_CHECK(result)
 
-        nh_core_appendToList(&Context_p->Documents, Document_p);
+        NH_CORE_CHECK(nh_core_appendToList(&Context_p->Documents, Document_p))
         Context_p->Document_p = Document_p;
     }
 

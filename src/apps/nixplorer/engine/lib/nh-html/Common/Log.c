@@ -32,16 +32,17 @@ static NH_API_RESULT nh_html_logDocumentRecursively(
     char *node_p, nh_webidl_Object *Object_p, bool lastChild, int depth, bool *branch_p, 
     char *indent_p)
 {
+    if (depth < 0 || depth > (MAX_INDENT - 1) / 2) {return NH_API_ERROR_BAD_STATE;}
+
     nh_core_String Message = nh_core_initString(255);
     nh_core_String Attributes = nh_core_initString(128);
 
-    if (depth >= MAX_INDENT) {return NH_API_ERROR_BAD_STATE;}
 
     for (int i = 0, offset = 0; i < depth * 2; ++i) {
         if (i % 2) {offset++, indent_p[i] = ' '; continue;}
         indent_p[i] = branch_p[offset] == true ? '|' : ' ';
     }
-    indent_p[depth * 2 - 1] = '-';
+    if (depth) {indent_p[depth * 2 - 1] = '-';}
 
     nh_webidl_Object *Element_p = NH_WEBIDL_GET_DOM_ELEMENT(Object_p);
 
@@ -58,7 +59,7 @@ static NH_API_RESULT nh_html_logDocumentRecursively(
     }
 
     char tag_p[64] = {0};
-    sprintf(tag_p, Element_p ? "<%s>" : "%s", Element_p ? nh_dom_getLocalName(Element_p)->p : "node");
+    snprintf(tag_p, sizeof(tag_p), Element_p ? "<%s>" : "%s", Element_p ? nh_dom_getLocalName(Element_p)->p : "node");
 
     if (Attributes.length) {
         nh_core_appendFormatToString(&Message, "%s%s (%s) %s", indent_p, tag_p, Object_p->Interface_p->name_p, Attributes.p);
@@ -113,7 +114,7 @@ NH_API_RESULT nh_html_logDocument(
 
     bool branch_p[MAX_INDENT];
     memset(branch_p, false, MAX_INDENT);
-    nh_html_logDocumentRecursively(node_p, Document_p, false, 0, branch_p, indent_p);
+    NH_CORE_CHECK(nh_html_logDocumentRecursively(node_p, Document_p, false, 0, branch_p, indent_p))
 
     return NH_API_SUCCESS;
 }

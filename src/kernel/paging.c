@@ -91,6 +91,10 @@ static void paging_detect_memory(const bios_memory_entry_t* entries, uint32_t co
     for (uint32_t i = 0; i < FRAME_COUNT; ++i)
         if (frame_is_usable(i)) ++pool_pages;
     detected_total += pool_pages * PAGE_SIZE;
+    for (uint32_t address=APP_HEAP_BASE;address<APP_HEAP_LIMIT;address+=PAGE_SIZE) {
+        uint32_t index=(address-FRAME_POOL_BASE)/PAGE_SIZE;
+        frame_bitmap[index>>3] |= (uint8_t)(1u<<(index&7u));
+    }
     next_frame = 0;
 }
 
@@ -157,6 +161,9 @@ uint32_t paging_frame_alloc(void) {
     for (uint32_t scanned = 0; scanned < FRAME_COUNT; scanned++) {
         uint32_t index = (next_frame + scanned) % FRAME_COUNT;
         if (!frame_is_usable(index) || frame_is_used(index)) continue;
+        /* Keep physical-frame pointers identity mapped in every process. */
+        uint32_t candidate = FRAME_POOL_BASE + index * PAGE_SIZE;
+        if (candidate >= APP_HEAP_BASE && candidate < APP_HEAP_LIMIT) continue;
         frame_set_used(index, 1);
         next_frame = (index + 1) % FRAME_COUNT;
         uint32_t address = FRAME_POOL_BASE + index * PAGE_SIZE;
@@ -184,6 +191,8 @@ int paging_address_space_create(address_space_t* space) {
     if (!space) return -1;
     space->directory = 0;
     space->app_page_table = 0;
+    space->heap_bytes = 0;
+    for (uint32_t i=0;i<APP_HEAP_TABLES;i++) space->heap_tables[i]=0;
 
     uint32_t directory_frame = paging_frame_alloc();
     if (!directory_frame) return -1;
@@ -232,6 +241,47 @@ int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_add
     return 0;
 }
 
+static void paging_address_space_free_heap(address_space_t* space) {
+    for (uint32_t t=0;t<APP_HEAP_TABLES;t++) {
+        uint32_t* table=space->heap_tables[t];
+        if (!table) continue;
+        space->directory[(APP_HEAP_BASE >> 22)+t]=page_directory[(APP_HEAP_BASE >> 22)+t];
+        for (uint32_t i=0;i<PAGE_TABLE_ENTRIES;i++)
+            if (table[i] & PAGE_PRESENT) paging_frame_free(table[i] & PAGE_ADDRESS_MASK);
+        paging_frame_free((uint32_t)table);
+        space->heap_tables[t]=0;
+    }
+    space->heap_bytes=0;
+}
+
+uint32_t paging_address_space_heap(address_space_t* space, uint32_t bytes) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!space || !space->directory || !bytes || bytes>APP_HEAP_LIMIT-APP_HEAP_BASE) return 0;
+    bytes=(bytes+PAGE_SIZE-1u)&~(PAGE_SIZE-1u);
+    if (space->heap_bytes) return bytes<=space->heap_bytes ? APP_HEAP_BASE : 0;
+    for (uint32_t offset=0;offset<bytes;offset+=PAGE_SIZE) {
+        uint32_t t=offset/(PAGE_TABLE_ENTRIES*PAGE_SIZE);
+        if (!space->heap_tables[t]) {
+            space->heap_tables[t]=(uint32_t*)paging_frame_alloc();
+            if (!space->heap_tables[t]) goto fail;
+        }
+        uint32_t frame=paging_frame_alloc();
+        if (!frame) goto fail;
+        space->heap_tables[t][(offset/PAGE_SIZE)%PAGE_TABLE_ENTRIES]=frame|PAGE_PRESENT|PAGE_WRITABLE|PAGE_USER;
+    }
+    for (uint32_t t=0;t<APP_HEAP_TABLES;t++)
+        if(space->heap_tables[t]) space->directory[(APP_HEAP_BASE>>22)+t]=
+            (uint32_t)space->heap_tables[t]|PAGE_PRESENT|PAGE_WRITABLE|PAGE_USER;
+    space->heap_bytes=bytes;
+    if (active_directory==(uint32_t)space->directory) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(active_directory) : "memory");
+    }
+    return APP_HEAP_BASE;
+fail:
+    paging_address_space_free_heap(space);
+    return 0;
+}
+
 void paging_address_space_destroy(address_space_t* space) {
     MUTEX_GUARD(kernel_mutex);
     if (!space || !space->directory || !space->app_page_table) return;
@@ -243,6 +293,7 @@ void paging_address_space_destroy(address_space_t* space) {
         if (entry & PAGE_PRESENT) paging_frame_free(entry & PAGE_ADDRESS_MASK);
     }
 
+    paging_address_space_free_heap(space);
     paging_frame_free((uint32_t)space->app_page_table);
     paging_frame_free((uint32_t)space->directory);
     space->app_page_table = 0;

@@ -35,7 +35,7 @@ typedef struct nh_css_Candidate {
 } nh_css_Candidate;
 
 nh_css_Filter nh_css_filter(
-    void *Element_p, void *AuthorStyleSheets_p, nh_core_List UserStyleSheets
+    nh_webidl_Object *Element_p, nh_webidl_Object *AuthorStyleSheets_p, nh_core_List UserStyleSheets
 );
 
 #endif // NH_CSS_PROPERTIES_FILTER_H

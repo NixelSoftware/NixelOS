@@ -115,6 +115,11 @@ nh_webidl_Fragment *nh_webidl_getFragment(
 nh_webidl_Interface *nh_webidl_getInterface(
     char *specification_p, char *interface_p)
 {
+#ifdef NH_NIXEL
+    bool triedLoad = false;
+retry:
+#endif
+    ;
     nh_webidl_Specification *Specification_p = nh_webidl_getSpecification(specification_p);
 
     if (Specification_p) {
@@ -127,6 +132,13 @@ nh_webidl_Interface *nh_webidl_getInterface(
         }
     }
 
+#ifdef NH_NIXEL
+    if (!triedLoad) {
+        extern int nh_nixel_load_fragment(const char *, const char *);
+        triedLoad = true;
+        if (nh_nixel_load_fragment(specification_p, interface_p)) goto retry;
+    }
+#endif
     return NULL;
 }
 

@@ -36,6 +36,8 @@
  *  @{
  */
 
+    NH_API_RESULT nh_css_updateLayout(nh_css_LayoutEngine *LayoutEngine_p, bool *idle_p);
+
     nh_css_LayoutEngine *nh_css_createLayoutEngine(
         nh_html_DocumentContext *Context_p
     );

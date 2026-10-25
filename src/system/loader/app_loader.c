@@ -40,6 +40,13 @@ static int app_instance_find(uint32_t directory_address) {
     return -1;
 }
 
+uint32_t app_loader_allocate_heap(uint32_t bytes) {
+    MUTEX_GUARD(kernel_mutex);
+    int slot=app_instance_find(paging_current_directory());
+    if (slot<0) return 0;
+    return paging_address_space_heap(&app_instances[slot].address_space, bytes);
+}
+
 uint32_t app_loader_context_enter(uint32_t directory) {
     MUTEX_GUARD(kernel_mutex);
     uint32_t previous = paging_current_directory();

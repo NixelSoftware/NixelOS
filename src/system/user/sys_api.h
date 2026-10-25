@@ -49,8 +49,16 @@ enum {
     SYS_GETPPID = 38,
     SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FAT attributes */
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
+    SYS_ALLOCATE_HEAP = 42, /* EBX: bytes <=16 MiB; returns process arena or 0, zeroed on first allocation. Repeated smaller requests preserve it. */
     SYS_APP_LAUNCH = 40 /* EBX: executable path, ECX: arguments; starts detached */
 };
+
+static inline void *sys_allocate_heap(uint32_t bytes) {
+    uint32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_ALLOCATE_HEAP), "b"(bytes)
+                      : "ecx", "edx", "memory", "cc");
+    return (void *)result;
+}
 
 static inline int32_t sys_file_pick_result(uint32_t token, const char* path) {
     int32_t result;

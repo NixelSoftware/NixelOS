@@ -118,12 +118,12 @@
     );
 
     NH_API_RESULT nh_css_setSpecifiedValues(
-        nh_css_LogContext *LogContext_p, void *Element_p, void *AuthorStyleSheets_p, 
+        nh_css_LogContext *LogContext_p, nh_webidl_Object *Element_p, nh_webidl_Object *AuthorStyleSheets_p,
         nh_core_List UserStyleSheets
     );
 
     NH_API_RESULT nh_css_freeSpecifiedValues(
-        void *Node_p
+        nh_webidl_Object *Node_p
     );
 
     bool nh_css_isStringValue(

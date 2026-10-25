@@ -17,7 +17,7 @@
 #include "../../nh-core/System/Memory.h"
 #include "../../nh-core/Util/List.h"
 
-#include "../../nh-gfx/Base/Viewport.h"
+
 
 #include <math.h>
 #include <string.h>

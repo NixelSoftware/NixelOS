@@ -8,6 +8,13 @@
 
 // INCLUDES ========================================================================================
 
+#ifdef NH_NIXEL
+#include "../../../platform/netzhaut/Render.h"
+extern NH_API_RESULT nh_nixel_drawFragmentTree(nh_css_LayoutEngine *, const nh_nixel_DrawTarget *);
+NH_API_RESULT nh_renderer_drawDocument(nh_css_LayoutEngine *engine, const nh_nixel_DrawTarget *target) {
+    return nh_nixel_drawFragmentTree(engine, target);
+}
+#else
 #include "Renderer.h"
 
 #include "../Vulkan/Data.h"
@@ -166,3 +173,5 @@ NH_API_RESULT nh_renderer_addViewport(
  
     return NH_API_SUCCESS;
 }
+
+#endif

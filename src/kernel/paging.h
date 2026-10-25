@@ -11,9 +11,16 @@ void paging_memory_info(user_memory_info_t* out);
 #define APP_VIRTUAL_BASE 0x00C00000u
 #define APP_VIRTUAL_LIMIT 0x00E00000u
 
+/* Optional process heap, separate from the APP1 image and kernel boot stack. */
+#define APP_HEAP_BASE 0x40000000u
+#define APP_HEAP_LIMIT 0x41000000u
+#define APP_HEAP_TABLES 4u
+
 typedef struct {
     uint32_t* directory;
     uint32_t* app_page_table;
+    uint32_t* heap_tables[APP_HEAP_TABLES];
+    uint32_t heap_bytes;
 } address_space_t;
 
 /* Enable the kernel's supervisor-only identity map. */
@@ -29,6 +36,7 @@ int paging_address_space_create(address_space_t* space);
 int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_address,
                                    uint8_t writable, uint32_t* physical_out);
 void paging_address_space_destroy(address_space_t* space);
+uint32_t paging_address_space_heap(address_space_t* space, uint32_t bytes);
 
 /* CR3 helpers; callers must restore the kernel directory before returning. */
 void paging_activate(address_space_t* space);

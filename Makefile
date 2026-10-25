@@ -165,6 +165,7 @@ NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
               $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/Tokenizer.c \
               $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/TreeConstruction.c \
               $(NIXPLORER_DIR)/engine/lib/nh-html/Parser/TreeConstructionHelper.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-html/Engine/DocumentContext.c \
               $(NIXPLORER_DIR)/engine/lib/nh-html/Common/Log.c \
               $(NIXPLORER_DIR)/engine/lib/nh-html/Interfaces/Document.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/StaticLoader.c \
@@ -173,6 +174,7 @@ NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/Convert.c \
               $(NIXPLORER_DIR)/engine/lib/nh-network/HTTPClient.c \
               $(NIXPLORER_DIR)/engine/lib/nh-api/nh-network.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-api/nh-html.c \
               $(NIXPLORER_DIR)/engine/platform/tcp.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/Network.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/Strings.c \
@@ -198,6 +200,33 @@ NETZHAUT_C := $(NIXPLORER_DIR)/engine/lib/nh-core/System/Memory.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/WebIDL.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/HTMLProbe.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/DOMProbe.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Main/BoxTree.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Main/Canvas.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Main/FormattingContext.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Main/FragmentTree.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Main/LayoutEngine.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Main/SourceTree.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Layout/Block.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Layout/BoxModel.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Layout/Depth.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Layout/Float.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Layout/Inline.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Layout/LayoutValues.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Cascade.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Color.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Compute.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Filter.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Match.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Properties.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Properties/Values.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Common/Initialize.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-css/Common/IndexMap.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-gfx/Fonts/Text.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-gfx/Fonts/FontFamily.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Font.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/CSS.c \
+              $(NIXPLORER_DIR)/engine/platform/netzhaut/Software.c \
+              $(NIXPLORER_DIR)/engine/lib/nh-renderer/Main/Renderer.c \
               $(NIXPLORER_DIR)/engine/platform/netzhaut/Runtime.c
 BROWSER_C := $(NIXPLORER_DIR)/browser/main.c $(NETZHAUT_C) \
              $(NIXPLORER_DIR)/engine/platform/netzhaut/Probe.c
@@ -220,6 +249,9 @@ browser.bin: Makefile $(NIXPLORER_DIR)/browser/browser.ld src/apps/nixplorer/tes
 	$(PYTHON) src/apps/nixplorer/tests/check_image.py $(NIXPLORER_DIR)/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in '$(NIXPLORER_DIR)/browser/browser.tmp $(BROWSER_OBJ)'.split()]"
+
+test-nixplorer-render: os.img
+	$(PYTHON) $(NIXPLORER_DIR)/tests/render_guest.py
 
 test-nixplorer: UNICODE.DAT
 	$(PYTHON) $(NIXPLORER_DIR)/tests/run.py

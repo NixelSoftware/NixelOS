@@ -12,9 +12,9 @@
 #include "nh-core.h"
 
 #include "../nh-core/Loader/Loader.h"
-//#include "../nh-html/Main/DocumentContext.h"
 
-#include <dlfcn.h>
+
+
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,22 +22,27 @@
 
 // FUNCTIONS =======================================================================================
 
-nh_api_DocumentContext *nh_api_createDocumentContext(
-    bool browsingContext)
+static void *nh_api_loadHTMLSymbol(const char *name_p)
 {
-//    typedef nh_api_DocumentContext *(*nh_html_createDocumentContext_f)(bool browsingContext);
-//    nh_core_Loader *Loader_p = nh_api_getLoader();
-//    nh_html_createDocumentContext_f createDocumentContext_f = !Loader_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_HTML, 0, "nh_html_createDocumentContext");
-//    return createDocumentContext_f ? createDocumentContext_f(browsingContext) : NULL;
-return NULL;
+#ifdef NH_NIXEL
+    return nh_core_loadExistingSymbol(NH_MODULE_HTML, 0, name_p);
+#else
+    nh_core_Loader *Loader_p = nh_api_getLoader();
+    return !Loader_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_HTML, 0, (char *)name_p);
+#endif
+}
+
+nh_api_DocumentContext *nh_api_createDocumentContext(bool browsingContext)
+{
+    typedef nh_api_DocumentContext *(*create_f)(bool);
+    create_f create = nh_api_loadHTMLSymbol("nh_html_createDocumentContext");
+    return create ? create(browsingContext) : NULL;
 }
 
 NH_API_RESULT nh_api_loadBytes(
     nh_api_DocumentContext *Context_p, char *bytes_p, unsigned long long size)
 {
-//    typedef NH_API_RESULT (*nh_html_loadBytes_f)(nh_api_DocumentContext *Context_p, char *bytes_p, unsigned long long size);
-//    nh_core_Loader *Loader_p = nh_api_getLoader();
-//    nh_html_loadBytes_f loadBytes_f = !Loader_p ? NULL : Loader_p->loadSymbol_f(NH_MODULE_HTML, 0, "nh_html_loadBytes");
-//    return loadBytes_f ? loadBytes_f(Context_p, bytes_p, size) : NH_API_ERROR_BAD_STATE;
-return 1;
+    typedef NH_API_RESULT (*load_f)(nh_api_DocumentContext *, char *, unsigned long long);
+    load_f load = nh_api_loadHTMLSymbol("nh_html_loadBytes");
+    return load ? load(Context_p, bytes_p, size) : NH_API_ERROR_BAD_STATE;
 }

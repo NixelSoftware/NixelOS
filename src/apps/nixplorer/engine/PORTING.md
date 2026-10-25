@@ -1,14 +1,16 @@
 # Netzhaut source port status
 
-**Incomplete. HTTP retrieval works, while fetched-page processing, styling,
-layout, rendering and script execution remain unfinished.** The restored browser chrome runs original
-engine bring-up checks, including a real HTML document parse. No native parser,
-DOM, style, layout or renderer is retained as a fallback.
+**Incomplete, with HTTP → HTML → CSS layout → software drawing now integrated.**
+Downloaded HTML goes through the original document API, embedded styles through
+its original CSS parser, and the original cascade/source/box/fragment tree and
+block/inline layout feed a Nixel drawing backend. Text, backgrounds and rectangular
+borders can be drawn in the browser viewport. This is a limited engine port;
+arbitrary websites, script execution and full graphics support remain unfinished.
 
 ## Original source and recovered dependency
 
-All 831 supplied `bin/` and `lib/` files are present. 730 are byte-for-byte
-unchanged; 101 have recorded compatibility fixes. Of those, 72 only restore the
+All 831 supplied `bin/` and `lib/` files are present. 721 are byte-for-byte
+unchanged; 110 have recorded compatibility fixes. Of those, 72 only restore the
 `nh_webidl_Object` type name at users of the original WebIDL interface/attribute
 object model. They do not replace the implementations or their algorithms.
 
@@ -26,11 +28,14 @@ snapshot's existing `Utils/Global.h`; there is no second registry implementation
 
 ## Compatibility changes to supplied files
 
-In addition to the 72 mechanical object-type corrections, the other 29 files
+In addition to the 72 mechanical object-type corrections, the other 38 files
 contain these changes (some also correct object-type references):
 
 | Sources | Changes |
 | --- | --- |
+| `nh-api/nh-html.c` | Restore original document-context/load wrappers using static symbol resolution on Nixel and the module loader on desktop. |
+| `nh-html/Engine/DocumentContext.c` | Initialize the context list, preserve the browsing-context flag, reject unsupported browsing loads and invalid inputs, propagate list failures, and release decoded input after parsing. Full document teardown remains unfinished. |
+| `nh-html/Common/Log.c` | Bound indentation by its actual buffer size, avoid a negative root indentation index, bound tag formatting, and propagate recursive logging errors. |
 | `nh-api/nh-network.c` | Resolve the same original network API symbols through the static loader on Nixel. Public request/response APIs remain unchanged. |
 | `nh-network/HTTPClient.c` | Adapt connection/read/write/close and platform dependencies; retain original HTTP request/response/framing/streaming implementations. Reject unsupported TLS explicitly, guard size overflow, validate lengths/chunks, omit URL fragments, and normalize query-only request targets. Desktop TLS and loopback implementations remain present. |
 | `nh-api/nh-core.h` | Include `stddef.h` explicitly for API `size_t`. |
@@ -51,14 +56,18 @@ contain these changes (some also correct object-type references):
 
 ## Platform-specific code
 
-- `Runtime.c`: aligned 1,280 KiB guest process allocator (1,536 KiB in 64-bit host tests) and libc allocation/memory/string
-  adapters, exit and logging. Original `nh-core/System/Memory.c` remains the
+- `Runtime.c`: aligned 16 MiB process allocator with a free-block list and
+  adjacent-block coalescing (avoids scanning all live objects on every free) and libc allocation/memory/string
+  adapters, exit and logging. The guest obtains a private heap through
+  `SYS_ALLOCATE_HEAP`; the APP1 image stays in its original 2 MiB slot. Original `nh-core/System/Memory.c` remains the
   engine-facing implementation. Logging is disabled by default and can be
   enabled with `nh_nixel_set_logging`.
-- `StaticLoader.c`: resolve original DOM/HTML object initializers from a static
+- `StaticLoader.c`: resolve original DOM/HTML object initializers and document APIs from a static
   symbol table through the original loader API. No dynamic linker is needed for
   the currently compiled modules. Unregistered symbols return the original
   missing-symbol result; this does not provide the full desktop module loader.
+- `limits.h`: compiler-target integer limits for freestanding builds without
+  desktop libc headers.
 - `Format.c`: integer/string formatted output used by original object creation
   and diagnostics. Floating formats/streams remain unsupported; unknown format
   conversions return `-1`.
@@ -89,22 +98,29 @@ contain these changes (some also correct object-type references):
   original generated IDL fragments, not engine implementations. The DOM check
   explicitly loads NodeList, EventTarget, Node, CharacterData and Text. It does
   not claim the whole interface registry is initialized. The HTML check loads
-  the original document/element interfaces and verifies the `html`/`head`/`body`
+  bytes through the public document API and verifies the `html`/`head`/`body`
   tree and Unicode text produced by the original tokenizer/tree constructor.
 - `../browser/main.c`: restored original browser chrome with URL editing,
   cursor, Go button, inset page/status areas, default address, launch arguments,
   and `Ready`/editing/error status. Window mouse events are already discrete
   clicks; repeated clicks remain actionable. Enter/Go call the original
-  `nh_api_performHTTPRequest`, stream body bytes, show HTTP status/byte counts or
-  transport errors, and release responses. Fetched HTML is not handed to an
-  independently implemented parser or renderer.
+  `nh_api_performHTTPRequest`, retain bounded body bytes, pass successful
+  responses to the original document-context/load API, show HTTP status/byte
+  counts and parse results or transport errors, and release responses. The
+  fetched HTML is not handed to an independently implemented parser or
+  renderer.
   `platform/tcp.*` now supplies the active OS transport integration.
   `paint/png.*` remains shared with the kernel.
 
 Do not reset the arena while registry objects or cached descriptions are live.
+Startup initializes the partial HTML registry without retaining a fixture document.
+The full HTML initializer is not called: the upstream tokenizer still has
+unfinished entity paths, and its dense character-reference trie adds substantial
+memory beyond the currently tested registry/layout path.
 Registry/object teardown and full navigation lifecycle are still unfinished.
-The complete runtime needs a larger heap design before all interfaces/documents
-can be retained. The current application mapping remains 2 MiB.
+The APP1 image mapping remains 2 MiB; an optional separate 16 MiB process heap
+now holds the engine registry, styles and documents. Retaining successive documents
+is still bounded by that heap; document/tree teardown is unfinished.
 
 ## Removed native implementation
 
@@ -125,41 +141,72 @@ has been introduced in this pass.
   text, stable Arabic/Latin Unicode descriptions, gap/out-of-range lookups,
   allocation alignment/failure behavior, formatted-output comparisons, integer
   conversion/libm compatibility, and original HTML document output. The 64-bit
-  host check uses 1,511,168 bytes of arena storage for retained interfaces/trees.
+  host check uses 9,320,928 bytes after CSS initialization and three document loads.
+  Public API checks also cover null inputs, excessive lengths, context publication
+  and explicit rejection of unsupported browsing-context loads.
+  Renderer checks verify positioned Unicode glyph callbacks, stylesheet colors,
+  repeated navigation and scaled headings/paragraphs. Allocator stress checks
+  interleave allocation, reallocation and freeing, verify live data and alignment,
+  and require coalescing back into a large contiguous allocation.
   Registry allocations intentionally remain live until process exit; this is
   not a completed object-lifecycle test.
 - `make browser.bin`: passes APP1 and loader memory checks; code/data/BSS occupy
-  1,800,352 bytes. Original HTML parsing/tree-construction is now reached and
+  652,160 bytes. Original HTML parsing/tree-construction is now reached and
   linked, together with its original CSS parsing dependencies.
-- `make os.img` and QEMU: guest loads `UNICODE.DAT`; the window displays
-  `Ready` after original core, DOM and HTML document checks complete. The
-  restored URL/status interface is tested through keyboard and mouse input.
-- `make check-netzhaut`: ten of twelve original entry-path syntax probes pass.
+- `make os.img` and headless QEMU: HTTP fixture retrieved through real guest
+  networking, parsed, styled and drawn in the browser window. Pixel checks verify
+  the requested `#fa10ab` text and `#eeeeee` background. The guest reaches `Ready`
+  before requesting the document. `make test-nixplorer-render` reproduces this
+  check using a private disk copy and a controlled local HTTP fixture, and checks
+  a second navigation with different response text.
+- `make check-netzhaut`: all twelve original entry-path syntax probes pass.
   HTML parser, tree construction, DOM document, CSS tokenization/rule parsing,
   URL parser, WebIDL interface utility, ECMAScript evaluator, HTTP client and
   public HTTP API probes pass.
-  Layout and renderer still fail on graphics types/dependencies. A syntax pass
+  Layout and renderer now compile through their Nixel paths. Desktop GPU
+  dependencies remain unresolved. A syntax pass
   is not proof of full linkage or feature correctness.
 
-## Remaining integration
+## Renderer integration and remaining limits
 
-1. Extend original document/interface initialization beyond the tested document,
-   including registry coverage, memory growth, teardown and resource/navigation
-   lifecycle. The original HTML parsing path is now executing for the fixture.
-2. Port the original CSS interface/cascade/layout pipeline and its math,
-   scheduling and font dependencies. Do not replace it with native layout.
-3. Adapt original graphics/rendering interfaces. OpenGL types, GLX/loaders,
-   Vulkan/volk, FreeType/font libraries and stb dependencies remain unresolved.
-4. Extend original resource loading/networking beyond current HTTP retrieval,
-   including HTTPS/TLS, redirects and original URL integration,
-   ECMAScript bindings/execution, events and navigation lifecycle.
+- The original `nh_css_initialize` parses the complete supplied default stylesheet.
+  CSS WebIDL initializers are registered with the static loader. Missing WebIDL
+  interfaces load their original generated fragment on demand.
+- The original layout engine runs synchronously when the browser loads/repaints a
+  document. A corrected canvas loop checks its actual bounds. No alternate DOM,
+  selector, cascade, box or line-layout implementation is used.
+- Embedded `<style>` text is collected from the original DOM and passed to the
+  original stylesheet parser/list. Inline styles use the original cascade path.
+  External stylesheet/image fetching and resource scheduling remain unconnected.
+- `nh-renderer/Main/Renderer.c` selects a Nixel software backend, preserving its
+  desktop GPU branch. `Software.c` traverses positioned CSS fragments, clips to
+  the viewport, and emits backgrounds, rectangular borders and glyph commands.
+  The browser translates linear engine colors to display colors and sends window
+  drawing syscalls. Rounded borders, compositing and images are unfinished;
+  partial alpha is currently drawn as opaque.
+- `Font.c` adapts the original text segmentation/measurement API to Nixel's
+  scalable bitmap cells (8–64 px). Original CSS line breaking uses those metrics.
+  FreeType/HarfBuzz are not ported: complex shaping and non-ASCII glyph rendering
+  are unavailable; unsupported glyphs display `?`.
+- The process heap syscall allocates zeroed private pages at `0x40000000`, up to
+  16 MiB. Kernel syscall buffer validation checks this range and its actual user
+  page mappings. Allocation failure rolls back pages/tables; process destruction
+  releases the heap. Existing APP1 addresses, stack and argument pages stay fixed.
+  Physical aliases of the heap window are reserved so kernel frame pointers stay
+  identity mapped even on systems with more than 1 GiB RAM.
+- Compatibility fixes also include a root/indentation overflow in HTML logging,
+  a missing terminator byte in CSS named-color computation, stale CSS object
+  declarations, and separating unused GPU includes from CPU layout sources.
+  Selector grammar mismatches no longer emit engine error messages for every
+  skipped separator in the default stylesheet. Static-loader entries explicitly
+  cover passive interfaces whose original constructors/parents initialize state;
+  unknown symbols still fail resolution.
 
-Other stale/missing includes and unfinished upstream algorithms remain visible
-in the audit. The full registry, arbitrary-page HTML processing, CSS/layout, rendering and
-ECMAScript bindings must not be advertised as completed features yet. The
-original HTML parser still contains unfinished branches (including character
-reference/foster-parenting paths that call `exit`); these have not been replaced
-with a simplified parser.
+The original parser, selectors and layout contain incomplete algorithms. HTML
+entity/foster-parenting and CSS pseudo-selector branches can still call `exit`.
+Full document teardown, scrolling, links/forms/events, HTTPS, external resources,
+GPU rendering and ECMAScript execution remain unfinished. Do not advertise full
+arbitrary-site compatibility.
 
 ## HTTP networking validation and remaining limits
 
@@ -181,7 +228,7 @@ not ported. IPv6 transport and listening/loopback APIs are not implemented; the
 existing API wrappers return unavailable for missing listener symbols. Redirect
 responses are returned to the UI, not followed automatically. The client still
 requests identity content encoding. No cookies/cache/resource scheduling or
-complete arbitrary-page HTML/layout/rendering integration is claimed.
+complete arbitrary-page compatibility is claimed.
 
 QEMU guest validation also passes against a controlled virtual-network HTTP
 server: two requests to `http://10.0.1.100:8080/test` produce exact `GET /test`

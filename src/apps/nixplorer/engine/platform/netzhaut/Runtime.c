@@ -5,29 +5,36 @@
 #endif
 #include <string.h>
 
-/* All allocations remain inside the process's 2 MiB user mapping. */
-#ifdef NH_NIXEL_HOST_TEST
-/* Host tests use 64-bit pointers; the guest uses 32-bit engine structures. */
-#define NH_HEAP_SIZE (1536u * 1024u)
-#else
-#define NH_HEAP_SIZE (1280u * 1024u)
-#endif
+/* The original CSS tables and document trees need a process heap beyond APP1. */
+#define NH_HEAP_SIZE (16u * 1024u * 1024u)
 typedef union Block Block;
 union __attribute__((aligned(16))) Block {
-    struct { size_t size; Block *next; int available; } h;
+    struct { size_t size; Block *next, *previous; Block *free_next, *free_previous; int available; } h;
     long double alignment;
 };
+#ifdef NH_NIXEL_HOST_TEST
 static union __attribute__((aligned(16))) { long double alignment; unsigned char data[NH_HEAP_SIZE]; } heap;
-static Block *first;
+#else
+static unsigned char *heap_data;
+#endif
+static Block *first, *free_first;
 static int failed;
 static unsigned failures;
 void nh_nixel_reset(void) {
     extern void nh_nixel_unicode_reset(void);
     nh_nixel_unicode_reset();
+#ifdef NH_NIXEL_HOST_TEST
     first = (Block *)heap.data;
+#else
+    if (!heap_data) heap_data = sys_allocate_heap(NH_HEAP_SIZE);
+    if (!heap_data) { failed=1; failures++; return; }
+    first = (Block *)heap_data;
+#endif
     first->h.size = NH_HEAP_SIZE - sizeof(Block);
     first->h.next = 0;
     first->h.available = 1;
+    first->h.previous = first->h.free_next = first->h.free_previous = NULL;
+    free_first = first;
     failed = 0;
     failures = 0;
 }
@@ -38,35 +45,64 @@ size_t nh_nixel_heap_used(void) {
     for (Block *b = first; b; b = b->h.next) if (!b->h.available) used += b->h.size + sizeof(Block);
     return used;
 }
+static void remove_free(Block *b) {
+    if (b->h.free_previous) b->h.free_previous->h.free_next=b->h.free_next;
+    else free_first=b->h.free_next;
+    if (b->h.free_next) b->h.free_next->h.free_previous=b->h.free_previous;
+}
+static void insert_free(Block *b) {
+    b->h.available=1;
+    b->h.free_previous=NULL;
+    b->h.free_next=free_first;
+    if (free_first) free_first->h.free_previous=b;
+    free_first=b;
+}
 void *nh_nixel_malloc(size_t size) {
     if (!first) nh_nixel_reset();
-    if (!size) size = 1;
-    if (size > NH_HEAP_SIZE - sizeof(Block)) { failed = 1; failures++; return 0; }
-    size = (size + sizeof(Block) - 1) / sizeof(Block) * sizeof(Block);
-    for (Block *b = first; b; b = b->h.next) {
-        if (!b->h.available || b->h.size < size) continue;
-        if (b->h.size >= size + 2 * sizeof(Block)) {
-            Block *tail = (Block *)((char *)(b + 1) + size);
-            tail->h.size = b->h.size - size - sizeof(Block);
-            tail->h.next = b->h.next; tail->h.available = 1;
-            b->h.next = tail; b->h.size = size;
+    if (!first) return NULL;
+    if (!size) size=1;
+    if (size>NH_HEAP_SIZE-sizeof(Block)) {failed=1;failures++;return NULL;}
+    size=(size+sizeof(Block)-1)/sizeof(Block)*sizeof(Block);
+    for (Block *b=free_first;b;b=b->h.free_next) {
+        if (b->h.size<size) continue;
+        remove_free(b);
+        if (b->h.size>=size+2*sizeof(Block)) {
+            Block *tail=(Block *)((char *)(b+1)+size);
+            tail->h.size=b->h.size-size-sizeof(Block);
+            tail->h.next=b->h.next;
+            tail->h.previous=b;
+            if (tail->h.next) tail->h.next->h.previous=tail;
+            b->h.next=tail;
+            b->h.size=size;
+            insert_free(tail);
         }
-        b->h.available = 0;
-        memset(b + 1, 0, b->h.size);
-        return (char *)(b + 1);
+        b->h.available=0;
+        memset(b+1,0,b->h.size);
+        return b+1;
     }
-    failed = 1; failures++;
-    return 0;
+    failed=1;failures++;
+    return NULL;
 }
 void nh_nixel_free(void *ptr) {
     if (!ptr) return;
-    ((Block *)ptr - 1)->h.available = 1;
-    for (Block *b = first; b && b->h.next;) {
-        if (b->h.available && b->h.next->h.available) {
-            b->h.size += sizeof(Block) + b->h.next->h.size;
-            b->h.next = b->h.next->h.next;
-        } else b = b->h.next;
+    Block *b=(Block *)ptr-1;
+    /* Only adjacent physical blocks can merge; no scan of live objects. */
+    if (b->h.next && b->h.next->h.available) {
+        Block *next=b->h.next;
+        remove_free(next);
+        b->h.size+=sizeof(Block)+next->h.size;
+        b->h.next=next->h.next;
+        if (b->h.next) b->h.next->h.previous=b;
     }
+    if (b->h.previous && b->h.previous->h.available) {
+        Block *previous=b->h.previous;
+        remove_free(previous);
+        previous->h.size+=sizeof(Block)+b->h.size;
+        previous->h.next=b->h.next;
+        if (b->h.next) b->h.next->h.previous=previous;
+        b=previous;
+    }
+    insert_free(b);
 }
 void *nh_nixel_realloc(void *ptr, size_t size) {
     if (!ptr) return nh_nixel_malloc(size);

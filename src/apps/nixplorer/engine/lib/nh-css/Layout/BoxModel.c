@@ -11,7 +11,10 @@
 #include "BoxModel.h"
 
 #include "../Main/FragmentTree.h"
+#ifndef NH_NIXEL
 #include "../../nh-gfx/Base/Viewport.h"
+#endif
+
 
 #include <string.h>
 #include <ctype.h>
@@ -29,6 +32,7 @@
 
 // FUNCTIONS =========================================================================================
 
+#ifndef NH_NIXEL
 nh_css_ClipBox nh_css_convertToClipBox(
     void *Viewport_p, nh_css_PixelBox PixelBox)
 {
@@ -44,6 +48,8 @@ nh_css_ClipBox nh_css_convertToClipBox(
 
     return ClipBox;
 }
+
+#endif
 
 int nh_css_getMaxX(
     nh_css_PixelBox Box)

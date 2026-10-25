@@ -18,3 +18,5 @@ int atoi(const char *);
 unsigned long long strtoull(const char *,char **,int);
 long strtol(const char *,char **,int);
 #endif
+
+int abs(int);

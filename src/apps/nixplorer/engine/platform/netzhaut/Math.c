@@ -33,3 +33,18 @@ double nh_nixel_pow(double base, double exponent) {
 #ifndef NH_NIXEL_HOST_TEST
 double pow(double base,double exponent) { return nh_nixel_pow(base,exponent); }
 #endif
+
+#ifndef NH_NIXEL_HOST_TEST
+double floor(double x) {
+    if (__builtin_isnan(x) || x >= 0x1p52 || x <= -0x1p52 || x == 0) return x;
+    int64_t n = (int64_t)x;
+    return (double)n > x ? (double)(n-1) : (double)n;
+}
+double log10(double x) {
+    long double result;
+    __asm__ volatile("fldlg2; fxch; fyl2x" : "=t"(result) : "0"((long double)x) : "st(1)");
+    return result;
+}
+int abs(int x) { return x < 0 ? -x : x; }
+int isdigit(int x) { return x >= '0' && x <= '9'; }
+#endif

@@ -530,7 +530,9 @@ static nh_css_SelectorParseNode *nh_css_parseComplexSelector(
     nh_css_SelectorParser *Parser_p)
 {
     nh_css_SelectorParseNode *CompoundSelector_p = nh_css_parseCompoundSelector(Parser_p);
-    NH_CORE_CHECK_NULL_2(NULL, CompoundSelector_p)
+    /* A nonmatching grammar alternative (e.g. a comma) is ordinary parsing,
+     * not an engine error. The caller advances to the next selector token. */
+    if (!CompoundSelector_p) {return NULL;}
 
     nh_css_SelectorParseNode *ComplexSelector_p = nh_css_allocateNonTerminal(NH_CSS_SELECTOR_PARSE_NODE_COMPLEX_SELECTOR);
     NH_CORE_CHECK_MEM_2(NULL, ComplexSelector_p)

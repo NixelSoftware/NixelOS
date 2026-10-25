@@ -11,8 +11,12 @@
 #include "Text.h"
 #include "HarfBuzz.h"
 
+#ifndef NH_NIXEL
+#ifndef NH_NIXEL
 #include "External/freetype.h"
 #include "External/freetype-gl.h"
+#endif
+#endif
 
 #include "../Common/Log.h"
 #include "../Common/Macros.h"

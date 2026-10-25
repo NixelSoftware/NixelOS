@@ -157,9 +157,17 @@ void syscall_forget_address_space(uint32_t directory_address) {
     }
 }
 
+static int user_address_range(uint32_t address, uint32_t length) {
+    if (!length) return 0;
+    if (address >= APP_VIRTUAL_BASE && address < APP_VIRTUAL_LIMIT)
+        return length <= APP_VIRTUAL_LIMIT-address;
+    if (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT)
+        return length <= APP_HEAP_LIMIT-address;
+    return 0;
+}
+
 static int user_readable(uint32_t address, uint32_t length) {
-    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
-        length > APP_VIRTUAL_LIMIT - address) return 0;
+    if (!user_address_range(address,length)) return 0;
 
     uint32_t* directory = (uint32_t*)paging_current_directory();
     uint32_t end = address + length - 1u;
@@ -176,8 +184,7 @@ static int user_readable(uint32_t address, uint32_t length) {
 }
 
 static int user_writable(uint32_t address, uint32_t length) {
-    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
-        length > APP_VIRTUAL_LIMIT - address) return 0;
+    if (!user_address_range(address,length)) return 0;
 
     uint32_t* directory = (uint32_t*)paging_current_directory();
     uint32_t end = address + length - 1u;
@@ -221,6 +228,9 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = length;
             return;
         }
+        case SYS_ALLOCATE_HEAP:
+            regs->eax = app_loader_allocate_heap(regs->ebx);
+            return;
         case SYS_GET_TICKS:
             regs->eax = frame_timer;
             return;

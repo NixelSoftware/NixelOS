@@ -67,7 +67,7 @@ static NH_API_RESULT nh_css_computeColorUnit(
 
     if (ColorUnit_p->Common.type == NH_CSS_VALUE_KEYWORD) 
     {
-        char color_p[6] = {0};
+        char color_p[7] = {0};
 
         if (nh_css_getColorFromName(ColorUnit_p->String.p, color_p) == NH_API_SUCCESS) 
         {
