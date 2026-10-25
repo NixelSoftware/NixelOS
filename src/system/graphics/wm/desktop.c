@@ -339,6 +339,9 @@ static void open_path(const char* path) {
     if (fs_is_directory(path)) {
         if (app_loader_launch_detached(desktop_api, "/files.bin", path) < 0)
             show_info_dialog("Desktop", "Cannot open File Explorer.");
+    } else if (suffix(path, ".MID") || suffix(path, ".MIDI")) {
+        if (app_loader_launch_detached(desktop_api, "/syndig.bin", path) < 0)
+            show_info_dialog("Desktop", "Cannot launch Syndig.");
     } else if (suffix(path, ".BIN")) {
         if (app_loader_launch_detached(desktop_api, path, "") < 0)
             show_info_dialog("Desktop", "Cannot launch application.");

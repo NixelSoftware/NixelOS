@@ -56,6 +56,9 @@ typedef struct {
     uint32_t handle;
     user_window_event_t events[USER_WINDOW_EVENT_CAPACITY];
     uint32_t surface_frames[USER_WINDOW_MAX_SURFACE_PAGES];
+    uint32_t visible_frames[USER_WINDOW_MAX_SURFACE_PAGES];
+    uint16_t visible_page_count;
+    uint8_t drawing_frame;
     uint16_t surface_page_count;
     uint8_t event_read;
     uint8_t event_write;
@@ -180,6 +183,9 @@ static void user_surface_composite(user_window_slot_t* slot) {
             uint32_t count = (PAGE_SIZE - (offset & (PAGE_SIZE - 1u))) / sizeof(uint32_t);
             if (count > (uint32_t)(right - x)) count = (uint32_t)(right - x);
             const uint32_t* source = user_surface_pixel(slot, (uint32_t)x, (uint32_t)y);
+            if (slot->drawing_frame)
+                source = (const uint32_t*)(slot->visible_frames[offset / PAGE_SIZE] +
+                                           (offset & (PAGE_SIZE - 1u)));
             if (!source) break;
             uint32_t* dest = buffer + py * SCREEN_WIDTH + window->x + x;
             uint32_t copied = count;
@@ -193,6 +199,10 @@ static void user_surface_release(user_window_slot_t* slot) {
     if (!slot) return;
     for (uint32_t i = 0; i < slot->surface_page_count; i++)
         paging_frame_free(slot->surface_frames[i]);
+    for (uint32_t i = 0; i < slot->visible_page_count; i++)
+        paging_frame_free(slot->visible_frames[i]);
+    slot->visible_page_count = 0;
+    slot->drawing_frame = 0;
     slot->surface_page_count = 0;
 }
 
@@ -645,6 +655,29 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
     if (!slot || !drawing || !wm_api) return -1;
     Window* window = &slot->window;
 
+    if (drawing->operation == USER_WINDOW_DRAW_BEGIN) {
+        if (slot->drawing_frame) return 0;
+        /* Allocate lazily; legacy clients retain their single surface. */
+        while (slot->visible_page_count < slot->surface_page_count) {
+            uint32_t frame = paging_frame_alloc();
+            if (!frame) {
+                for (uint32_t i = 0; i < slot->visible_page_count; i++)
+                    paging_frame_free(slot->visible_frames[i]);
+                slot->visible_page_count = 0;
+                return -1;
+            }
+            slot->visible_frames[slot->visible_page_count++] = frame;
+        }
+        for (uint32_t i = 0; i < slot->surface_page_count; i++) {
+            const uint32_t* source = (const uint32_t*)slot->surface_frames[i];
+            uint32_t* dest = (uint32_t*)slot->visible_frames[i];
+            uint32_t count = PAGE_SIZE / sizeof(uint32_t);
+            __asm__ volatile ("cld; rep movsl" : "+S"(source), "+D"(dest), "+c"(count) : : "memory");
+        }
+        slot->drawing_frame = 1;
+        return 0;
+    }
+
     if (drawing->operation == USER_WINDOW_DRAW_FILL) {
         user_surface_fill(slot, drawing->x, drawing->y, drawing->width,
                           drawing->height, drawing->color);
@@ -760,6 +793,7 @@ int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory) {
     MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !wm_api || !wm_api->graphics.blit_rect) return -1;
+    slot->drawing_frame = 0;
     request_redraw();
     return 0;
 }

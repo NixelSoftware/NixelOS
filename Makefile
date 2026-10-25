@@ -1,12 +1,13 @@
 .DEFAULT_GOAL := all
+
 PYTHON ?= python3
 NASM ?= nasm
 CC ?= gcc
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
- 
-# Customizable QEMU Settings
+
+# Customizable QEMU settings
 QEMU_ACCEL ?= tcg
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 128M
@@ -16,46 +17,45 @@ QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_EXTRA ?=
 
 ENABLE_OOBE ?= 0
+DEBUG_SUBSYSTEMS ?= 0
+STARTUP_TRACE ?= 0
+# 0=normal, 1=input-only runtime, 2=normal without audio, 3=idle runtime.
+STARTUP_PROFILE ?= 0
 
 ifeq ($(OS),Windows_NT)
   PYTHON := python
   CC := i686-elf-gcc
   LD := i686-elf-ld
   OBJCOPY := i686-elf-objcopy
-  NASM_FORMAT := elf32
-  LD_FORMAT := elf_i386
-  LDFLAGS := -m $(LD_FORMAT)
-else
-  NASM_FORMAT := elf32
-  LD_FORMAT := elf_i386
-  LDFLAGS := -m $(LD_FORMAT)
 endif
 
-DEBUG_SUBSYSTEMS ?= 0
-ifneq ($(DEBUG_SUBSYSTEMS),0)
-ifneq ($(DEBUG_SUBSYSTEMS),1)
-$(error DEBUG_SUBSYSTEMS must be 0 or 1)
+NASM_FORMAT := elf32
+LD_FORMAT := elf_i386
+LDFLAGS := -m $(LD_FORMAT)
+
+ifneq ($(filter-out 0 1,$(DEBUG_SUBSYSTEMS)),)
+  $(error DEBUG_SUBSYSTEMS must be 0 or 1)
 endif
+ifneq ($(filter-out 0 1,$(STARTUP_TRACE)),)
+  $(error STARTUP_TRACE must be 0 or 1)
+endif
+ifneq ($(filter-out 0 1 2 3,$(STARTUP_PROFILE)),)
+  $(error STARTUP_PROFILE must be 0, 1, 2 or 3)
+endif
+ifneq ($(filter-out 0 1,$(ENABLE_OOBE)),)
+  $(error ENABLE_OOBE must be 0 or 1)
 endif
 
 ifeq ($(ENABLE_OOBE),1)
-  OOBE_VAL += -DENABLE_OOBE=1
-  OOBE_APP := oobe
+  OOBE_VAL := -DENABLE_OOBE=1
 else
-  OOBE_APP :=
+  OOBE_VAL :=
 endif
 
-STARTUP_TRACE ?= 0
-# 0=normal, 1=input-only runtime, 2=normal without audio, 3=idle runtime.
-STARTUP_PROFILE ?= 0
-ifneq ($(filter $(STARTUP_TRACE),0 1),$(STARTUP_TRACE))
-$(error STARTUP_TRACE must be 0 or 1)
-endif
-ifneq ($(filter $(STARTUP_PROFILE),0 1 2 3),$(STARTUP_PROFILE))
-$(error STARTUP_PROFILE must be 0, 1, 2 or 3)
-endif
-CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
-          -mno-stack-arg-probe -mno-sse -mno-sse2 -mno-mmx -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
+CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) \
+          -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
+          -mno-stack-arg-probe -mno-sse -mno-sse2 -mno-mmx \
+          -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
@@ -90,23 +90,19 @@ KERNEL_C := \
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
-$(KERNEL_OBJ): src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h src/kernel/mutex.h \
-               src/kernel/sched_policy.h src/kernel/sched_wide.h src/kernel/arch_fpu.h
-APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
-        crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
-        shutdlg
-# Temporary Fastfetch image inclusion for testing.
+KERNEL_HEADERS := src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h \
+                  src/kernel/mutex.h src/kernel/sched_policy.h src/kernel/sched_wide.h \
+                  src/kernel/arch_fpu.h
+$(KERNEL_OBJ): $(KERNEL_HEADERS)
+
+# Single-main applications; each MUST provide src/apps/<name>/entry.asm.
+STANDARD_APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
+                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
+APPS := $(STANDARD_APPS) syndig
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
+
 .PHONY: all run clean clean-build
 all: os.img
-
-.PHONY: fastfetch.bin
-fastfetch.bin:
-	$(MAKE) -C src/apps/fastfetch
-	$(PYTHON) -c "from pathlib import Path; Path('fastfetch.bin').write_bytes(Path('src/apps/fastfetch/fastfetch.bin').read_bytes())"
-
-src/boot.bin: Makefile src/boot/boot.asm
-	$(NASM) -f bin src/boot/boot.asm -o $@
 
 %.o: %.c Makefile
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -114,10 +110,35 @@ src/boot.bin: Makefile src/boot/boot.asm
 %.o: %.asm Makefile
 	$(NASM) $(NASMFLAGS) $< -o $@
 
-$(APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
+$(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(LD) $(LDFLAGS) -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
-	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True); Path('src/apps/$*/entry.o').unlink(missing_ok=True); Path('src/apps/$*/main.o').unlink(missing_ok=True)"
+	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True)"
+
+SYNDIG_DIR := src/apps/syndig
+SYNDIG_C := \
+    $(SYNDIG_DIR)/main.c \
+    $(SYNDIG_DIR)/midi_file.c \
+    $(SYNDIG_DIR)/instruments.c \
+    $(SYNDIG_DIR)/compat/runtime.c \
+    $(SYNDIG_DIR)/compat/div64.c \
+    $(SYNDIG_DIR)/upstream/buffer.c \
+    $(SYNDIG_DIR)/upstream/channel.c \
+    $(SYNDIG_DIR)/upstream/compressor.c \
+    $(SYNDIG_DIR)/upstream/envelope.c \
+    $(SYNDIG_DIR)/upstream/hertz.c \
+    $(SYNDIG_DIR)/upstream/lane.c \
+    $(SYNDIG_DIR)/upstream/midi.c \
+    $(SYNDIG_DIR)/upstream/oscillator.c \
+    $(SYNDIG_DIR)/upstream/polyphony.c
+SYNDIG_OBJ := $(SYNDIG_DIR)/entry.o $(SYNDIG_C:.c=.o)
+SYNDIG_HEADERS := $(wildcard $(SYNDIG_DIR)/*.h $(SYNDIG_DIR)/compat/*.h $(SYNDIG_DIR)/upstream/*.h)
+$(SYNDIG_C:.c=.o): $(SYNDIG_HEADERS)
+
+syndig.bin: Makefile $(SYNDIG_OBJ)
+	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(SYNDIG_DIR)/syndig.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(SYNDIG_DIR)/syndig.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(SYNDIG_DIR)/syndig.tmp').unlink(missing_ok=True)"
 
 NIXPLORER_DIR := src/apps/nixplorer
 BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
@@ -144,7 +165,16 @@ src/system/graphics/image/png.o: $(NIXPLORER_DIR)/engine/paint/png.c $(NIXPLORER
 browser.bin: Makefile $(BROWSER_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(NIXPLORER_DIR)/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
-	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in '$(NIXPLORER_DIR)/browser/browser.tmp $(BROWSER_OBJ)'.split()]"
+	$(PYTHON) -c "from pathlib import Path; Path('$(NIXPLORER_DIR)/browser/browser.tmp').unlink(missing_ok=True)"
+
+# Fastfetch uses its own subdirectory Makefile.
+.PHONY: fastfetch.bin
+fastfetch.bin:
+	$(MAKE) -C src/apps/fastfetch
+	$(PYTHON) -c "from pathlib import Path; Path('fastfetch.bin').write_bytes(Path('src/apps/fastfetch/fastfetch.bin').read_bytes())"
+
+src/boot.bin: Makefile src/boot/boot.asm
+	$(NASM) -f bin src/boot/boot.asm -o $@
 
 src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp
@@ -155,12 +185,12 @@ endif
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.tmp').unlink(missing_ok=True)"
 
 src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
-	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
+	$(PYTHON) -c "import pathlib,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
 	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sys.exit(subprocess.call(['$(NASM)','-f','bin','-D',f'KERNEL_SECTORS={(n+511)//512}','-D',f'KERNEL_SIZE_BYTES={n}','src/boot/boot_stage2.asm','-o','src/boot_stage2.bin']))"
 
-RESOURCE_WAVS := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() == '.wav'))")
+RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav'}))")
 
-os.img: $(RESOURCE_WAVS) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
+os.img: $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
 	$(PYTHON) mkfat32.py os.img.new
 	$(PYTHON) -c "from pathlib import Path; p=Path('os.img.new'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d); p.replace('os.img')"
 	$(MAKE) clean-build
@@ -169,7 +199,7 @@ run: os.img
 	$(QEMU) -accel $(QEMU_ACCEL) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP) -device $(QEMU_NETCARD),netdev=net0 -display $(QEMU_DISPLAY) -device sb16 -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in 'files mines calc hexview floppy_debug ping netdiag http_test curl crash_debug shutdown userhello sound browser oobe sysdiag reboot setwall'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) syndig browser fastfetch'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"

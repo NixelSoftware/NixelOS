@@ -158,6 +158,11 @@ static void open_selected(void) {
             picker_finished = 1; files_close_requested = 1;
         } else copy_text(status, "Selection request expired or program inaccessible.", sizeof(status));
     }
+    else if (suffix(path, ".MID") || suffix(path, ".MIDI")) {
+        if (sys_app_launch("/syndig.bin", path) < 0)
+            copy_text(status, "Cannot launch Syndig.", sizeof(status));
+        else copy_text(status, "Opened in Syndig.", sizeof(status));
+    }
     else if (suffix(path, ".WAV") || suffix(path, ".MP3")) {
         if (sys_app_launch("/sound.bin", path) < 0)
             copy_text(status, "Cannot launch Sound Player.", sizeof(status));

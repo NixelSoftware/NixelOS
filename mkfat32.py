@@ -23,7 +23,7 @@ ROOT_FILES = [
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
-    "shutdlg.bin"
+    "shutdlg.bin", "syndig.bin"
 ]
 
 OUTPUT_IMAGE = "disk.img" if len(sys.argv) < 2 else sys.argv[1]
@@ -103,10 +103,10 @@ def main():
     struct.pack_into("<I", fat, 4, 0x0FFFFFFF)
     struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
 
-    # Resource WAVs are included in the image root under their FAT 8.3 names.
+    # Audio resources are included in the image root under their FAT 8.3 names.
     files = [Path(name) for name in ROOT_FILES if Path(name).is_file()]
     files += sorted((p for p in Path("resources").rglob("*")
-                     if p.is_file() and p.suffix.lower() == ".wav"),
+                     if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav"}),
                     key=lambda p: p.as_posix().lower())
     names = set()
     for p in files:
