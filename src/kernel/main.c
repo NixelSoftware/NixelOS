@@ -346,7 +346,6 @@ static void network_service(void* arg) {
 }
 static void audio_task(void* arg) {
     (void)arg;
-    system_sound_start();
     for (;;) { system_sound_poll(); audio_service(); task_sleep_ms(2);
     }
 }
@@ -362,10 +361,15 @@ static void cleanup_service(void* arg) {
     for (;;) { app_loader_collect(); task_sleep_ms(20); }
 }
 
-static void desktop_service(void* arg) {
+void desktop_service(void* arg) {
     (void)arg;
-    current_task->uid = USER_REGULAR;
-    current_task->gid = USER_REGULAR;
+    /* The display manager authenticates this task's inherited session user. */
+    if (!user_can_logon(user_by_id(current_task->uid))) {
+        debug_print("[WM] Refusing unauthenticated session identity\n");
+        task_exit();
+    }
+    if (terminal_launch() < 0) debug_print("[WM] Cannot create initial terminal\n");
+    uint8_t desktop_ready = 0;
     for (;;) {
 #if STARTUP_PROFILE == 1
         startup_trace_poll(1);
@@ -379,6 +383,13 @@ static void desktop_service(void* arg) {
 #else
         wm_poll();
 #endif
+        if (!desktop_ready) {
+            /* Let the first desktop frame and its shell task settle before
+             * starting DMA playback; boot-time work must not compete with it. */
+            task_sleep_ms(20);
+            system_sound_start();
+            desktop_ready = 1;
+        }
         task_sleep_ms(2);
     }
 }
@@ -447,7 +458,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     int login_pid = task_create(login_screen_task, 0, "login");
     if (login_pid < 0) __builtin_trap();
     task_wait(login_pid);
-    if (task_create(desktop_service, 0, "wm") < 0) __builtin_trap();
     for (;;) task_sleep_ms(1000);
 }
 

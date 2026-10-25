@@ -385,11 +385,11 @@ int terminal_launch(void) {
         .draw_content = terminal_draw, .handle_key = terminal_handle_key
     };
     terminal_clear_output(t);
-    terminal_prompt(t);
     if (wm_register_window(&t->window) < 0) { t->active = 0; return -1; }
     if (shell_open_terminal(t) < 0) {
         wm_unregister_window(&t->window); t->active = 0; return -1;
     }
+    terminal_prompt(t);
     wm_invalidate();
     return slot;
 }

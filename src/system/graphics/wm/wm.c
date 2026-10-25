@@ -268,21 +268,29 @@ void wm_initialize(os_api_t* api, void (*invalidate_callback)(void)) {
     start_menu_init(api);
 }
 
-static void draw_window_frame(Window* window) {
-    if (!wm_api || !window || !window->visible) return;
-    wm_api->graphics.fill_rect(window->x, window->y, window->w, window->h, COLOR_WIN_BG);
-    wm_api->graphics.fill_rect(window->x + 2, window->y + 2, window->w - 4, 15,
-                      window->focused ? COLOR_TITLE_BAR : COLOR_DARK_GRAY);
-    if (window->title)
-        wm_api->graphics.draw_string(window->x + 6, window->y + 5, window->title, COLOR_WHITE);
+void wm_draw_native_frame(int32_t x, int32_t y, int32_t w, int32_t h,
+                          const char* title, uint8_t focused) {
+    if (!wm_api || w < 20 || h < 20) return;
+    wm_api->graphics.fill_rect(x, y, w, h, COLOR_WIN_BG);
+    wm_api->graphics.fill_rect(x + 2, y + 2, w - 4, 15,
+                      focused ? COLOR_TITLE_BAR : COLOR_DARK_GRAY);
+    if (title)
+        wm_api->graphics.draw_string(x + 6, y + 5, title, COLOR_WHITE);
 
-    int32_t close_x = window->x + window->w - 16;
-    int32_t close_y = window->y + 3;
+    int32_t close_x = x + w - 16;
+    int32_t close_y = y + 3;
     wm_api->graphics.draw_button(close_x, close_y, 13, 13, 0, 0);
     wm_api->graphics.draw_string(close_x + 3, close_y + 2, "x", COLOR_BLACK);
-    wm_api->graphics.fill_rect(window->x, window->y, window->w, 1, COLOR_WHITE);
-    wm_api->graphics.fill_rect(window->x, window->y, 1, window->h, COLOR_WHITE);
-    wm_api->graphics.fill_rect(window->x, window->y + window->h - 1, window->w, 1, COLOR_DARK_GRAY);
+    wm_api->graphics.fill_rect(x, y, w, 1, COLOR_WHITE);
+    wm_api->graphics.fill_rect(x, y, 1, h, COLOR_WHITE);
+    wm_api->graphics.fill_rect(x, y + h - 1, w, 1, COLOR_DARK_GRAY);
+    wm_api->graphics.fill_rect(x + w - 1, y, 1, h, COLOR_BLACK);
+}
+
+static void draw_window_frame(Window* window) {
+    if (!window || !window->visible) return;
+    wm_draw_native_frame(window->x, window->y, window->w, window->h,
+                         window->title, window->focused);
     wm_api->graphics.fill_rect(window->x + window->w - 1, window->y, 1, window->h, COLOR_DARK_GRAY);
     user_window_slot_t* user_slot = user_slot_for_window(window);
     if (user_slot) {

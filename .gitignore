@@ -5,3 +5,5 @@
 os
 struct
 *pyc
+*.o
+*.tmp

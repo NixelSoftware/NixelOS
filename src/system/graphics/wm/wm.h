@@ -9,6 +9,8 @@
 #define WM_TASKBAR_HEIGHT 32
 
 void wm_initialize(os_api_t* api, void (*invalidate)(void));
+void wm_draw_native_frame(int32_t x, int32_t y, int32_t w, int32_t h,
+                          const char* title, uint8_t focused);
 Window* wm_get_window(int index);
 int wm_register_window(Window* window);
 void wm_unregister_window(Window* window);

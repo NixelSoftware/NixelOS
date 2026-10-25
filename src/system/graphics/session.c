@@ -30,7 +30,5 @@ void system_graphics_initialize(os_api_t* api, system_redraw_fn request_redraw) 
     debug_print("[APPS] window manager init...\n");
     wm_initialize(api, request_redraw);
     desktop_init(api);
-    /* One initial shell; each icon activation creates an additional instance. */
-    if (terminal_launch() < 0) debug_print("[APPS] Cannot create initial terminal\n");
     debug_print("[APPS] initialization done\n");
 }

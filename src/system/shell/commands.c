@@ -20,6 +20,7 @@ typedef struct {
     char cwd[FS_MAX_PATH];
     shell_output_fn output;
     shell_clear_fn clear;
+    uint16_t uid, gid;
     uint8_t allocated, pending, active, closing;
 } shell_session_t;
 static shell_session_t sessions[TERMINAL_MAX_INSTANCES];
@@ -96,12 +97,15 @@ static int resolve_path(const char* input, char out[FS_MAX_PATH], int create) {
 }
 void shell_format_prompt(terminal_t* terminal, char* out, unsigned capacity) {
     shell_session_t* session = session_for(terminal);
-    const user_t* user = user_by_id(session && session->task ? session->task->uid : USER_REGULAR);
+    uint16_t uid = session ? session->uid : USER_REGULAR;
+    if (session && session->task) uid = session->task->uid;
+    const user_t* user = user_by_id(uid);
     const char* cwd = session && session->cwd[0] ? session->cwd : "/";
     unsigned length = 0; while (cwd[length]) length++;
     /* Keep the directory tail and prompt marker visible for deep paths. */
     if (length > 64) cwd += length - 64;
-    const char* parts[] = {user ? user->name : "unknown", "@nixel ", cwd, " > "};
+    const char* marker = user && user->uid == USER_ROOT ? " # " : " > ";
+    const char* parts[] = {user ? user->name : "unknown", "@nixel ", cwd, marker};
     unsigned n = 0;
     for (unsigned p = 0; p < 4; p++) for (unsigned i = 0; parts[p][i] && n+1 < capacity; i++) out[n++] = parts[p][i];
     if (capacity) out[n] = 0;
@@ -155,9 +159,18 @@ static int account_command(const char* command) {
     } else if (has_prefix(command, "id") && !command[2]) {
         print("uid="); print_u32(user_uid()); print(" gid="); print_u32(user_gid()); print("\n");
     } else if (has_prefix(command, "users") && !command[5]) {
-        print("root user system nobody\n");
+        for (unsigned i = 0; i < USER_COUNT; i++) {
+            print(users[i].name);
+            if (i + 1 < USER_COUNT) print(" ");
+        }
+        print("\n");
+    } else if (equal(command, "su")) {
+        print("Usage: su <account>\n");
     } else if (has_prefix(command, "su ")) {
-        if (!user_switch(command + 3)) print("Cannot switch user (root required; account must exist).\n");
+        const char* target = command + 3;
+        while (*target == ' ') target++;
+        if (!*target || !user_switch(target))
+            print("Cannot switch user (root required; account must exist).\n");
     } else if (has_prefix(command, "stat ")) {
         fs_stat_t st;
         char path[FS_MAX_PATH];
@@ -212,9 +225,13 @@ void shell_execute_command(const char* command, shell_output_fn output,
         const char* elevated = command + 4;
         while (*elevated == ' ') elevated++;
         if (!*elevated) { print("Usage: sudo <command>\n"); return; }
+        int login_shell = equal(elevated, "-i") || equal(elevated, "su");
         uint16_t uid = user_uid(), gid = user_gid();
         if (uid != USER_ROOT) {
-            if (uid != USER_REGULAR) { print("sudo: this account is not allowed.\n"); return; }
+            if (!user_can_logon(user_by_id(uid))) {
+                print("sudo: this account is not allowed.\n");
+                return;
+            }
             char password[64] = {0};
             print("[sudo] root password: ");
             int entered = terminal_read_password(password, sizeof(password));
@@ -222,9 +239,15 @@ void shell_execute_command(const char* command, shell_output_fn output,
             for (unsigned i = 0; i < sizeof(password); i++) ((volatile char*)password)[i] = 0;
             if (!authenticated) { print("sudo: authentication failed or cancelled.\n"); return; }
         }
-        shell_execute_command(elevated, output, clear);
-        current_task->uid = uid;
-        current_task->gid = gid;
+        if (login_shell) {
+            current_task->uid = USER_ROOT;
+            current_task->gid = USER_ROOT;
+            print("Started root login shell.\n");
+        } else {
+            shell_execute_command(elevated, output, clear);
+            current_task->uid = uid;
+            current_task->gid = gid;
+        }
         return;
     }
     if (account_command(command)) return;
@@ -404,7 +427,13 @@ int shell_open_terminal(terminal_t* terminal) {
     for (int i = 0; i < TERMINAL_MAX_INSTANCES; i++) {
         shell_session_t* s = &sessions[i];
         if (s->allocated) continue;
-        *s = (shell_session_t){.terminal = terminal, .allocated = 1, .cwd = "/"};
+        *s = (shell_session_t){
+            .terminal = terminal,
+            .uid = current_task ? current_task->uid : USER_REGULAR,
+            .gid = current_task ? current_task->gid : USER_REGULAR,
+            .allocated = 1,
+            .cwd = "/"
+        };
         if (task_create(shell_service, s, "terminal") < 0) { s->allocated = 0; return -1; }
         return 0;
     }
@@ -445,8 +474,7 @@ void shell_service(void* argument) {
     mutex_lock(&kernel_mutex);
     s->task = current_task;
     current_task->terminal = s->terminal;
-    current_task->uid = USER_REGULAR;
-    current_task->gid = USER_REGULAR;
+    /* Keep the UID/GID inherited from the authenticated WM session. */
     /* A new shell is independent of the terminal that launched it. */
     current_task->detached = 0;
     mutex_unlock(&kernel_mutex);
