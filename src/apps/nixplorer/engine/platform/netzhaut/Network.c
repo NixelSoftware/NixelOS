@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define SOCKETS 8
 /* SYS_GET_TICKS returns the 100 Hz PIT frame_timer. */
 #define TICKS_PER_SECOND 100u
@@ -17,7 +18,8 @@ static int ipv4(const char *host,unsigned *address) {
             value=value*10+(unsigned)(*host++-'0');
         }
         if(!digits||value>255)return 0;
-        result|=value<<(part*8);
+        /* Kernel IPv4 values are canonical big-endian integers, not byte arrays. */
+        result=(result<<8)|value;
         if(part<3){if(*host++!='.')return 0;}else if(*host)return 0;
     }
     *address=result;return 1;
@@ -31,6 +33,7 @@ int nh_nixel_net_connect(const char *host,const char *port,int seconds,char *err
     if(!*port||*end||number<1||number>65535||seconds<1||seconds>3600) {
         snprintf(error,size,"Invalid port or timeout");return -1;
     }
+    if (strchr(host,':')) {snprintf(error,size,"IPv6 transport is not available on Nixel");return -1;}
     unsigned address;
     if(!ipv4(host,&address)&&!nix_tcp_resolve(host,&address)) {
         snprintf(error,size,"Could not resolve %s",host);return -1;
@@ -44,7 +47,7 @@ int nh_nixel_net_connect(const char *host,const char *port,int seconds,char *err
     unsigned start=nix_tcp_ticks();
     for(;;) {
         int state=nix_tcp_state(sockets[fd].handle);
-        if(state==NIX_TCP_ESTABLISHED)return fd;
+        if(state==NIX_TCP_ESTABLISHED||state==NIX_TCP_CLOSE_WAIT)return fd;
         if(state<0||state==NIX_TCP_CLOSED||(unsigned)(nix_tcp_ticks()-start)>=sockets[fd].timeout)break;
         nix_tcp_yield();
     }
@@ -53,11 +56,12 @@ int nh_nixel_net_connect(const char *host,const char *port,int seconds,char *err
 long nh_nixel_net_send(int fd,const void *data,size_t length) {
     if(fd<0||fd>=SOCKETS||!sockets[fd].active)return -1;
     if(!length)return 0;
-    if(length>0x7fffffffu)length=0x7fffffffu;
+    if(length>NIX_TCP_SEND_MAX)length=NIX_TCP_SEND_MAX;
     unsigned start=nix_tcp_ticks();
     for(;;) {
-        int written=nix_tcp_send(sockets[fd].handle,data,(unsigned)length);
-        if(written)return written;
+        int accepted=nix_tcp_send(sockets[fd].handle,data,(unsigned)length);
+        if(accepted<0)return -1;
+        if(accepted)return (long)length;
         int state=nix_tcp_state(sockets[fd].handle);
         if(state!=NIX_TCP_ESTABLISHED||(unsigned)(nix_tcp_ticks()-start)>=sockets[fd].timeout)return -1;
         nix_tcp_yield();
@@ -66,7 +70,7 @@ long nh_nixel_net_send(int fd,const void *data,size_t length) {
 long nh_nixel_net_receive(int fd,void *data,size_t length) {
     if(fd<0||fd>=SOCKETS||!sockets[fd].active)return -1;
     if(!length)return 0;
-    if(length>0x7fffffffu)length=0x7fffffffu;
+    if(length>NIX_TCP_READ_MAX)length=NIX_TCP_READ_MAX;
     unsigned start=nix_tcp_ticks();
     for(;;) {
         int count=nix_tcp_read(sockets[fd].handle,data,(unsigned)length);

@@ -1,14 +1,14 @@
 # Netzhaut source port status
 
-**Incomplete. Network page loading, styling, layout, rendering and script
-execution are not available in Nixel.** The restored browser chrome runs original
+**Incomplete. HTTP retrieval works, while fetched-page processing, styling,
+layout, rendering and script execution remain unfinished.** The restored browser chrome runs original
 engine bring-up checks, including a real HTML document parse. No native parser,
 DOM, style, layout or renderer is retained as a fallback.
 
 ## Original source and recovered dependency
 
-All 831 supplied `bin/` and `lib/` files are present. 732 are byte-for-byte
-unchanged; 99 have recorded compatibility fixes. Of those, 72 only restore the
+All 831 supplied `bin/` and `lib/` files are present. 730 are byte-for-byte
+unchanged; 101 have recorded compatibility fixes. Of those, 72 only restore the
 `nh_webidl_Object` type name at users of the original WebIDL interface/attribute
 object model. They do not replace the implementations or their algorithms.
 
@@ -26,11 +26,13 @@ snapshot's existing `Utils/Global.h`; there is no second registry implementation
 
 ## Compatibility changes to supplied files
 
-In addition to the 72 mechanical object-type corrections, the other 27 files
+In addition to the 72 mechanical object-type corrections, the other 29 files
 contain these changes (some also correct object-type references):
 
 | Sources | Changes |
 | --- | --- |
+| `nh-api/nh-network.c` | Resolve the same original network API symbols through the static loader on Nixel. Public request/response APIs remain unchanged. |
+| `nh-network/HTTPClient.c` | Adapt connection/read/write/close and platform dependencies; retain original HTTP request/response/framing/streaming implementations. Reject unsupported TLS explicitly, guard size overflow, validate lengths/chunks, omit URL fragments, and normalize query-only request targets. Desktop TLS and loopback implementations remain present. |
 | `nh-api/nh-core.h` | Include `stddef.h` explicitly for API `size_t`. |
 | `nh-core/Util/Debug.h` | Retain original checks and result handling; use compile-time file/line diagnostics on Nixel without formatted stdio. |
 | `nh-core/Util/String.c` | Fix self-recursion in `nh_core_removeFromString` by calling the original array operation. |
@@ -66,6 +68,17 @@ contain these changes (some also correct object-type references):
   lifetime. No ASCII-only substitute or reduced Unicode dataset is used.
   The existing generated range handling still has upstream limitations for
   ranges represented only by Unicode First/Last records.
+- `Network.c` and `platform/tcp.c`: adapt IPv4/DNS/TCP transport to the original
+  HTTP client. Preserve partial send/read behavior, distinguish EOF from pending
+  input, close failed/completed handles, normalize the kernel send acceptance
+  flag to bytes written, respect its 1,448-byte send/4,096-byte receive limits,
+  use the canonical IPv4 integer ABI, and enforce per-operation timeouts using
+  the actual 100 Hz `SYS_GET_TICKS` clock, including tick wraparound.
+  Socket slots are process-local. The API is blocking; the UI waits during a
+  request. DNS timeout/handle release remains owned by the OS resolver.
+- `Strings.c`, `Scan.c`, and the 64-bit conversion additions in `Convert.c`:
+  freestanding libc support used by original HTTP URL/header/status/chunk code;
+  no replacement HTTP parser. Only integer scanf conversions are provided.
 - `Convert.c` and `Math.c`: integer conversion and x87 `pow` compatibility for
   original CSS number parsing. Comparisons against host libc/libm cover consumed
   cases, saturation and edge values; errno/floating-environment conformance and
@@ -81,9 +94,11 @@ contain these changes (some also correct object-type references):
 - `../browser/main.c`: restored original browser chrome with URL editing,
   cursor, Go button, inset page/status areas, default address, launch arguments,
   and `Ready`/editing/error status. Window mouse events are already discrete
-  clicks; repeated clicks remain actionable. Enter/Go currently report that
-  loading is unavailable rather than invoking the deleted native engine.
-  `platform/tcp.*` remains reusable, currently unlinked OS transport integration.
+  clicks; repeated clicks remain actionable. Enter/Go call the original
+  `nh_api_performHTTPRequest`, stream body bytes, show HTTP status/byte counts or
+  transport errors, and release responses. Fetched HTML is not handed to an
+  independently implemented parser or renderer.
+  `platform/tcp.*` now supplies the active OS transport integration.
   `paint/png.*` remains shared with the kernel.
 
 Do not reset the arena while registry objects or cached descriptions are live.
@@ -114,14 +129,15 @@ has been introduced in this pass.
   Registry allocations intentionally remain live until process exit; this is
   not a completed object-lifecycle test.
 - `make browser.bin`: passes APP1 and loader memory checks; code/data/BSS occupy
-  1,788,416 bytes. Original HTML parsing/tree-construction is now reached and
+  1,800,352 bytes. Original HTML parsing/tree-construction is now reached and
   linked, together with its original CSS parsing dependencies.
 - `make os.img` and QEMU: guest loads `UNICODE.DAT`; the window displays
   `Ready` after original core, DOM and HTML document checks complete. The
   restored URL/status interface is tested through keyboard and mouse input.
-- `make check-netzhaut`: eight of ten original entry-path syntax probes pass.
+- `make check-netzhaut`: ten of twelve original entry-path syntax probes pass.
   HTML parser, tree construction, DOM document, CSS tokenization/rule parsing,
-  URL parser, WebIDL interface utility and ECMAScript evaluator probes pass.
+  URL parser, WebIDL interface utility, ECMAScript evaluator, HTTP client and
+  public HTTP API probes pass.
   Layout and renderer still fail on graphics types/dependencies. A syntax pass
   is not proof of full linkage or feature correctness.
 
@@ -134,7 +150,8 @@ has been introduced in this pass.
    scheduling and font dependencies. Do not replace it with native layout.
 3. Adapt original graphics/rendering interfaces. OpenGL types, GLX/loaders,
    Vulkan/volk, FreeType/font libraries and stb dependencies remain unresolved.
-4. Complete original resource loading/networking, original URL integration,
+4. Extend original resource loading/networking beyond current HTTP retrieval,
+   including HTTPS/TLS, redirects and original URL integration,
    ECMAScript bindings/execution, events and navigation lifecycle.
 
 Other stale/missing includes and unfinished upstream algorithms remain visible
@@ -143,3 +160,34 @@ ECMAScript bindings must not be advertised as completed features yet. The
 original HTML parser still contains unfinished branches (including character
 reference/foster-parenting paths that call `exit`); these have not been replaced
 with a simplified parser.
+
+## HTTP networking validation and remaining limits
+
+`make test-nixplorer` runs the original public API and HTTP client against a mock
+kernel transport, with ASan/UBSan. Coverage includes partial writes/fragmented
+reads, interim 1xx responses, Content-Length and chunked framing/extensions/
+trailers, close-delimited and binary bodies, buffered/streaming responses,
+buffered/streamed POST bodies, query targets, omitted fragments, non-default
+ports and case-insensitive header lookup. Failure tests cover malformed/truncated
+bodies, overflows, rejected URLs, DNS/connect/send/read failures, timeouts/tick
+wraparound, callback cancellation, socket release and allocator cleanup.
+Compatibility tests separately exercise the integer scanner, string helpers and
+64-bit number conversion used by the 32-bit guest. The desktop branch of the
+original HTTP client also passes a host syntax check with `_GNU_SOURCE`.
+
+The Nixel path supports HTTP/1.1 over IPv4 using OS DNS or dotted IPv4 literals.
+HTTPS fails before opening a socket because OpenSSL/TLS and a trust store are
+not ported. IPv6 transport and listening/loopback APIs are not implemented; the
+existing API wrappers return unavailable for missing listener symbols. Redirect
+responses are returned to the UI, not followed automatically. The client still
+requests identity content encoding. No cookies/cache/resource scheduling or
+complete arbitrary-page HTML/layout/rendering integration is claimed.
+
+QEMU guest validation also passes against a controlled virtual-network HTTP
+server: two requests to `http://10.0.1.100:8080/test` produce exact `GET /test`
+and `Host: 10.0.1.100:8080` headers. The server sends an interim 100 response,
+then a fragmented chunked 200 response with chunk extensions and trailers. The
+browser displays `HTTP 200 - 78 bytes received` on both requests. This tests
+real guest syscalls and the original parser beyond mocked transport. The guest
+test exposed and fixed IPv4 byte-order, send-return and read-size ABI mismatches;
+regression mocks now enforce those contracts, including multi-segment uploads.

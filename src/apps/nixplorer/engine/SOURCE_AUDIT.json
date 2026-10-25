@@ -835,6 +835,7 @@
   },
   "compatibility_modified": [
     "lib/nh-api/nh-core.h",
+    "lib/nh-api/nh-network.c",
     "lib/nh-core/Util/Debug.h",
     "lib/nh-core/Util/String.c",
     "lib/nh-css/Common/Includes.h",
@@ -926,6 +927,7 @@
     "lib/nh-html/Parser/TreeConstruction.c",
     "lib/nh-html/Parser/TreeConstructionHelper.c",
     "lib/nh-html/Parser/TreeConstructionHelper.h",
+    "lib/nh-network/HTTPClient.c",
     "lib/nh-webidl/Common/Includes.h",
     "lib/nh-webidl/Utils/Global.c",
     "lib/nh-webidl/Utils/Global.h",

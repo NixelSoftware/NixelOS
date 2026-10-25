@@ -1,7 +1,7 @@
 # Netzhaut on Nixel
 
-This is an incomplete source port of Netzhaut. **Page loading and rendering are
-unavailable.** The OS application currently verifies original core/encoding,
+This is an incomplete source port of Netzhaut. **HTTP retrieval works; page
+rendering remains unavailable.** The OS application currently verifies original core/encoding,
 WebIDL parsing, interface-object creation, DOM lists, inherited DOM objects,
 Unicode text storage, and original HTML document/tree construction. There is no native browser-engine fallback.
 
@@ -17,7 +17,10 @@ entry remains its original `TODO`; it is not a working browser launcher.
 
 `NETZHAUT_C` lists the actual sources compiled for Nixel. The original HTML tokenizer,
 tree constructor and parser now execute a document integration check. Full page
-loading and rendering are still not integrated. Linker garbage collection removes unreachable functions;
+processing and rendering are still not integrated. HTTP requests use the supplied
+`nh-network/HTTPClient.c` through the original public API and a Nixel transport
+adapter. Its request builder, response parser, chunked framing and streaming
+callbacks remain the original implementations. Linker garbage collection removes unreachable functions;
 compiling a source does not mean every function in it is linked or operational.
 
 Build and validation:
@@ -27,10 +30,11 @@ Build and validation:
 - `make browser.bin`: build the diagnostic application. It requires
   `UNICODE.DAT` in the guest filesystem to run WebIDL checks.
 - `make test-nixplorer`: sanitizer checks using the production sources and
-  original generated IDL fragments, inherited DOM objects, Unicode, and HTML
-  document/tree-construction output.
+  original generated IDL fragments, inherited DOM objects, Unicode, HTML
+  document/tree-construction output, and the original HTTP client over a mock
+  kernel transport.
 - `make check-netzhaut`: verify original-source preservation and compile the
-  original engine entry paths. Currently eight of ten syntax probes pass;
+  original engine entry paths. Currently ten of twelve syntax probes pass;
   layout and renderer probes still fail on graphics dependencies.
 - `python3 src/apps/nixplorer/tests/check_original.py --sources-only`: check
   preservation of supplied and recovered original source independently.
@@ -46,6 +50,8 @@ verification results and remaining dependencies. Original license notices remain
 intact; see `LICENSE.LGPL`.
 
 The browser chrome is restored: editable URL field, Go button, inset page area,
-and the original `Ready` status. Enter and Go report the current loading limit;
-no network/page rendering is implied. Launch arguments populate the URL field.
+and the original `Ready` status. Enter and Go issue HTTP requests and show the
+status code and received byte count. Response bodies stream through the original client without a homemade
+page renderer. HTTPS/TLS, IPv6 transport, redirects and rendering are still
+unavailable. Launch arguments populate the URL field.
 The status window no longer replaces the browser interface.

@@ -61,6 +61,7 @@ sources = [
     'nh-css/Parser/TokenParser.c', 'nh-css/Main/LayoutEngine.c',
     'nh-renderer/Main/Renderer.c', 'nh-url/Main/URLParser.c',
     'nh-webidl/Utils/Interface.c', 'nh-ecmascript/Interpreter/Evaluation.c',
+    'nh-network/HTTPClient.c', 'nh-api/nh-network.c',
 ]
 failed = []
 print('\nOriginal engine compile probes:')

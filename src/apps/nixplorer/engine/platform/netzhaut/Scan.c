@@ -8,7 +8,7 @@ int nh_nixel_vsscanf(const char *input,const char *format,va_list args) {
     const char *p=input;int assigned=0;
     while(*format) {
         if(space(*format)){while(space(*format))++format;while(space(*p))++p;continue;}
-        if(*format!='%'){if(*p++!=*format++)break;continue;}
+        if(*format!='%'){if(!*p)return assigned?assigned:-1;if(*p++!=*format++)break;continue;}
         ++format;
         if(*format=='%'){if(*p++!='%')break;++format;continue;}
         int suppress=0,width=0,length=0;
@@ -35,11 +35,20 @@ int nh_nixel_vsscanf(const char *input,const char *format,va_list args) {
         if(end==value)return assigned;
         p+=(end-value);
         if(!suppress) {
-            if(length==2)*va_arg(args,unsigned long long *)=number;
-            else if(length==1)*va_arg(args,unsigned long *)=(unsigned long)number;
-            else if(length==-1)*va_arg(args,unsigned short *)=(unsigned short)number;
-            else if(length==-2)*va_arg(args,unsigned char *)=(unsigned char)number;
-            else *va_arg(args,unsigned int *)=(unsigned int)number;
+            int signed_value=conversion=='d'||conversion=='i';
+            if(signed_value) {
+                if(length==2)*va_arg(args,long long *)=(long long)number;
+                else if(length==1)*va_arg(args,long *)=(long)number;
+                else if(length==-1)*va_arg(args,short *)=(short)number;
+                else if(length==-2)*va_arg(args,signed char *)=(signed char)number;
+                else *va_arg(args,int *)=(int)number;
+            } else {
+                if(length==2)*va_arg(args,unsigned long long *)=number;
+                else if(length==1)*va_arg(args,unsigned long *)=(unsigned long)number;
+                else if(length==-1)*va_arg(args,unsigned short *)=(unsigned short)number;
+                else if(length==-2)*va_arg(args,unsigned char *)=(unsigned char)number;
+                else *va_arg(args,unsigned int *)=(unsigned int)number;
+            }
             ++assigned;
         }
     }

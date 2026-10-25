@@ -8,11 +8,13 @@
 #include <stdio.h>
 
 void check_format(void);
+void check_network(void);
 void check_compat(void);
 
 int main(void) {
     check_format();
     check_compat();
+    check_network();
     for (int i = 0; i < 64; ++i) assert(nh_nixel_probe());
     void *p = nh_core_allocate(17);
     assert(p && ((uintptr_t)p % 16) == 0);

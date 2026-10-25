@@ -1,6 +1,8 @@
 #include "../engine/platform/nixel.h"
 #include "../engine/platform/netzhaut/Probe.h"
 #include <string.h>
+#include <stdio.h>
+#include "../engine/lib/nh-api/nh-network.h"
 
 /* Browser chrome and OS input only. Page parsing/layout/rendering belong to
  * the supplied Netzhaut engine; the retired native engine is not a fallback. */
@@ -13,6 +15,8 @@
 static uint32_t window;
 static char address[ADDRESS_CAPACITY] = "home.menifeetech.pp.ua";
 static const char *status = "Ready";
+static char status_buffer[56];
+static char page_info[56]="Enter an HTTP address and choose Go.";
 static unsigned cursor;
 static int address_focused = 1;
 
@@ -54,14 +58,45 @@ static void redraw(void) {
     draw(USER_WINDOW_DRAW_BUTTON,WIDTH-60,23,50,22,GRAY,"Go");
     sunken(10,50,WIDTH-20,HEIGHT-76,WHITE);
     text(20,64,"Nixplorer",0);
-    text(20,88,"Page loading is not available yet.",DARK);
+    text(20,88,page_info,DARK);
+    text(20,112,"Page rendering is not available yet.",DARK);
     sunken(10,HEIGHT-22,WIDTH-20,18,GRAY);
     text(14,HEIGHT-17,status,0);
     (void)sys_window_present(window);
 }
+static size_t receive_body(void *user,const char *data,size_t size) {
+    (void)data;
+    size_t *received=user;
+    if(size>(size_t)-1-*received)return 0;
+    *received+=size;
+    return size;
+}
 static void navigate(void) {
     address_focused=0;
-    status=address[0]?"Page loading is not available yet":"Enter an address";
+    if(!address[0]){status="Enter an address";return;}
+    char url[ADDRESS_CAPACITY+8];
+    if(strstr(address,"://"))snprintf(url,sizeof(url),"%s",address);
+    else snprintf(url,sizeof(url),"http://%s",address);
+    status="Connecting...";
+    strcpy(page_info,"Requesting response...");
+    redraw();
+    size_t received=0;
+    nh_api_HTTPRequest request={0};
+    nh_api_HTTPResponse response;
+    request.url_p=url;
+    request.timeoutSeconds=10;
+    request.write_f=receive_body;
+    request.writeUser_p=&received;
+    int result=nh_api_performHTTPRequest(&request,&response);
+    if(result==0) {
+        snprintf(status_buffer,sizeof(status_buffer),"HTTP %d - %zu bytes received",response.status,received);
+        snprintf(page_info,sizeof(page_info),"Received HTTP %d response (%zu bytes).",response.status,received);
+    } else {
+        snprintf(status_buffer,sizeof(status_buffer),"%.55s",response.error_p[0]?response.error_p:"Network request failed");
+        strcpy(page_info,"The request could not be completed.");
+    }
+    status=status_buffer;
+    nh_api_freeHTTPResponse(&response);
 }
 static void key(uint32_t value) {
     if(value=='\t') {address_focused=!address_focused;status="Ready";return;}

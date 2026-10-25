@@ -93,9 +93,13 @@ static void nh_network_setError(
 static bool nh_network_appendToBuffer(
     nh_network_HTTPBuffer *Buffer_p, const char *data_p, size_t size)
 {
+    if (size > SIZE_MAX - Buffer_p->length - 1) {return false;}
     if (Buffer_p->length + size + 1 > Buffer_p->capacity) {
         size_t capacity = Buffer_p->capacity ? Buffer_p->capacity : 1024;
-        while (Buffer_p->length + size + 1 > capacity) {capacity *= 2;}
+        while (Buffer_p->length + size + 1 > capacity) {
+            if(capacity > SIZE_MAX/2){capacity=Buffer_p->length+size+1;break;}
+            capacity *= 2;
+        }
         char *data2_p = realloc(Buffer_p->data_p, capacity);
         if (!data2_p) {return false;}
         Buffer_p->data_p = data2_p;
@@ -182,6 +186,9 @@ static bool nh_network_parseHTTPURL(
     const char *url_p, bool *tls_p, char *host_p, size_t hostSize, char *port_p, size_t portSize,
     const char **target_pp)
 {
+    /* Preserve the URL parser; reject request-line injection before transport. */
+    for(const unsigned char *p=(const unsigned char *)url_p;*p;++p)
+        if(*p<=0x20 || *p==0x7f)return false;
     const char *rest_p = NULL;
     if (strncasecmp(url_p, "https://", 8) == 0) {
         *tls_p = true;
@@ -205,7 +212,7 @@ static bool nh_network_parseHTTPURL(
         host_p[length] = '\0';
         hostEnd_p++;
     } else {
-        while (*hostEnd_p && *hostEnd_p != ':' && *hostEnd_p != '/' && *hostEnd_p != '?') {hostEnd_p++;}
+        while (*hostEnd_p && *hostEnd_p != ':' && *hostEnd_p != '/' && *hostEnd_p != '?' && *hostEnd_p != '#') {hostEnd_p++;}
         size_t length = (size_t)(hostEnd_p - rest_p);
         if (length == 0 || length >= hostSize) {return false;}
         memcpy(host_p, rest_p, length);
@@ -223,6 +230,8 @@ static bool nh_network_parseHTTPURL(
         hostEnd_p = portEnd_p;
     }
 
+    if(strchr(host_p,'@'))return false; /* Credentials are not implemented. */
+    if(*hostEnd_p && *hostEnd_p!='/' && *hostEnd_p!='?' && *hostEnd_p!='#')return false;
     *target_pp = *hostEnd_p ? hostEnd_p : "/";
     return true;
 }
@@ -489,7 +498,8 @@ static bool nh_network_readChunkedBody(
         if (!nh_network_readLine(Connection_p, line_p, sizeof(line_p))) {return false;}
         char *end_p = NULL;
         unsigned long long size = strtoull(line_p, &end_p, 16);
-        if (end_p == line_p) {return false;}
+        if (end_p == line_p || line_p[0]=='-' || size>SIZE_MAX ||
+            (size==~0ull) || (*end_p && *end_p!=';')) {return false;}
         if (size == 0) {
             // Skip trailers.
             do {
@@ -498,7 +508,7 @@ static bool nh_network_readChunkedBody(
             return true;
         }
         if (!nh_network_readBody(Connection_p, Request_p, Body_p, (size_t)size)) {return false;}
-        if (!nh_network_readLine(Connection_p, line_p, sizeof(line_p))) {return false;}
+        if (!nh_network_readLine(Connection_p, line_p, sizeof(line_p)) || line_p[0]) {return false;}
     }
 }
 
@@ -527,7 +537,10 @@ static bool nh_network_sendRequest(
 
     ok = ok && nh_network_appendToBuffer(&Head, method_p, strlen(method_p));
     ok = ok && nh_network_appendToBuffer(&Head, " ", 1);
-    ok = ok && nh_network_appendToBuffer(&Head, target_p, strlen(target_p));
+    size_t targetLength=0;
+    while(target_p[targetLength] && target_p[targetLength]!='#')++targetLength;
+    if(!targetLength || target_p[0]=='?')ok=ok && nh_network_appendToBuffer(&Head,"/",1);
+    ok = ok && nh_network_appendToBuffer(&Head, target_p, targetLength);
     ok = ok && nh_network_appendToBuffer(&Head, " HTTP/1.1\r\n", 11);
 
     snprintf(line_p, sizeof(line_p), defaultPort ? "Host: %s\r\n" : "Host: %s:%s\r\n", host_p, port_p);
@@ -655,7 +668,9 @@ static bool nh_network_receiveResponse(
         } else if (nh_network_getHTTPHeader(Response_p, "Content-Length", value_p, sizeof(value_p))) {
             char *end_p = NULL;
             unsigned long long length = strtoull(value_p, &end_p, 10);
-            ok = end_p != value_p && nh_network_readBody(Connection_p, Request_p, &Body, (size_t)length);
+            ok = end_p != value_p && !*end_p && value_p[0]!='-' &&
+                length<=SIZE_MAX && length!=~0ull &&
+                nh_network_readBody(Connection_p, Request_p, &Body, (size_t)length);
         } else {
             ok = nh_network_readBody(Connection_p, Request_p, &Body, (size_t)-1);
         }
@@ -697,6 +712,10 @@ int nh_network_performHTTPRequest(
     }
 #endif
     const char *method_p = Request_p->method_p ? Request_p->method_p : "GET";
+    if(!*method_p || strpbrk(method_p," \t\r\n") || Request_p->headerCount<0 ||
+        (Request_p->headerCount && !Request_p->headers_pp)) {
+        nh_network_setError(Response_p,"Invalid request method or headers");return -1;
+    }
     int timeoutSeconds = Request_p->timeoutSeconds > 0 ? Request_p->timeoutSeconds : 30;
 
     nh_network_HTTPConnection *Connection_p = calloc(1, sizeof(nh_network_HTTPConnection));
