@@ -284,6 +284,15 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
             return;
         }
+        case SYS_AUDIO_OPL:
+            if (regs->ebx == 256) {
+                regs->eax = (uint32_t)(audio_owner ? -1 : audio_opl_init());
+                if ((int32_t)regs->eax == 0) audio_owner = paging_current_directory();
+            } else {
+                regs->eax = (uint32_t)(audio_owner == paging_current_directory()
+                    ? audio_opl_write(regs->ebx, regs->ecx) : -1);
+            }
+            return;
         case SYS_AUDIO_INIT:
             regs->eax = (uint32_t)(audio_owner ? -1 : audio_init(regs->ebx));
             if ((int32_t)regs->eax == 0) audio_owner = paging_current_directory();

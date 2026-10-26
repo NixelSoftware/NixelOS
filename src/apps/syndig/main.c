@@ -9,6 +9,8 @@
 #include "upstream/midi.h"
 #include "upstream/channel.h"
 #include "instruments.h"
+#include "opl.h"
+static void silence(void){stop_all_sound();if(opl_enabled)opl_stop_all();}
 
 #define W 600
 #define H 420
@@ -39,7 +41,7 @@ static uint32_t song_index;
 static uint16_t held[128];
 static uint8_t last_note=255;
 static char song_name[96];
-static void song_stop(void) { song_playing=0; song_index=0; played_frames=0; for(int i=0;i<128;i++)held[i]=0; last_note=255; stop_all_sound(); }
+static void song_stop(void) { song_playing=0; song_index=0; played_frames=0; for(int i=0;i<128;i++)held[i]=0; last_note=255; silence(); }
 static void song_start(void) { song_stop(); instruments_reset(); if(song_loaded) song_playing=1; }
 static void song_step(uint32_t frames) {
  if(!song_playing)return;
@@ -52,7 +54,7 @@ static void song_step(uint32_t frames) {
   else if(e->type==0xB0){instruments_control(e->channel,e->note,e->velocity);if(e->note==120||e->note==123)for(int n=0;n<128;n++)held[n]&=~(1u<<e->channel);}
  }
  played_frames=end;
- if(song_index>=song.count && played_frames>song.duration_frames+44100u){song_playing=0;ui_dirty=1;stop_all_sound();}
+ if(song_index>=song.count && played_frames>song.duration_frames+44100u){song_playing=0;ui_dirty=1;silence();}
 }
 
 static const char* names[]={"Square","Saw down","Saw up","Triangle","Sine","Noise","Impulse","Wave sq25","Wave sq50","Wave saw dn","Wave saw up","Wave tri","Wave sine","Wave noise","Double pulse"};
@@ -98,6 +100,7 @@ static void draw(void) {
   control(16,135,"Release",release);
   label(160,137,"Click a key to play or release");
   label(16,181,"Keyboard: A W S E D F T G Y H U J K | Space: release");
+  label(16,197,opl_enabled?"Synth: hardware OPL (9 voices)":"Synth: software");
  }
  rect(160,171,72,8,BG);
  number((int)(played_frames/44100u),s);label(160,171,s);
@@ -131,22 +134,24 @@ static void draw(void) {
  sys_window_present(wh);
  ui_dirty=0;last_draw_tick=played_frames/VISUAL_FRAME_SAMPLES;
 }
-static void set_program(int p){if(p<0)p=14;if(p>14)p=0;program=p;set_oscillator_type(MANUAL_CHANNEL,(oscillator_type)p);}
+static void set_program(int p){if(p<0)p=14;if(p>14)p=0;program=p;if(opl_enabled)opl_program(MANUAL_CHANNEL,p*8);set_oscillator_type(MANUAL_CHANNEL,(oscillator_type)p);}
 static void set_controls(void){
  instruments_volume(volume);
  ch_config[MANUAL_CHANNEL].vol=volume/127.0f;
+ if(opl_enabled)opl_gain(MANUAL_CHANNEL,volume/127.0f);
  set_envelope_attack(MANUAL_CHANNEL,(uint16_t)(attack*15));set_envelope_decay(MANUAL_CHANNEL,(uint16_t)(decay*15));
  set_envelope_sustain(MANUAL_CHANNEL,sustain/127.0f);set_envelope_release(MANUAL_CHANNEL,(uint16_t)(release*15));
 }
-static void note_on(int note){if(active_note>=0)stop_note(MANUAL_CHANNEL,(uint8_t)active_note);active_note=note;play_note(MANUAL_CHANNEL,(uint8_t)note,0.85f);}
-static void note_off(void){if(active_note>=0){stop_note(MANUAL_CHANNEL,(uint8_t)active_note);active_note=-1;}}
+static void manual_stop(uint8_t note){if(opl_enabled)opl_note_off(MANUAL_CHANNEL,note);else stop_note(MANUAL_CHANNEL,note);}
+static void note_on(int note){if(active_note>=0)manual_stop((uint8_t)active_note);active_note=note;if(opl_enabled)opl_note_on(MANUAL_CHANNEL,(uint8_t)note,0.85f);else play_note(MANUAL_CHANNEL,(uint8_t)note,0.85f);}
+static void note_off(void){if(active_note>=0){manual_stop((uint8_t)active_note);active_note=-1;}}
 static void mouse(int x,int y,int buttons){
  static int previous_buttons;
  int pressed=buttons & ~previous_buttons;previous_buttons=buttons;
  if(!(pressed&1))return;
  if(y>=155&&y<179&&x>=380&&x<580){if(x<475){if(song_playing)song_playing=0;else if(song_index>=song.count)song_start();else song_playing=song_loaded;}else song_start();}
  else if(y>=211&&y<291&&x>=16&&x<16+13*43){int note=60+(x-16)/43;if(note==active_note)note_off();else note_on(note);}
- else if(y>=39&&y<65){if(x>=108&&x<138)set_program(program-1);else if(x>=330&&x<360)set_program(program+1);else if(x>=410&&x<510){note_off();stop_all_sound();}}
+ else if(y>=39&&y<65){if(x>=108&&x<138)set_program(program-1);else if(x>=330&&x<360)set_program(program+1);else if(x>=410&&x<510){note_off();silence();}}
  else if(x>=16&&x<530&&((y>=101&&y<117)||(y>=153&&y<169))){
   int *v=0;int sx=0;
   if(y>=153){v=&release;sx=16;}
@@ -194,8 +199,10 @@ void user_main(const char *args){
  user_window_desc_t d={0};d.x=120;d.y=90;d.width=W;d.height=H;
  const char *title="Syndig";for(int i=0;title[i];i++)d.title[i]=title[i];
  int32_t h=sys_window_create(&d);if(h<0)return;wh=(uint32_t)h;
+ opl_enabled=sys_audio_opl(256,0)==0;
  init_buffer();init_polyphony();init_envelopes();init_oscillators();init_midi();init_lanes();instruments_reset();set_program(4);set_controls();if(song_loaded)song_start();
- audio_ready=sys_audio_init(44100)>=0;
+ audio_ready=opl_enabled || sys_audio_init(44100)>=0;
+ uint32_t opl_tick=sys_get_ticks();
  draw();
  while(!close_requested){
   user_window_event_t e;
@@ -206,9 +213,14 @@ void user_main(const char *args){
    if(e.type==USER_WINDOW_EVENT_KEY)key(e.key);
   }
   if(close_requested)break;
-  if(audio_ready){int r=render_audio();if(r<0){audio_ready=0;}else if(r==0)sys_yield();}
+  if(audio_ready && opl_enabled){
+   uint32_t now=sys_get_ticks(),elapsed=now-opl_tick;opl_tick=now;
+   if(elapsed)song_step(elapsed*441u);
+   sys_yield();
+  }
+  else if(audio_ready){int r=render_audio();if(r<0){audio_ready=0;}else if(r==0)sys_yield();}
   else sys_yield();
   if(ui_dirty || (song_loaded && played_frames/VISUAL_FRAME_SAMPLES!=last_draw_tick))draw();
  }
- note_off();stop_all_sound();if(audio_ready)sys_audio_shutdown();sys_window_close(wh);
+ note_off();silence();if(audio_ready)sys_audio_shutdown();sys_window_close(wh);
 }

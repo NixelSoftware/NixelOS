@@ -1,6 +1,7 @@
 /* Lightweight GM-family approximations using Syndig's native oscillators.
  * Program numbers are zero-based. No external sample bank is required. */
 #include "instruments.h"
+#include "opl.h"
 #include "upstream/channel.h"
 #include "upstream/polyphony.h"
 
@@ -39,6 +40,7 @@ static void mix(uint8_t ch) {
     channel_t *c = &channels[ch];
     ch_config[ch].vol = c->gain * (master / 127.0f) *
                         (c->volume / 127.0f) * (c->expression / 127.0f);
+    if(opl_enabled) opl_gain(ch,ch_config[ch].vol);
     ch_config[ch].vol_left = c->pan <= 64 ? 1.0f : (127-c->pan)/63.0f;
     ch_config[ch].vol_right = c->pan >= 64 ? 1.0f : c->pan/64.0f;
 }
@@ -54,6 +56,7 @@ static void apply(uint8_t ch, const preset_t *p, uint8_t variant) {
 void instruments_program(uint8_t ch, uint8_t program) {
     if (ch >= 16 || program > 127) return;
     channels[ch].program = program;
+    if(opl_enabled)opl_program(ch,program);
     if (ch != 9) apply(ch, &families[program / 8], program % 8);
 }
 void instruments_volume(uint8_t value) {
@@ -63,6 +66,7 @@ void instruments_volume(uint8_t value) {
 void instruments_reset(void) {
     for (uint8_t ch=0; ch<16; ch++) {
         channels[ch] = (channel_t){0};
+        if(opl_enabled)opl_program(ch,0);
         channels[ch].volume=100; channels[ch].expression=127; channels[ch].pan=64;
         apply(ch, &families[ch == 9 ? 14 : 0], 0);
     }
@@ -81,18 +85,19 @@ void instruments_note_on(uint8_t ch, uint8_t note, uint8_t velocity) {
         apply(ch,&drum,0);
     }
     channels[ch].down[note]=1; channels[ch].deferred[note]=0;
-    play_note(ch,note,velocity/127.0f);
+    if(opl_enabled)opl_note_on(ch,note,velocity/127.0f);
+    else play_note(ch,note,velocity/127.0f);
 }
 void instruments_note_off(uint8_t ch, uint8_t note) {
     if (ch>=16 || note>127) return;
     channels[ch].down[note]=0;
     if (channels[ch].sustain && ch!=9) channels[ch].deferred[note]=1;
-    else stop_note(ch,note);
+    else {if(opl_enabled)opl_note_off(ch,note);else stop_note(ch,note);}
 }
 static void pedal_up(uint8_t ch) {
     channels[ch].sustain=0;
     for (int n=0;n<128;n++) if (channels[ch].deferred[n]) {
-        if (!channels[ch].down[n]) stop_note(ch,n);
+        if (!channels[ch].down[n]) {if(opl_enabled)opl_note_off(ch,n);else stop_note(ch,n);}
         channels[ch].deferred[n]=0;
     }
 }
@@ -105,7 +110,7 @@ void instruments_control(uint8_t ch, uint8_t cc, uint8_t value) {
     case 11: c->expression=value; mix(ch); break;
     case 64: if (value<64) pedal_up(ch); else c->sustain=1; break;
     case 120:
-        stop_channel_sound(ch);
+        if(opl_enabled)opl_stop_channel(ch);else stop_channel_sound(ch);
         for(int n=0;n<128;n++) c->down[n]=c->deferred[n]=0;
         break;
     case 121:

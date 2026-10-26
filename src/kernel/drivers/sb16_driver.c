@@ -257,3 +257,31 @@ void sb16_interrupt(void) {
     }
     outb(0x20, 0x20);
 }
+
+/* OPL2-compatible mode also works on an SB16's OPL3. Use ISA I/O reads
+ * for the address/data recovery delays (6 and 35 reads respectively). */
+void sb16_opl_write(uint8_t reg, uint8_t value) {
+    uint32_t flags = irq_save();
+    outb(0x388, reg);
+    for (int i = 0; i < 6; i++) (void)inb(0x388);
+    outb(0x389, value);
+    for (int i = 0; i < 35; i++) (void)inb(0x388);
+    irq_restore(flags);
+}
+
+int32_t sb16_opl_init(void) {
+    MUTEX_GUARD(audio_mutex);
+    if (opened || reset() < 0) return -1;
+    sb16_opl_write(4, 0x60); sb16_opl_write(4, 0x80);
+    uint8_t before = inb(0x388);
+    sb16_opl_write(2, 255); sb16_opl_write(4, 0x21);
+    /* More than 80 us on an ISA bus; bounded even with no device. */
+    for (int i = 0; i < 200; i++) (void)inb(0x388);
+    uint8_t after = inb(0x388);
+    sb16_opl_write(4, 0x60); sb16_opl_write(4, 0x80);
+    if ((before & 0xE0) || (after & 0xE0) != 0xC0) return -1;
+    for (int i = 0x20; i < 256; i++) sb16_opl_write(i, 0);
+    sb16_opl_write(1, 0x20); /* waveform select enabled */
+    sb16_opl_write(8, 0);
+    return 0;
+}

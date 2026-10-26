@@ -76,7 +76,7 @@ Host checks compare cached dragging against full composition pixel-for-pixel, in
 
 ## QEMU configuration
 
-The supplied QEMU command uses [TCG software emulation by default](https://www.qemu.org/docs/master/system/invocation.html). `make run` retains TCG for portability and configures one CPU. On Linux with an accessible `/dev/kvm`, use `make run QEMU_ACCEL=kvm`. The kernel uses one processor, so extra `-smp` CPUs will not distribute work. These workloads fit within 128 MiB. The benchmark environment had no `/dev/kvm`; KVM performance and the user's host backend have not been measured.
+`make run` automatically prefers KVM on Linux/x86 when `/dev/kvm` is readable and writable, with [TCG software emulation as a fallback](https://www.qemu.org/docs/master/system/invocation.html). Other hosts use TCG. Use `make run QEMU_ACCEL=kvm` to require KVM or `make run QEMU_ACCEL=tcg` to reproduce software-emulation measurements. The kernel uses one processor, so extra `-smp` CPUs will not distribute work. These workloads fit within 128 MiB. The benchmark environment had no `/dev/kvm`; KVM performance and the user's host backend have not been measured.
 
 ## Input progress during playback
 

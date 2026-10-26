@@ -60,13 +60,22 @@ Install GNU Make, GCC, NASM, binutils, Python, and QEMU, then run `make` to buil
 `os.img` or `make run` to build and start it in QEMU. Set
 `DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
 remove generated build artifacts.
+
+`make run` automatically prefers KVM hardware acceleration on Linux/x86 when
+`/dev/kvm` is readable and writable, with TCG software emulation as a fallback.
+Other hosts use TCG. To require KVM, run `make run QEMU_ACCEL=kvm`; to force
+software emulation for debugging, use `make run QEMU_ACCEL=tcg`.
+The kernel currently uses one CPU, so increasing QEMU's CPU count does not
+distribute guest work. RAM remains configurable with `QEMU_MEMORY=256M` if an
+application needs more than the default 128 MiB.
+
 # Makefile arguments
 
 | Argument | Value | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `DEBUG_SUBSYSTEMS` | `1` | `0` | Enable verbose subsystem traces |
 | `ENABLE_OOBE` | `any` | `0` | Enable the Work In Progress OOBE |
-| `QEMU_ACCEL` | `any` | `tcg` | Set the mode of acceleration for QEMU |
+| `QEMU_ACCEL` | `auto` or accelerator name | `auto` | Prefer accessible Linux/x86 KVM with TCG fallback, or require the specified accelerator |
 | `QEMU_DISPLAY` | `any` | `sdl` | Display mode to use in QEMU |
 | `QEMU_NETCARD` | `any` | `e1000` | Set the network adapter emulated in QEMU |
 | `QEMU_MEMORY` | `any` | `128M` | Set the amount of RAM in QEMU |

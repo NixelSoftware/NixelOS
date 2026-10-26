@@ -8,7 +8,7 @@ OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
 
 # Customizable QEMU settings
-QEMU_ACCEL ?= tcg
+QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 128M
 QEMU_DHCP ?= 10.0.1.0/24,dhcpstart=10.0.1.227
@@ -27,6 +27,17 @@ ifeq ($(OS),Windows_NT)
   CC := i686-elf-gcc
   LD := i686-elf-ld
   OBJCOPY := i686-elf-objcopy
+endif
+
+ifeq ($(QEMU_ACCEL),auto)
+  QEMU_KVM_AVAILABLE := $(shell $(PYTHON) -c "import os,platform; print(int(platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64', 'i386', 'i686') and os.access('/dev/kvm', os.R_OK | os.W_OK)))")
+  ifeq ($(QEMU_KVM_AVAILABLE),1)
+    QEMU_ACCEL_FLAGS := -accel kvm -accel tcg
+  else
+    QEMU_ACCEL_FLAGS := -accel tcg
+  endif
+else
+  QEMU_ACCEL_FLAGS := -accel $(QEMU_ACCEL)
 endif
 
 NASM_FORMAT := elf32
@@ -120,6 +131,7 @@ SYNDIG_C := \
     $(SYNDIG_DIR)/main.c \
     $(SYNDIG_DIR)/midi_file.c \
     $(SYNDIG_DIR)/instruments.c \
+    $(SYNDIG_DIR)/opl.c \
     $(SYNDIG_DIR)/compat/runtime.c \
     $(SYNDIG_DIR)/compat/div64.c \
     $(SYNDIG_DIR)/upstream/buffer.c \
@@ -196,7 +208,7 @@ os.img: $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin sr
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) -accel $(QEMU_ACCEL) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP) -device $(QEMU_NETCARD),netdev=net0 -display $(QEMU_DISPLAY) -device sb16 -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
+	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP) -device $(QEMU_NETCARD),netdev=net0 -display $(QEMU_DISPLAY) -device sb16 -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) syndig browser fastfetch'.split()]]"
