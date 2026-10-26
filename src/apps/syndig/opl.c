@@ -13,7 +13,16 @@ static void wr(uint8_t reg,uint8_t value){sys_audio_opl(reg,value);}
 static void level(int v){
  float gain=gains[voices[v].ch]*voices[v].velocity/127.0f;
  if(gain>1)gain=1;if(gain<0)gain=0;
- wr(0x43+operators[v],(uint8_t)(63-gain*63));
+ /* TL is attenuation in 0.75 dB steps, not a linear amplitude slider.
+  * Each step multiplies amplitude by 10^(-0.75/20). Round to the
+  * nearest step; the half-step threshold is 10^(-0.375/20). */
+ uint8_t attenuation=0;
+ float amplitude=1.0f;
+ while(attenuation<63 && gain<amplitude*0.95774524f){
+  amplitude*=0.91727594f;
+  attenuation++;
+ }
+ wr(0x43+operators[v],attenuation);
 }
 void opl_gain(uint8_t ch,float gain){
  if(ch>16)return;gains[ch]=gain;

@@ -40,7 +40,9 @@ static void mix(uint8_t ch) {
     channel_t *c = &channels[ch];
     ch_config[ch].vol = c->gain * (master / 127.0f) *
                         (c->volume / 127.0f) * (c->expression / 127.0f);
-    if(opl_enabled) opl_gain(ch,ch_config[ch].vol);
+    /* Software preset gains balance oscillator waveforms, not FM patches. */
+    if(opl_enabled) opl_gain(ch,(master / 127.0f) *
+                            (c->volume / 127.0f) * (c->expression / 127.0f));
     ch_config[ch].vol_left = c->pan <= 64 ? 1.0f : (127-c->pan)/63.0f;
     ch_config[ch].vol_right = c->pan >= 64 ? 1.0f : c->pan/64.0f;
 }

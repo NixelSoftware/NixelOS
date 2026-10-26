@@ -293,6 +293,13 @@ int32_t sb16_opl_init(void) {
     for (int i = 0x20; i < 256; i++) sb16_opl_write(i, 0);
     sb16_opl_write(1, 0x20); /* waveform select enabled */
     sb16_opl_write(8, 0);
+    /* SB16 master L/R and FM L/R: five-bit volume in bits 7:3.
+     * Use unity mixer levels; the synth controls volume via OPL TL.
+     * QEMU's separate AdLib device bypasses this SB16 mixer. */
+    outb(0x224, 0x30); outb(0x225, 0xF8);
+    outb(0x224, 0x31); outb(0x225, 0xF8);
+    outb(0x224, 0x34); outb(0x225, 0xF8);
+    outb(0x224, 0x35); outb(0x225, 0xF8);
     debug_print("[SB16] OPL available at port 0x388 (OPL2-compatible mode)\n");
     return 0;
 }
