@@ -29,6 +29,7 @@ static const pci_net_match_t supported_cards[] = {
     { 0x1022, 0x2000, "AMD PCNet-PCI II (Am79C970A)", 0 },
     { 0x1022, 0x2001, "AMD PCNet-FAST III (Am79C973)", 0 },
 
+    // Broadcom B44
     { 0x14E4, 0x4401, "Broadcom BCM4401 Fast Ethernet", 3 },
     { 0x14E4, 0x170C, "Broadcom BCM4401-B0 Fast Ethernet", 3 },
     { 0x14E4, 0x4402, "Broadcom BCM4401-B1 Fast Ethernet", 3 },
