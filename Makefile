@@ -15,6 +15,9 @@ QEMU_DHCP ?= 10.0.1.0/24,dhcpstart=10.0.1.227
 QEMU_DISPLAY ?= sdl
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_EXTRA ?=
+# QEMU's SB16 emulates PCM only; AdLib supplies the OPL2 ports at 0x388.
+QEMU_OPL ?= 1
+QEMU_OPL_FLAGS = $(if $(filter 1,$(QEMU_OPL)),-device adlib,)
 
 ENABLE_OOBE ?= 0
 DEBUG_SUBSYSTEMS ?= 0
@@ -208,7 +211,7 @@ os.img: $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin sr
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP) -device $(QEMU_NETCARD),netdev=net0 -display $(QEMU_DISPLAY) -device sb16 -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
+	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP) -device $(QEMU_NETCARD),netdev=net0 -display $(QEMU_DISPLAY) -device sb16 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) syndig browser fastfetch'.split()]]"

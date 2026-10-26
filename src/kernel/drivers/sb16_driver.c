@@ -271,7 +271,14 @@ void sb16_opl_write(uint8_t reg, uint8_t value) {
 
 int32_t sb16_opl_init(void) {
     MUTEX_GUARD(audio_mutex);
-    if (opened || reset() < 0) return -1;
+    if (opened) {
+        debug_print("[SB16] OPL probe skipped: PCM device busy\n");
+        return -1;
+    }
+    if (reset() < 0) {
+        debug_print("[SB16] OPL unavailable: sound card not responding\n");
+        return -1;
+    }
     sb16_opl_write(4, 0x60); sb16_opl_write(4, 0x80);
     uint8_t before = inb(0x388);
     sb16_opl_write(2, 255); sb16_opl_write(4, 0x21);
@@ -279,9 +286,13 @@ int32_t sb16_opl_init(void) {
     for (int i = 0; i < 200; i++) (void)inb(0x388);
     uint8_t after = inb(0x388);
     sb16_opl_write(4, 0x60); sb16_opl_write(4, 0x80);
-    if ((before & 0xE0) || (after & 0xE0) != 0xC0) return -1;
+    if ((before & 0xE0) || (after & 0xE0) != 0xC0) {
+        debug_print("[SB16] OPL unavailable: timer probe failed at port 0x388\n");
+        return -1;
+    }
     for (int i = 0x20; i < 256; i++) sb16_opl_write(i, 0);
     sb16_opl_write(1, 0x20); /* waveform select enabled */
     sb16_opl_write(8, 0);
+    debug_print("[SB16] OPL available at port 0x388 (OPL2-compatible mode)\n");
     return 0;
 }
