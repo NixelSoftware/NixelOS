@@ -303,3 +303,23 @@ int32_t sb16_opl_init(void) {
     debug_print("[SB16] OPL available at port 0x388 (OPL2-compatible mode)\n");
     return 0;
 }
+
+int32_t sb16_probe(void) {
+    if (reset() < 0 || dsp_write(0xE1) < 0) return -1;
+    uint8_t major = 0;
+    for (uint32_t n = 0; n < 2; n++) {
+        uint32_t i;
+        for (i = 0; i < 100000u && !(inb(0x22E) & 0x80); i++) { }
+        if (i == 100000u) return -1;
+        uint8_t value = inb(0x22A);
+        if (!n) major = value;
+    }
+    return major >= 4 ? 0 : -1;
+}
+void sb16_set_volume(uint32_t volume) {
+    uint32_t flags = irq_save();
+    uint8_t level = (volume * 31u / 100u) << 3;
+    outb(0x224, 0x30); outb(0x225, level);
+    outb(0x224, 0x31); outb(0x225, level);
+    irq_restore(flags);
+}

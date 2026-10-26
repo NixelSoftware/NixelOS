@@ -1,3 +1,4 @@
+#include "../../../kernel/hal/audio.h"
 #include "../../../kernel/mutex.h"
 #include "wm.h"
 #include "start.h"
@@ -407,6 +408,57 @@ uint8_t wm_render_drag(void) {
 }
 
 
+static int volume_open, volume_drag, volume_busy;
+#define VOLUME_X (SCREEN_WIDTH - 270)
+#define VOLUME_Y (WM_TASKBAR_Y - 174)
+static void volume_draw(void) {
+    if (!volume_open) return;
+    int x = VOLUME_X, y = VOLUME_Y;
+    wm_api->graphics.draw_button(x, y, 264, 170, "", 0);
+    char label[] = "Volume: 100%";
+    uint32_t v = audio_get_volume();
+    label[8] = v == 100 ? '1' : ' '; label[9] = v >= 10 ? '0' + v / 10 % 10 : ' ';
+    label[10] = '0' + v % 10;
+    wm_api->graphics.draw_string(x + 12, y + 12, label, COLOR_BLACK);
+    wm_api->graphics.fill_rect(x + 16, y + 42, 200, 4, COLOR_DARK_GRAY);
+    wm_api->graphics.draw_button(x + 12 + v * 2, y + 34, 9, 20, "", 0);
+    wm_api->graphics.draw_button(x + 222, y + 30, 34, 26, v ? "M" : "U", !v);
+    for (uint32_t i = 0; i < audio_device_count(); i++)
+        wm_api->graphics.draw_button(x + 12, y + 64 + i * 26, 240, 24,
+            audio_device_name(i), audio_device_selected() == i);
+    wm_api->graphics.draw_string(x + 12, y + 146,
+        volume_busy ? "Stop playback to switch" : "Output device", COLOR_BLACK);
+}
+static int volume_mouse(int x, int y, int left, int down) {
+    if (!left) volume_drag = 0;
+    if (down && x >= SCREEN_WIDTH - 104 && x < SCREEN_WIDTH - 82 &&
+        y >= WM_TASKBAR_Y + 5) {
+        volume_open = !volume_open; volume_busy = 0; start_menu_close(); return 1;
+    }
+    if (!volume_open) return 0;
+    int inside = x >= VOLUME_X && x < VOLUME_X + 264 &&
+        y >= VOLUME_Y && y < VOLUME_Y + 170;
+    if (down && !inside) { volume_open = 0; request_redraw(); return 0; }
+    if (down && inside) {
+        if (y >= VOLUME_Y + 30 && y < VOLUME_Y + 56) {
+            if (x >= VOLUME_X + 222) {
+                static uint32_t saved = 100;
+                uint32_t v = audio_get_volume();
+                if (v) { saved = v; audio_set_volume(0); }
+                else audio_set_volume(saved);
+            } else volume_drag = 1;
+        }
+        for (uint32_t i = 0; i < audio_device_count(); i++)
+            if (y >= VOLUME_Y + 64 + (int)i * 26 && y < VOLUME_Y + 88 + (int)i * 26)
+                volume_busy = audio_device_select(i) < 0;
+    }
+    if (volume_drag && left) {
+        int value = (x - VOLUME_X - 16) / 2;
+        audio_set_volume(value < 0 ? 0 : value > 100 ? 100 : value);
+    }
+    return inside || volume_drag;
+}
+
 void wm_draw_taskbar(uint8_t start_menu_open) {
     MUTEX_GUARD(kernel_mutex);
     if (!wm_api) return;
@@ -464,6 +516,11 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
         }
     }
 
+    if (!audio_get_volume()) {
+        for (int i = 0; i < 16; i++)
+            wm_api->graphics.put_pixel(sound_x + i, sound_y + 15 - i, COLOR_RED);
+    }
+
     uint8_t net_ok = sys_net_is_ready();
     const uint8_t (*net_sprite)[NET_ICON_W] = net_ok ? icon_net_ok : icon_net_err;
     //const int icon_x = tray_x + 4;
@@ -486,6 +543,7 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     //wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, "12:00", COLOR_BLACK);
     wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, time_str, COLOR_BLACK);
 
+    volume_draw();
     if (!start_menu_open) return;
     start_menu_draw();
     /*
@@ -900,6 +958,12 @@ static void handle_mouse_event(const os_input_event_t* event) {
     previous_right = right;
     uint8_t left = event->mouse_buttons & 1;
     uint8_t click_down = left && !previous_left_button;
+    if (volume_mouse(mouse_x, mouse_y, left, click_down)) {
+        if (wm_api->input.move_cursor) wm_api->input.move_cursor(mouse_x, mouse_y, 1);
+        previous_left_button = left;
+        request_redraw();
+        return;
+    }
     uint8_t desktop_right = right_down && mouse_y < WM_TASKBAR_Y && !start_menu_is_open();
     if (desktop_right) {
         for (int i = 0; i < WM_MAX_WINDOWS; i++) {
@@ -1114,6 +1178,11 @@ static void handle_mouse_event(const os_input_event_t* event) {
 
 static void handle_key_event(const os_input_event_t* event) {
     uint8_t scancode = event->scancode;
+    if (volume_open && scancode == 0x01) {
+        volume_open = volume_drag = 0;
+        request_redraw();
+        return;
+    }
     if (scancode == 0x58) {
         if (wm_api->graphics.capture_screenshot) wm_api->graphics.capture_screenshot();
         request_redraw();

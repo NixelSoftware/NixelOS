@@ -2,6 +2,8 @@
 #define SB16_DRIVER_H
 #include "../types.h"
 #define SB16_BUFFER_SIZE 16384u
+int32_t sb16_probe(void);
+void sb16_set_volume(uint32_t volume);
 int32_t sb16_opl_init(void);
 void sb16_opl_write(uint8_t reg, uint8_t value);
 int32_t sb16_init(uint32_t sample_rate);

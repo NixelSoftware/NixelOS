@@ -16,8 +16,15 @@ typedef struct {
     void    (*service)(void);
     void    (*shutdown)(void);
     void    (*interrupt)(void);
+    void    (*set_volume)(uint32_t volume);
 } audio_driver_ops_t;
 
+uint32_t audio_device_count(void);
+const char* audio_device_name(uint32_t index);
+uint32_t audio_device_selected(void);
+int32_t audio_device_select(uint32_t index);
+uint32_t audio_get_volume(void);
+void audio_set_volume(uint32_t volume);
 void     audio_hal_init(void);
 void     audio_hal_register(const audio_driver_ops_t* driver);
 

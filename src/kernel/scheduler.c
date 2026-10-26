@@ -211,7 +211,9 @@ uint64_t scheduler_clock(void) {
     last_clock = now;
     return now;
 }
+extern void pc_speaker_tick(void);
 void scheduler_irq_tick(void) {
+    pc_speaker_tick();
     if (!started) { frame_timer++; return; }
     pit_epoch += 1000000u;
     uint64_t now = scheduler_clock();
