@@ -55,7 +55,7 @@ endif
 CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) \
           -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
           -mno-stack-arg-probe -mno-sse -mno-sse2 -mno-mmx \
-          -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL)
+          -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL) -Isrc/include
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
