@@ -160,7 +160,10 @@ static int32_t init(uint32_t rate) {
     static const uint16_t formats[]={0x0500,0x4300,0x0200,0x4100,0x0a00,0x4000,0};
     if(!ready || opened) return -1;
     uint32_t i; for(i=0;i<7 && rates[i]!=rate;i++) {}
-    if(i==7 || !(pcm_caps&(1u<<i)) || !(pcm_caps&(1u<<17))) return -1;
+    if(i==7 || !(pcm_caps&(1u<<i)) || !(pcm_caps&(1u<<17))) {
+        debug_print("[HDA] Unsupported PCM rate/caps: rate=");debug_hex(rate);
+        debug_print(" caps=");debug_hex(pcm_caps);debug_print("\n");return -1;
+    }
     if(!samples[0]) {
         for(uint32_t j=0;j<SLOTS;j++) {
             samples[j]=(int16_t*)paging_frame_alloc();
@@ -173,7 +176,9 @@ static int32_t init(uint32_t rate) {
     failed=0; stop(); if(failed) return -1;
     w8(stream,1); if(wait(stream,1,1)<0) return -1;
     w8(stream,0); if(wait(stream,1,0)<0) return -1;
-    poll_limit=((BLOCK/4)*24000u/rate)*1000u;
+    /* A delayed worker can still account for completions until a complete
+     * cyclic ring has elapsed. One block (23 ms at 44.1 kHz) is not a fault. */
+    poll_limit=((BLOCK/4)*24000u/rate)*1000u*SLOTS;
     format=formats[i]|0x11; /* signed 16-bit, two channels */
     if(set(dac,0x200,format)<0 || set(dac,0x706,0x10)<0) return -1;
     for(i=0;i<SLOTS;i++) {
@@ -188,12 +193,12 @@ static int32_t init(uint32_t rate) {
 static void service(void) {
     if(!opened || !running) return;
     uint32_t now=r32(0x30); /* WALLCLK: 24 MHz, wraps naturally. */
-    if(now-last_poll>=poll_limit) { failed=1; stop(); return; }
+    if(now-last_poll>=poll_limit) { debug_print("[HDA] DMA service timeout: gap=");debug_hex(now-last_poll);debug_print(" limit=");debug_hex(poll_limit);debug_print("\n"); failed=1; stop(); return; }
     last_poll=now;
     uint8_t status=r8(stream+3);
-    if(status&0x18) { failed=1; stop(); return; }
+    if(status&0x18) { debug_print("[HDA] DMA FIFO/descriptor error: status=");debug_hex(status);debug_print("\n"); failed=1; stop(); return; }
     uint32_t position=r32(stream+4);
-    if(position>=SLOTS*BLOCK) { failed=1; stop(); return; }
+    if(position>=SLOTS*BLOCK) { debug_print("[HDA] Invalid DMA position: ");debug_hex(position);debug_print("\n"); failed=1; stop(); return; }
     uint32_t current=position/BLOCK;
     while(queued && head!=current) {
         for(uint32_t j=0;j<BLOCK/2;j++) samples[head][j]=0;

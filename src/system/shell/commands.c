@@ -260,6 +260,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " chmod <octal> <path>  Set permissions\n"
                     " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
+                    " com0            Follow kernel serial/audio logs\n"
                     " ls [path]       List directory or file (exact case)\n"
                     " cd [dir]        Change directory (default /)\n"
                     " mkdir <dir>     Create a directory\n"

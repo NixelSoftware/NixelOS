@@ -4,6 +4,7 @@
 #include "../types.h"
 
 void serial_init(void);
+int32_t serial_log_read(char* output, uint32_t capacity, uint32_t* cursor, uint32_t* lost);
 int serial_start_async(void);
 /* Flush and return to bounded polling before panic/shutdown stops scheduling. */
 void serial_enter_sync(void);

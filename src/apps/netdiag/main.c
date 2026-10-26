@@ -41,7 +41,7 @@ void user_main(void) {
     }
     print("Network driver diagnostics\n  IO port base: 0x");
     print_hex(d.io_base, 2);
-    print(" (0 is normal for MMIO adapters)\n  State: ");
+    print("\n  State: ");
     print(ready ? "ready\n" : "not ready\n");
     print("  Init failure: ");
     print_u32(d.init_failure);

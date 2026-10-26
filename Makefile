@@ -116,7 +116,7 @@ KERNEL_HEADERS := src/kernel/startup_trace.h src/kernel/task.h src/kernel/schedu
 $(KERNEL_OBJ): $(KERNEL_HEADERS)
 
 # Single-main applications; each MUST provide src/apps/<name>/entry.asm.
-STANDARD_APPS := files mines calc hexview floppy_debug ping netdiag http_test curl \
+STANDARD_APPS := files mines calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
 APPS := $(STANDARD_APPS) syndig
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin

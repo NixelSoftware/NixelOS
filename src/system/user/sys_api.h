@@ -45,6 +45,8 @@ enum {
     SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
     SYS_REBOOT = 35, /* requests a kernel managed reboot */
     SYS_DETACH = 36, /* reparent current process to PID 0; releases terminal wait */
+    SYS_SERIAL_LOG_READ = 44, /* EBX: output, ECX: capacity (1..256), EDX: cursor */
+    SYS_AUDIO_DEVICE_NAME = 43, /* EBX: output string, ECX: capacity (1..64); selected HAL device */
     SYS_AUDIO_OPL = 42, /* EBX=256: probe/acquire HAL OPL; otherwise EBX=register, ECX=value */
     SYS_GETPID = 37,
     SYS_GETPPID = 38,
@@ -52,6 +54,15 @@ enum {
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
     SYS_APP_LAUNCH = 40 /* EBX: executable path, ECX: arguments; starts detached */
 };
+
+typedef struct { uint32_t next, lost; } user_serial_cursor_t;
+static inline int32_t sys_serial_log_read(char* output, uint32_t capacity, user_serial_cursor_t* cursor) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_SERIAL_LOG_READ), "b"(output), "c"(capacity), "d"(cursor)
+        : "memory", "cc");
+    return result;
+}
 
 static inline int32_t sys_file_pick_result(uint32_t token, const char* path) {
     int32_t result;
@@ -86,6 +97,13 @@ static inline int32_t sys_getppid(void) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_GETPPID)
                       : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_audio_device_name(char* name, uint32_t capacity) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_AUDIO_DEVICE_NAME), "b"(name), "c"(capacity)
+        : "edx", "memory", "cc");
     return result;
 }
 static inline int32_t sys_audio_opl(uint32_t reg, uint32_t value) {

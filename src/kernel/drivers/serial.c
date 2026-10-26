@@ -1,10 +1,62 @@
 #include "serial.h"
 #include "../task.h"
+#include "../paging.h"
 
 #define COM1_PORT 0x3F8
 #define SERIAL_QUEUE_SIZE 16384u
 static char serial_queue[SERIAL_QUEUE_SIZE];
 static uint32_t serial_head, serial_tail;
+#define SERIAL_LOG_SIZE 262144u
+static uint32_t serial_log_next, serial_log_count;
+static char serial_boot_log[4096];
+static char* serial_log_pages[SERIAL_LOG_SIZE / PAGE_SIZE];
+static uint32_t serial_log_capacity = sizeof(serial_boot_log);
+static char* serial_log_byte(uint32_t sequence) {
+    uint32_t index = sequence % serial_log_capacity;
+    return serial_log_pages[0] ? &serial_log_pages[index / PAGE_SIZE][index % PAGE_SIZE]
+                               : &serial_boot_log[index];
+}
+static void serial_log_expand(void) {
+    if (serial_log_pages[0]) return;
+    char* pages[SERIAL_LOG_SIZE / PAGE_SIZE];
+    uint32_t count = 0;
+    for (; count < SERIAL_LOG_SIZE / PAGE_SIZE; ++count) {
+        pages[count] = (char*)paging_frame_alloc();
+        if (!pages[count]) {
+            while (count) paging_frame_free((uint32_t)pages[--count]);
+            return; /* Preserve the small capture if memory is exhausted. */
+        }
+    }
+    uint32_t flags = task_irq_save();
+    for (uint32_t i = 0; i < serial_log_count; ++i) {
+        uint32_t sequence = serial_log_next - serial_log_count + i;
+        uint32_t index = sequence % SERIAL_LOG_SIZE;
+        pages[index / PAGE_SIZE][index % PAGE_SIZE] = *serial_log_byte(sequence);
+    }
+    for (count = 0; count < SERIAL_LOG_SIZE / PAGE_SIZE; ++count)
+        serial_log_pages[count] = pages[count];
+    serial_log_capacity = SERIAL_LOG_SIZE;
+    task_irq_restore(flags);
+}
+
+
+/* Independent cursors let local readers follow TX output without stealing
+ * bytes from the UART queue. Capture survives a missing or stalled UART. */
+int32_t serial_log_read(char* output, uint32_t capacity, uint32_t* cursor, uint32_t* lost) {
+    uint32_t flags = task_irq_save();
+    uint32_t available = serial_log_next - *cursor;
+    if (available > serial_log_count) {
+        *lost += available - serial_log_count;
+        *cursor = serial_log_next - serial_log_count;
+        available = serial_log_count;
+    }
+    if (available > capacity) available = capacity;
+    for (uint32_t i = 0; i < available; ++i)
+        output[i] = *serial_log_byte(*cursor + i);
+    *cursor += available;
+    task_irq_restore(flags);
+    return (int32_t)available;
+}
 static int serial_async;
 static uint8_t serial_sync_unavailable;
 /* Debugger-visible overflow diagnostic. Producers never wait for UART space. */
@@ -13,6 +65,7 @@ volatile uint32_t serial_dropped_bytes;
 void serial_init(void) {
     serial_head = serial_tail = serial_dropped_bytes = 0;
     serial_async = 0;
+    serial_log_next = serial_log_count = 0;
     serial_sync_unavailable = 0;
     outb(COM1_PORT + 1, 0x00);
     outb(COM1_PORT + 3, 0x80);
@@ -49,6 +102,7 @@ static void serial_worker(void* arg) {
 
 int serial_start_async(void) {
     if (serial_async) return 0;
+    serial_log_expand();
     if (task_create_nice(serial_worker, 0, "serial", 10) < 0) return -1;
     serial_async = 1;
     return 0;
@@ -71,6 +125,10 @@ void serial_enter_sync(void) {
 }
 
 void debug_putc(char c) {
+    uint32_t log_flags = task_irq_save();
+    *serial_log_byte(serial_log_next++) = c;
+    if (serial_log_count < serial_log_capacity) ++serial_log_count;
+    task_irq_restore(log_flags);
     if (startup_trace_quiet() || (serial_async && scheduler_running())) {
         uint32_t flags = task_irq_save();
         uint32_t next = (serial_head + 1u) % SERIAL_QUEUE_SIZE;

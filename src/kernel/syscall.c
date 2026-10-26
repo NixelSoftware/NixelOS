@@ -284,6 +284,31 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
             return;
         }
+        case SYS_SERIAL_LOG_READ: {
+            if (!regs->ecx || regs->ecx > 256 || !user_writable(regs->ebx, regs->ecx) ||
+                !user_writable(regs->edx, sizeof(user_serial_cursor_t))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            user_serial_cursor_t cursor = *(user_serial_cursor_t*)regs->edx;
+            regs->eax = serial_log_read((char*)regs->ebx, regs->ecx, &cursor.next, &cursor.lost);
+            *(user_serial_cursor_t*)regs->edx = cursor;
+            return;
+        }
+        case SYS_AUDIO_DEVICE_NAME: {
+            uint32_t capacity = regs->ecx;
+            if (!capacity || capacity > 64 || !user_writable(regs->ebx, capacity)) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            const char* name = audio_device_name(audio_device_selected());
+            char* output = (char*)regs->ebx;
+            uint32_t n = 0;
+            while (n + 1 < capacity && name[n]) { output[n] = name[n]; ++n; }
+            output[n] = 0;
+            regs->eax = n;
+            return;
+        }
         case SYS_AUDIO_OPL:
             if (regs->ebx == 256) {
                 regs->eax = (uint32_t)(audio_owner ? -1 : audio_opl_init());
@@ -800,9 +825,19 @@ void syscall_dispatch(registers_t* regs) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
         case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
-        case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN:
             syscall_dispatch_impl(regs);
             return;
+        case SYS_AUDIO_OPL:
+        case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN: {
+            uint32_t call = regs->eax;
+            syscall_dispatch_impl(regs);
+            if ((int32_t)regs->eax < 0) {
+                debug_print("[AUDIO] syscall failed: number=");debug_hex(call);
+                debug_print(" owner=");debug_hex(audio_owner);
+                debug_print(" caller=");debug_hex(paging_current_directory());debug_print("\n");
+            }
+            return;
+        }
         default: {
             MUTEX_GUARD(kernel_mutex);
             syscall_dispatch_impl(regs);

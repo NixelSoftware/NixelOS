@@ -33,6 +33,7 @@ static unsigned format_time(char* out, uint32_t seconds) {
     out[n] = 0;
     return n;
 }
+static char audio_device[64];
 static void redraw(void) {
     if (!window_handle) return;
     draw(USER_WINDOW_DRAW_FILL, 4, 24, 432, 174, 0, 0xC0C0C0);
@@ -54,6 +55,7 @@ static void redraw(void) {
     format_time(timestamp+t, total_seconds);
     draw(USER_WINDOW_DRAW_TEXT, 232, 124, 0, 0, timestamp, 0);
     draw(USER_WINDOW_DRAW_TEXT, 16, 158, 0, 0, player_status, 0);
+    draw(USER_WINDOW_DRAW_TEXT, 16, 178, 0, 0, audio_device, 0);
     (void)sys_window_present(window_handle);
     last_draw = sys_get_ticks();
 }
@@ -82,15 +84,19 @@ static void poll_player(void) {
 static int submit_pcm(const void* data, uint32_t length) {
     poll_player();
     if (close_requested || stop_requested) return 0;
-    uint32_t started = sys_get_ticks();
-    int32_t written;
-    while ((written = sys_audio_write(data, length)) == 0) {
-        if ((uint32_t)(sys_get_ticks() - started) > 300u) return 0;
-        poll_player();
-        if (close_requested || stop_requested) return 0;
-        sys_yield();
+    uint32_t started = sys_get_ticks(), offset = 0;
+    while (offset < length) {
+        int32_t written = sys_audio_write((const uint8_t*)data + offset, length - offset);
+        if (written < 0 || (uint32_t)written > length - offset || (written & 3)) return 0;
+        if (written > 0) { offset += written; started = sys_get_ticks(); }
+        else {
+            if ((uint32_t)(sys_get_ticks() - started) > 300u) return 0;
+            poll_player();
+            if (close_requested || stop_requested) return 0;
+            sys_yield();
+        }
     }
-    return written == (int32_t)length;
+    return 1;
 }
 static int emit_frame(int32_t left, int32_t right) {
     output_pcm[output_frames * 2u] = (uint16_t)left;
@@ -99,10 +105,10 @@ static int emit_frame(int32_t left, int32_t right) {
     output_frames = 0;
     return submit_pcm(output_pcm, sizeof(output_pcm));
 }
-static int32_t interpolate(int32_t before, int32_t after, uint32_t fraction) {
+static int32_t interpolate(int32_t before, int32_t after, uint32_t fraction, uint32_t output_rate) {
     int32_t delta = after - before;
     uint32_t magnitude = delta < 0 ? (uint32_t)-delta : (uint32_t)delta;
-    int32_t step = (int32_t)((magnitude * fraction) / 44100u);
+    int32_t step = (int32_t)((magnitude * fraction) / output_rate);
     return before + (delta < 0 ? -step : step);
 }
 static void print(const char* text) {
@@ -174,17 +180,24 @@ static void play_file(const char* path, int process_only) {
         print(window_handle ? "Unsupported WAV format (PCM 8/16-bit only)." :
               "sound: expected PCM WAV, 8/16-bit mono/stereo, 5000..48000 Hz\n"); return;
     }
-    /* Use CD rate for high-rate inputs: SB16 emulation can clamp 48 kHz,
-     * changing its pitch.
-     * Convert higher-rate sources incrementally, retaining phase across reads. */
+    /* Prefer the existing playback rate, then try standard codec rates.
+     * HDA codecs need not support a WAV's source rate (e.g. 22.05 kHz).
+     * Convert in either direction while preserving phase across file reads. */
     uint32_t playback_rate = rate > 44100u ? 44100u : rate;
     uint32_t phase = 0;
     int32_t previous_left = 0, previous_right = 0;
     int have_previous = 0;
     output_frames = 0;
     if (!process_only && sys_audio_init(playback_rate) < 0) {
-        print("sound: SB16 unavailable or already in use\n"); return;
+        if (playback_rate != 44100u && sys_audio_init(44100u) == 0)
+            playback_rate = 44100u;
+        else if (sys_audio_init(48000u) == 0)
+            playback_rate = 48000u;
+        else {
+            print("Selected device busy or no supported PCM output rate."); return;
+        }
     }
+    (void)sys_audio_device_name(audio_device, sizeof(audio_device));
     uint32_t total_frames = data_size / frame_size;
     total_seconds = total_frames / rate;
     elapsed_seconds = 0;
@@ -227,7 +240,7 @@ static void play_file(const char* path, int process_only) {
         if ((uint32_t)(sys_get_ticks()-processing_started) > (frames * 100u + rate - 1u) / rate)
             late_processing++;
         if (process_only) { data_size -= chunk; data_offset += chunk; continue; }
-        if (rate > playback_rate) {
+        if (rate != playback_rate) {
             for (uint32_t i = 0; i < frames; i++) {
                 int32_t left = (int16_t)le16(buffer + i * 4u);
                 int32_t right = (int16_t)le16(buffer + i * 4u + 2u);
@@ -236,9 +249,9 @@ static void play_file(const char* path, int process_only) {
                     have_previous = 1;
                     phase = rate;
                 } else {
-                    if (phase <= playback_rate) {
-                        if (!emit_frame(interpolate(previous_left, left, phase),
-                                        interpolate(previous_right, right, phase))) goto failed;
+                    while (phase <= playback_rate) {
+                        if (!emit_frame(interpolate(previous_left, left, phase, playback_rate),
+                                        interpolate(previous_right, right, phase, playback_rate))) goto failed;
                         phase += rate;
                     }
                     phase -= playback_rate;
@@ -304,6 +317,7 @@ void user_main(const char* argument) {
     if (*argument || (process_only && !n)) { print("Usage: sound [--process-only] <file.wav>\n"); return; }
     if (process_only) { play_file(path, 1); return; }
     current_path = path;
+    (void)sys_audio_device_name(audio_device, sizeof(audio_device));
     user_window_desc_t description = {0};
     description.x = 180; description.y = 120;
     description.width = 440; description.height = 198;

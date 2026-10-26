@@ -33,6 +33,10 @@ static int program, volume=96, attack=20, decay=35, sustain=90, release=30;
 static int active_note=-1;
 static int16_t pcm[AUDIO_FRAMES*2];
 static int pcm_pending;
+static uint32_t pcm_offset, pcm_progress_tick;
+static int audio_acquired;
+static const char* playback_error;
+static char audio_device[64];
 #include "midi_file.h"
 static midi_song_t song;
 static int song_loaded, song_playing;
@@ -100,6 +104,7 @@ static void draw(void) {
   control(16,135,"Release",release);
   label(160,137,"Click a key to play or release");
   label(16,181,"Keyboard: A W S E D F T G Y H U J K | Space: release");
+  label(16,303,playback_error?playback_error:audio_device);
   label(16,197,opl_enabled?"Synth: hardware OPL (9 voices)":"Synth: software");
  }
  rect(160,171,72,8,BG);
@@ -145,11 +150,21 @@ static void set_controls(void){
 static void manual_stop(uint8_t note){if(opl_enabled)opl_note_off(MANUAL_CHANNEL,note);else stop_note(MANUAL_CHANNEL,note);}
 static void note_on(int note){if(active_note>=0)manual_stop((uint8_t)active_note);active_note=note;if(opl_enabled)opl_note_on(MANUAL_CHANNEL,(uint8_t)note,0.85f);else play_note(MANUAL_CHANNEL,(uint8_t)note,0.85f);}
 static void note_off(void){if(active_note>=0){manual_stop((uint8_t)active_note);active_note=-1;}}
+static int acquire_audio(void){
+ if(audio_acquired)return 1;
+ opl_enabled=sys_audio_opl(256,0)==0;
+ audio_ready=opl_enabled || sys_audio_init(44100)>=0;
+ audio_acquired=audio_ready;
+ (void)sys_audio_device_name(audio_device,sizeof(audio_device));
+ playback_error=audio_ready?0:"Selected audio device unavailable or busy";
+ pcm_pending=0;ui_dirty=1;
+ return audio_ready;
+}
 static void mouse(int x,int y,int buttons){
  static int previous_buttons;
  int pressed=buttons & ~previous_buttons;previous_buttons=buttons;
  if(!(pressed&1))return;
- if(y>=155&&y<179&&x>=380&&x<580){if(x<475){if(song_playing)song_playing=0;else if(song_index>=song.count)song_start();else song_playing=song_loaded;}else song_start();}
+ if(y>=155&&y<179&&x>=380&&x<580){if(!acquire_audio())return;if(x<475){if(song_playing)song_playing=0;else if(song_index>=song.count)song_start();else song_playing=song_loaded;}else song_start();}
  else if(y>=211&&y<291&&x>=16&&x<16+13*43){int note=60+(x-16)/43;if(note==active_note)note_off();else note_on(note);}
  else if(y>=39&&y<65){if(x>=108&&x<138)set_program(program-1);else if(x>=330&&x<360)set_program(program+1);else if(x>=410&&x<510){note_off();silence();}}
  else if(x>=16&&x<530&&((y>=101&&y<117)||(y>=153&&y<169))){
@@ -170,25 +185,36 @@ static void key(int c){
  for(int i=0;keys[i];i++)if(c==keys[i]){if(active_note==60+i)note_off();else note_on(60+i);ui_dirty=1;break;}
 }
 static int render_audio(void){
- if (pcm_pending) {
-  int r=sys_audio_write(pcm,sizeof(pcm));
-  if(r==(int)sizeof(pcm)) pcm_pending=0;
-  return r;
- }
- for(int offset=0;offset<AUDIO_FRAMES;offset+=BUFSIZE_MONO){
-  song_step(BUFSIZE_MONO);
-  run_lanes();
-  for(int j=0;j<BUFSIZE_STEREO;j++){
-   float f=stereo_out[j]*32767.0f;
-   if(f>32767.0f)f=32767.0f;if(f< -32768.0f)f=-32768.0f;
-   pcm[offset*2+j]=(int16_t)f;
+ if(!pcm_pending){
+  for(int offset=0;offset<AUDIO_FRAMES;offset+=BUFSIZE_MONO){
+   song_step(BUFSIZE_MONO);
+   run_lanes();
+   for(int j=0;j<BUFSIZE_STEREO;j++){
+    float f=stereo_out[j]*32767.0f;
+    if(f>32767.0f)f=32767.0f;
+    if(f< -32768.0f)f=-32768.0f;
+    pcm[offset*2+j]=(int16_t)f;
+   }
   }
+  pcm_pending=1;pcm_offset=0;pcm_progress_tick=sys_get_ticks();
  }
- pcm_pending=1;
- int r=sys_audio_write(pcm,sizeof(pcm));
- if(r==(int)sizeof(pcm)) pcm_pending=0;
+ uint32_t remaining=sizeof(pcm)-pcm_offset;
+ int r=sys_audio_write((const uint8_t*)pcm+pcm_offset,remaining);
+ if(r<0 || (uint32_t)r>remaining || (r&3))return -1;
+ if(r>0){
+  pcm_offset+=(uint32_t)r;pcm_progress_tick=sys_get_ticks();
+  if(pcm_offset==sizeof(pcm))pcm_pending=0;
+ }else if((uint32_t)(sys_get_ticks()-pcm_progress_tick)>300u)return -1;
  return r;
 }
+static void playback_failed(void){
+ silence();
+ if(audio_acquired)sys_audio_shutdown();
+ audio_acquired=audio_ready=0;pcm_pending=0;song_playing=0;
+ playback_error="Audio stopped: device error or queue timeout";
+ ui_dirty=1;
+}
+
 void user_main(const char *args){
  song_loaded=0; song_name[0]=0;
  if(args && args[0]) {
@@ -202,6 +228,9 @@ void user_main(const char *args){
  opl_enabled=sys_audio_opl(256,0)==0;
  init_buffer();init_polyphony();init_envelopes();init_oscillators();init_midi();init_lanes();instruments_reset();set_program(4);set_controls();if(song_loaded)song_start();
  audio_ready=opl_enabled || sys_audio_init(44100)>=0;
+ audio_acquired=audio_ready;
+ (void)sys_audio_device_name(audio_device,sizeof(audio_device));
+ if(!audio_ready)playback_error="Selected audio device unavailable or busy";
  uint32_t opl_tick=sys_get_ticks();
  draw();
  while(!close_requested){
@@ -218,9 +247,9 @@ void user_main(const char *args){
    if(elapsed)song_step(elapsed*441u);
    sys_yield();
   }
-  else if(audio_ready){int r=render_audio();if(r<0){audio_ready=0;}else if(r==0)sys_yield();}
+  else if(audio_ready){int r=render_audio();if(r<0){playback_failed();}else if(r==0)sys_yield();}
   else sys_yield();
   if(ui_dirty || (song_loaded && played_frames/VISUAL_FRAME_SAMPLES!=last_draw_tick))draw();
  }
- note_off();silence();if(audio_ready)sys_audio_shutdown();sys_window_close(wh);
+ note_off();silence();if(audio_acquired)sys_audio_shutdown();sys_window_close(wh);
 }

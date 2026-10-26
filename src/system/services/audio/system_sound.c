@@ -8,7 +8,7 @@ extern volatile uint32_t frame_timer;
 static uint8_t buffer[AUDIO_BUFFER_CHUNK_SIZE];
 static uint32_t startup_frames[40];
 static uint32_t startup_size, startup_frame_count;
-static uint32_t offset, remaining, pending, last_progress;
+static uint32_t offset, remaining, pending, pending_offset, last_progress;
 static int active;
 static uint32_t channels, bits, frame_size, pending_source;
 
@@ -26,7 +26,7 @@ static void stop(void) {
     while (startup_frame_count)
         paging_frame_free(startup_frames[--startup_frame_count]);
     active = 0;
-    pending = 0;
+    pending = pending_offset = 0;
 }
 static int startup_read(void* destination, uint32_t length, uint32_t file_offset) {
     uint8_t* output = destination;
@@ -141,12 +141,18 @@ void system_sound_poll(void) {
             buffer[i * 4 + 3] = right >> 8;
         }
         pending = frames * 4u;
+        pending_offset = 0;
     }
-    int32_t written = audio_write(buffer, pending);
+    int32_t written = audio_write(buffer + pending_offset, pending - pending_offset);
     if (written == 0) return;
-    if (written != (int32_t)pending) { stop(); return; }
+    if (written < 0 || (uint32_t)written > pending - pending_offset || (written & 3)) {
+        stop(); return;
+    }
+    pending_offset += (uint32_t)written;
+    last_progress = frame_timer;
+    if (pending_offset < pending) return;
     offset += pending_source;
     remaining -= pending_source;
-    pending = 0;
+    pending = pending_offset = 0;
     last_progress = frame_timer;
 }
