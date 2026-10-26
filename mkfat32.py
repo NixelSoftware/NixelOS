@@ -90,7 +90,8 @@ def main():
     struct.pack_into("<H", vbr, 50, 6)
     vbr[64] = 0x80
     vbr[66] = 0x29
-    struct.pack_into("<I", vbr, 67, 0x12345678)
+    # Give each image its own identity for boot-drive discovery.
+    vbr[67:71] = os.urandom(4)
     vbr[71:82] = b"NIXELOS    "
     vbr[82:90] = b"FAT32   "
     vbr[510:512] = b"\x55\xaa"

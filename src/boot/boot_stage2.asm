@@ -3,6 +3,27 @@
 
 stage2_entry:
     mov [boot_drive], dl
+    ; Snapshot the boot volume through BIOS DL before leaving real mode.
+    ; Kernel handoff: magic at 0x6000, FAT32 VBR at 0x6004 (LBA 500).
+    mov dword [0x6000], 0
+    mov si, dap_volume
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    int 0x13
+    jnc .volume_loaded
+    ; Same 63-sector/16-head CHS fallback used by the kernel loader.
+    xor ax, ax
+    mov es, ax
+    mov bx, 0x6004
+    mov ax, 0x0201
+    mov cx, 60
+    mov dh, 7
+    mov dl, [boot_drive]
+    int 0x13
+    jc .volume_done
+.volume_loaded:
+    mov dword [0x6000], 0x5642584E ; "NXBV"
+.volume_done:
     call detect_memory
     mov si, msg_stage2
     call print_string
@@ -248,6 +269,12 @@ selected_mode dw 0
 boot_drive    db 0
 
 align 4
+dap_volume:
+    db 0x10, 0
+    dw 1
+    dw 0x6004, 0
+    dq 500
+
 dap_chunk:
     db 0x10
     db 0x00

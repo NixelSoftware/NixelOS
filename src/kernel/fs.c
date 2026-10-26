@@ -336,19 +336,56 @@ void fs_init(void) {
     for (uint32_t i = 0; i < FS_READ_CURSORS; i++) read_cursors[i].first = 0;
     cached_fat_sector = 0xFFFFFFFFu;
     fs_ready = 0;
-    debug_print("[FAT32] Initializing filesystem at LBA 500...\n");
+    debug_print("[FAT32] Locating boot volume on IDE drives...\n");
 
-    
-    uint32_t partition_offset = 500;
-    if (!ata_read_sectors(partition_offset, 1, sector_buffer)) {
-        debug_print("[FAT32] Failed to read LBA 500.\n");
+    /* BIOS drive numbers are not IDE positions. Match the VBR read by the
+     * bootloader instead, and refuse ambiguous copies rather than writing
+     * to a different disk. The image format places its volume at LBA 500. */
+    const uint32_t partition_offset = 500;
+    const volatile uint32_t* handoff = (const volatile uint32_t*)0x6000;
+    const volatile uint8_t* boot_vbr = (const volatile uint8_t*)0x6004;
+    if (*handoff != 0x5642584E) {
+        debug_print("[FAT32] Boot volume handoff unavailable.\n");
+        return;
+    }
+    unsigned found = ATA_DRIVE_COUNT;
+    for (unsigned drive = 0; drive < ATA_DRIVE_COUNT; drive++) {
+        if (!ata_select_drive(drive) ||
+            !ata_read_sectors(partition_offset, 1, sector_buffer)) continue;
+        unsigned i = 0;
+        while (i < 512 && sector_buffer[i] == boot_vbr[i]) i++;
+        if (i != 512) continue;
+        if (found != ATA_DRIVE_COUNT) {
+            ata_select_drive(ATA_DRIVE_COUNT);
+            debug_print("[FAT32] Multiple copies of boot volume found; mount refused.\n");
+            return;
+        }
+        found = drive;
+    }
+    if (found == ATA_DRIVE_COUNT || !ata_select_drive(found) ||
+        !ata_read_sectors(partition_offset, 1, sector_buffer)) {
+        ata_select_drive(ATA_DRIVE_COUNT);
+        debug_print("[FAT32] Boot volume not found on supported IDE drives.\n");
         return;
     }
 
     fat32_bpb_t* b = (fat32_bpb_t*)sector_buffer;
-    if (b->bytes_per_sector != 512 || b->sectors_per_fat_32 == 0) {
-        debug_print("[FAT32] Valid FAT32 Volume not found at LBA 500.\n");
+    if (sector_buffer[510] != 0x55 || sector_buffer[511] != 0xAA ||
+        b->bytes_per_sector != 512 || !b->sectors_per_cluster ||
+        b->sectors_per_cluster > 8 ||
+        (b->sectors_per_cluster & (b->sectors_per_cluster - 1)) ||
+        !b->reserved_sector_count || !b->num_fats ||
+        !b->sectors_per_fat_32 || b->root_cluster < 2) {
+        debug_print("[FAT32] Boot volume has an invalid FAT32 BPB.\n");
         return;
+    }
+    if (found < 4) {
+        debug_print("[FAT32] Selected IDE");
+        debug_print(found < 2 ? "0:" : "1:");
+        debug_print((found & 1) ? "1\n" : "0\n");
+    } else {
+        debug_print("[FAT32] Selected PCI IDE drive ");
+        debug_hex(found); debug_print("\n");
     }
 
     bpb = *b;
