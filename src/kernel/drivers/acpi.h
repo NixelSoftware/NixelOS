@@ -5,6 +5,7 @@
 
 int  acpi_init(void);
 void acpi_power_off(void);
+const char* acpi_power_error(void);
 void acpi_reboot(void);
 
 #endif

@@ -88,8 +88,8 @@ KERNEL_C := \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \
   src/kernel/drivers/ata.c src/kernel/drivers/net.c \
-  src/kernel/drivers/net_e1000.c src/kernel/drivers/net_tg3.c \
-  src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/pc_speaker.c \
+  src/kernel/drivers/net_e1000.c src/kernel/drivers/net_tg3.c src/kernel/drivers/net_b44.c \
+  src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/kernel_net.c \
   src/kernel/net/ipv4.c src/kernel/net/etherframe.c src/kernel/net/arp.c \
@@ -224,3 +224,9 @@ clean-build:
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
+
+src/kernel/drivers/net_b44.o: src/kernel/drivers/net_b44.h src/kernel/drivers/net_b44_regs.h src/kernel/drivers/net.h
+src/kernel/kernel_net.o: src/kernel/drivers/net_b44.h
+
+src/kernel/drivers/hda.o: src/kernel/drivers/hda.h src/kernel/hal/audio.h
+src/kernel/hal/audio.o: src/kernel/drivers/hda.h

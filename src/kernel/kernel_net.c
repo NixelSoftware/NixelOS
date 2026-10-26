@@ -3,6 +3,7 @@
 #include "drivers/net.h"
 #include "drivers/net_e1000.h"
 #include "drivers/net_tg3.h"
+#include "drivers/net_b44.h"
 #include "drivers/serial.h"
 #include "net/arp.h"
 #include "net/dhcp.h"
@@ -27,6 +28,10 @@ static const pci_net_match_t supported_cards[] = {
     // AMD PCNet-PCI II nad PCNet Fast III
     { 0x1022, 0x2000, "AMD PCNet-PCI II (Am79C970A)", 0 },
     { 0x1022, 0x2001, "AMD PCNet-FAST III (Am79C973)", 0 },
+
+    { 0x14E4, 0x4401, "Broadcom BCM4401 Fast Ethernet", 3 },
+    { 0x14E4, 0x170C, "Broadcom BCM4401-B0 Fast Ethernet", 3 },
+    { 0x14E4, 0x4402, "Broadcom BCM4401-B1 Fast Ethernet", 3 },
 
     // Intel E1000 Family
     { 0x8086, 0x100E, "Intel 82540EM Gigabit Ethernet", 1 },
@@ -130,7 +135,9 @@ uint8_t sys_net_init(uint16_t io) {
     }
 
 adapter_matched:
-    if (net_driver_type == 2) {
+    if (net_driver_type == 3) {
+        return b44_init();
+    } else if (net_driver_type == 2) {
         return tg3_init();
     } else if (net_driver_type == 1) {
         return e1000_init();
@@ -152,6 +159,7 @@ adapter_matched:
 
 uint8_t sys_net_is_ready(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 3) return b44_is_ready();
     if (net_driver_type == 2) return tg3_is_ready();
     if (net_driver_type == 1) return e1000_is_ready();
     if (net_driver_type == 0) return net_is_ready();
@@ -160,14 +168,16 @@ uint8_t sys_net_is_ready(void) {
 
 void sys_net_shutdown(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 2) tg3_shutdown();
+    if (net_driver_type == 3) b44_shutdown();
+    else if (net_driver_type == 2) tg3_shutdown();
     else if (net_driver_type == 1) e1000_shutdown();
     else if (net_driver_type == 0) net_shutdown();
 }
 
 void sys_net_poll(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 2) tg3_poll();
+    if (net_driver_type == 3) b44_poll();
+    else if (net_driver_type == 2) tg3_poll();
     else if (net_driver_type == 1) e1000_poll();
     else if (net_driver_type == 0) net_poll();
     ipv4_poll();
@@ -175,6 +185,7 @@ void sys_net_poll(void) {
 
 uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 3) return b44_send(data, length);
     if (net_driver_type == 2) return tg3_send(data, length);
     if (net_driver_type == 1) return e1000_send(data, length);
     if (net_driver_type == 0) return net_send(data, length);
@@ -183,13 +194,15 @@ uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
 
 void sys_net_set_receive_handler(net_receive_handler_t handler) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 2) tg3_set_receive_handler(handler);
+    if (net_driver_type == 3) b44_set_receive_handler(handler);
+    else if (net_driver_type == 2) tg3_set_receive_handler(handler);
     else if (net_driver_type == 1) e1000_set_receive_handler(handler);
     else if (net_driver_type == 0) net_set_receive_handler(handler);
 }
 
 uint64_t sys_net_get_mac_address(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 3) return b44_get_mac_address();
     if (net_driver_type == 2) return tg3_get_mac_address();
     if (net_driver_type == 1) return e1000_get_mac_address();
     if (net_driver_type == 0) return net_get_mac_address();
@@ -198,13 +211,15 @@ uint64_t sys_net_get_mac_address(void) {
 
 void sys_net_set_ip_address(uint32_t address) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 2) tg3_set_ip_address(address);
+    if (net_driver_type == 3) b44_set_ip_address(address);
+    else if (net_driver_type == 2) tg3_set_ip_address(address);
     else if (net_driver_type == 1) e1000_set_ip_address(address);
     else if (net_driver_type == 0) net_set_ip_address(address);
 }
 
 uint32_t sys_net_get_ip_address(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 3) return b44_get_ip_address();
     if (net_driver_type == 2) return tg3_get_ip_address();
     if (net_driver_type == 1) return e1000_get_ip_address();
     if (net_driver_type == 0) return net_get_ip_address();
@@ -213,9 +228,13 @@ uint32_t sys_net_get_ip_address(void) {
 
 void sys_net_get_diagnostics(net_diagnostics_t* d) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 2) tg3_get_diagnostics(d);
+    if (!d) return;
+    *d = (net_diagnostics_t){0};
+    if (net_driver_type == 3) b44_get_diagnostics(d);
+    else if (net_driver_type == 2) tg3_get_diagnostics(d);
     else if (net_driver_type == 1) e1000_get_diagnostics(d);
     else if (net_driver_type == 0) net_get_diagnostics(d);
+    else d->init_failure = NET_INIT_FAILURE_DISCOVERY;
 }
 
 void sys_net_initialize_stack(void) {

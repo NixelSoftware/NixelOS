@@ -638,9 +638,9 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 return;
             }
-            net_poll();
-            net_get_diagnostics((net_diagnostics_t*)address);
-            regs->eax = net_is_ready() ? 1u : 0u;
+            sys_net_poll();
+            sys_net_get_diagnostics((net_diagnostics_t*)address);
+            regs->eax = sys_net_is_ready() ? 1u : 0u;
             return;
         }
         case SYS_DNS_RESOLVE: {

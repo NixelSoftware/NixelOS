@@ -6,12 +6,14 @@
 static char serial_queue[SERIAL_QUEUE_SIZE];
 static uint32_t serial_head, serial_tail;
 static int serial_async;
+static uint8_t serial_sync_unavailable;
 /* Debugger-visible overflow diagnostic. Producers never wait for UART space. */
 volatile uint32_t serial_dropped_bytes;
 
 void serial_init(void) {
     serial_head = serial_tail = serial_dropped_bytes = 0;
     serial_async = 0;
+    serial_sync_unavailable = 0;
     outb(COM1_PORT + 1, 0x00);
     outb(COM1_PORT + 3, 0x80);
     outb(COM1_PORT + 0, 0x03); // 38400 baud
@@ -83,8 +85,17 @@ void debug_putc(char c) {
         return;
     }
 
+    /* Debug output must never prevent boot on hardware without a usable
+     * UART. Latch a timeout so every subsequent character does not wait. */
+    if (serial_sync_unavailable) { ++serial_dropped_bytes; return; }
     uint64_t began = startup_trace_now();
+    unsigned budget = 10000;
     while (!is_transmit_empty()) {
+        if (!--budget) {
+            serial_sync_unavailable = 1;
+            ++serial_dropped_bytes;
+            return;
+        }
         __asm__ volatile ("pause");
     }
 

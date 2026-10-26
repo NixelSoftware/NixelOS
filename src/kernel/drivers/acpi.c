@@ -82,6 +82,26 @@ static uint32_t pm1b_cnt = 0;
 static uint16_t slp_typa = 0;
 static uint16_t slp_typb = 0;
 static uint8_t  acpi_initialized = 0;
+static uint16_t smi_command;
+static uint8_t enable_command;
+static const char* power_error = "ACPI tables unavailable";
+const char* acpi_power_error(void) { return power_error; }
+
+static void acpi_delay_ms(void) {
+    for (unsigned i = 0; i < 1000; ++i) outb(0x80, 0);
+}
+static int acpi_enable_mode(void) {
+    if ((inw((uint16_t)pm1a_cnt) & 1) &&
+        (!pm1b_cnt || (inw((uint16_t)pm1b_cnt) & 1))) return 1;
+    if (!smi_command || !enable_command) return 0;
+    outb(smi_command, enable_command);
+    for (unsigned i = 0; i < 3000; ++i) {
+        if ((inw((uint16_t)pm1a_cnt) & 1) &&
+            (!pm1b_cnt || (inw((uint16_t)pm1b_cnt) & 1))) return 1;
+        acpi_delay_ms();
+    }
+    return 0;
+}
 
 
 static uint8_t  reset_supported = 0;
@@ -129,42 +149,61 @@ static acpi_rsdp_t* acpi_find_rsdp(void) {
     return 0;
 }
 
-static int acpi_parse_s5(const uint8_t* dsdt_data, uint32_t length) {
-    for (uint32_t i = 0; i + 8 < length; i++) {
-        if (dsdt_data[i] == 0x08 &&
-            dsdt_data[i + 1] == '_' && dsdt_data[i + 2] == 'S' &&
-            dsdt_data[i + 3] == '5' && dsdt_data[i + 4] == '_') {
-            uint32_t p = i + 5;
-            if (dsdt_data[p] == 0x12) {
-                p++;
-                uint8_t lead = dsdt_data[p];
-                uint8_t byte_count = (lead >> 6) & 0x03;
-                p += (byte_count == 0) ? 1 : (byte_count + 1);
-                p++;
-                if (dsdt_data[p] == 0x0A) {
-                    slp_typa = dsdt_data[p + 1];
-                    p += 2;
-                } else {
-                    slp_typa = dsdt_data[p++];
-                }
-                if (dsdt_data[p] == 0x0A) {
-                    slp_typb = dsdt_data[p + 1];
-                } else {
-                    slp_typb = dsdt_data[p];
-                }
-                debug_print("[ACPI] Found \\_S5 package: TYPa=");
-                debug_hex(slp_typa);
-                debug_print(" TYPb=");
-                debug_hex(slp_typb);
-                debug_print("\n");
-                return 1;
-            }
-        }
+/* Decode only literal sleep packages. This is not an AML interpreter. */
+static int aml_sleep_integer(const uint8_t* data, uint32_t* cursor,
+                             uint32_t end, uint16_t* result) {
+    if (*cursor >= end) return 0;
+    uint8_t op = data[(*cursor)++];
+    uint32_t bytes, value = 0;
+    if (op <= 1) { *result = op; return 1; }
+    if (op == 0x0A) bytes = 1;
+    else if (op == 0x0B) bytes = 2;
+    else if (op == 0x0C) bytes = 4;
+    else if (op == 0x0E) bytes = 8;
+    else return 0;
+    if (bytes > end - *cursor) return 0;
+    for (uint32_t j = 0; j < bytes; ++j) {
+        uint8_t v = data[(*cursor)++];
+        if (j < 4) value |= (uint32_t)v << (j * 8);
+        else if (v) return 0;
+    }
+    if (value > 7) return 0;
+    *result = (uint16_t)value;
+    return 1;
+}
+static int acpi_parse_s5(const uint8_t* data, uint32_t length) {
+    for (uint32_t i = 0; i < length; ++i) {
+        if (data[i] != 0x08) continue; /* NameOp */
+        uint32_t p = i + 1;
+        if (p < length && data[p] == 0x5C) ++p; /* RootChar */
+        if (length - p < 6 || !mem_compare(data + p, "_S5_", 4)) continue;
+        p += 4;
+        if (data[p++] != 0x12) continue; /* PackageOp */
+        uint32_t start = p;
+        uint8_t lead = data[p++], extra = lead >> 6;
+        if (extra > length - p) continue;
+        uint32_t size = lead & (extra ? 0x0F : 0x3F);
+        for (uint32_t j = 0; j < extra; ++j)
+            size |= (uint32_t)data[p++] << (4 + j * 8);
+        /* PkgLength includes its own encoding, not the PackageOp. */
+        if (size > length - start || size < p - start + 1) continue;
+        uint32_t end = start + size;
+        if (data[p++] < 2) continue;
+        uint16_t a, b;
+        if (!aml_sleep_integer(data, &p, end, &a) ||
+            !aml_sleep_integer(data, &p, end, &b)) continue;
+        slp_typa = a;
+        slp_typb = b;
+        return 1;
     }
     return 0;
 }
 
 int acpi_init(void) {
+    acpi_initialized = reset_supported = 0;
+    pm1a_cnt = pm1b_cnt = 0;
+    smi_command = enable_command = 0;
+    power_error = "ACPI tables unavailable";
     debug_print("[ACPI] Locating RSDP...\n");
     acpi_rsdp_t* rsdp = acpi_find_rsdp();
     if (!rsdp) {
@@ -192,6 +231,10 @@ int acpi_init(void) {
         debug_print("[ACPI] FADT not found.\n");
         return 0;
     }
+    if (fadt->header.length < 116) {
+        power_error = "ACPI FADT too short";
+        return 0;
+    }
     pm1a_cnt = fadt->pm1a_cnt_blk;
     pm1b_cnt = fadt->pm1b_cnt_blk;
 
@@ -210,24 +253,26 @@ int acpi_init(void) {
         debug_print("\n");
     }
 
-    if (fadt->smi_cmd && fadt->acpi_enable) {
-        if (!(inw((uint16_t)pm1a_cnt) & 1)) {
-            outb((uint16_t)fadt->smi_cmd, fadt->acpi_enable);
-            for (int timeout = 0; timeout < 30000; timeout++) {
-                if (inw((uint16_t)pm1a_cnt) & 1) break;
-                __asm__ volatile ("pause");
-            }
-        }
+    if (!pm1a_cnt || pm1a_cnt > 0xFFFE || pm1b_cnt > 0xFFFE ||
+        fadt->pm1_cnt_len < 2 || fadt->smi_cmd > 0xFFFF) {
+        power_error = "ACPI PM control registers unsupported";
+        return 0;
     }
+    smi_command = (uint16_t)fadt->smi_cmd;
+    enable_command = fadt->acpi_enable;
 
     acpi_sdt_header_t* dsdt = (acpi_sdt_header_t*)fadt->dsdt;
-    if (dsdt && acpi_validate_checksum(dsdt, dsdt->length)) {
-        if (acpi_parse_s5((const uint8_t*)dsdt, dsdt->length)) {
+    if (dsdt && mem_compare(dsdt->signature, "DSDT", 4) &&
+        dsdt->length >= sizeof(*dsdt) && dsdt->length <= 1024 * 1024 &&
+        acpi_validate_checksum(dsdt, dsdt->length)) {
+        if (acpi_parse_s5((const uint8_t*)(dsdt + 1), dsdt->length - sizeof(*dsdt))) {
             acpi_initialized = 1;
+            power_error = "ACPI S5 command returned";
             debug_print("[ACPI] ACPI driver successfully initialized.\n");
             return 1;
         }
     }
+    power_error = "ACPI literal _S5 package not found";
     debug_print("[ACPI] Failed to parse \\_S5 state.\n");
     return 0;
 }
@@ -254,16 +299,24 @@ void acpi_reboot(void) {
 
 void acpi_power_off(void) {
     if (!acpi_initialized || !pm1a_cnt) return;
+    /* Firmware may need milliseconds to handle ACPI_ENABLE in SMM. */
+    if (!acpi_enable_mode()) {
+        power_error = "ACPI enable timed out (SCI_EN clear)";
+        return;
+    }
     debug_print("[ACPI] Sending S5 soft power-off command...\n");
     __asm__ volatile ("cli");
-    uint16_t slp_en = (1 << 13);
-    uint16_t val_a = (slp_typa << 10) | slp_en;
-    outw((uint16_t)pm1a_cnt, val_a);
-    if (pm1b_cnt) {
-        uint16_t val_b = (slp_typb << 10) | slp_en;
-        outw((uint16_t)pm1b_cnt, val_b);
-    }
-    for (volatile int i = 0; i < 1000000; i++) {
-        __asm__ volatile ("pause");
-    }
+    const uint16_t sleep_mask = (7u << 10) | (1u << 13);
+    uint16_t a = (inw((uint16_t)pm1a_cnt) & ~sleep_mask) | (slp_typa << 10);
+    uint16_t b = pm1b_cnt ?
+        (inw((uint16_t)pm1b_cnt) & ~sleep_mask) | (slp_typb << 10) : 0;
+    /* Program both sleep types before asserting either sleep-enable bit.
+     * Preserve SCI_EN and the remaining PM1 control fields. */
+    outw((uint16_t)pm1a_cnt, a);
+    if (pm1b_cnt) outw((uint16_t)pm1b_cnt, b);
+    __asm__ volatile ("wbinvd" ::: "memory");
+    outw((uint16_t)pm1a_cnt, a | (1u << 13));
+    if (pm1b_cnt) outw((uint16_t)pm1b_cnt, b | (1u << 13));
+    for (unsigned i = 0; i < 1000; ++i) acpi_delay_ms();
+    power_error = "ACPI S5 command returned";
 }

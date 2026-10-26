@@ -1,6 +1,7 @@
 #include "power.h"
 #include "serial.h"
 #include "acpi.h"
+#include "../hal/usb.h"
 #include "display.h"
 #include "display/font.h"
 #include "../../system/graphics/fonts/univers85ebo_16.h"
@@ -10,6 +11,7 @@ extern const uint8_t font_8x8[128][8];
 void power_shutdown(void) {
     serial_enter_sync();
     debug_print("[POWER] Initiating system shutdown...\n");
+    usb_shutdown();
     acpi_power_off();
     debug_print("[POWER] ACPI Failed - Does this system support ACPI?\n");
 
@@ -30,6 +32,7 @@ void power_shutdown(void) {
 
     display_clear(COLOR_BLACK);
     font1_draw_string_16(x, y, shutdown_msg, COLOR_RED);
+    font1_draw_string_16(16, y + 32, acpi_power_error(), COLOR_WHITE);
     display_blit();
 
     __asm__ volatile (

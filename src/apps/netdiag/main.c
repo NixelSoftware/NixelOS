@@ -39,12 +39,14 @@ void user_main(void) {
         print("Network diagnostics unavailable\n");
         sys_exit(1);
     }
-    print("Network driver diagnostics\n  IO base: 0x");
+    print("Network driver diagnostics\n  IO port base: 0x");
     print_hex(d.io_base, 2);
-    print("\n  State: ");
+    print(" (0 is normal for MMIO adapters)\n  State: ");
     print(ready ? "ready\n" : "not ready\n");
     print("  Init failure: ");
     print_u32(d.init_failure);
+    print("\n  PHY address/ID: ");
+    print_u32(d.phy_addr); print("/0x"); print_hex(d.phy_id, 2);
     print("\n  TX attempts/submitted/busy: ");
     print_u32(d.tx_attempts); print("/"); print_u32(d.tx_submitted);
     print("/"); print_u32(d.tx_busy);

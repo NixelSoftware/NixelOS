@@ -27,6 +27,7 @@
 #include "hal/usb.h"
 #include "kernel_net.h"
 #include "drivers/net.h"
+#include "drivers/net_b44.h"
 #include "net/arp.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
@@ -267,9 +268,15 @@ static void kernel_init_acpi(void) {
     acpi_init();
 }
 
+static void network_boot_progress(const char* status) {
+    startscreen_show(status, 25);
+}
+
 static void kernel_init_network_device(void) {
+    b44_set_init_progress(network_boot_progress);
     debug_print("[INIT] Net init...\n");
     uint8_t initialized = sys_net_init(0);
+    b44_set_init_progress(0);
     debug_print("[INIT] Net init returned: ");
     debug_hex(initialized);
     debug_print("\n");

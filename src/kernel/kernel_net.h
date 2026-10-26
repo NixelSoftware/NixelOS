@@ -4,7 +4,7 @@
 #include "types.h"
 #include "drivers/net.h"
 
-// 0 = PCNet32 (default), 1 = Intel E1000
+// 0 = PCNet32, 1 = Intel E1000, 2 = Tigon3, 3 = BCM4401; ~0u = none
 extern uint32_t net_driver_type;
 
 void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out);

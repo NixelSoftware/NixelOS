@@ -2,6 +2,7 @@
 #include "../mutex.h"
 #include "../drivers/pc_speaker.h"
 #include "../drivers/sb16_driver.h"
+#include "../drivers/hda.h"
 #include "../drivers/serial.h"
 
 static const audio_driver_ops_t* active_driver = 0;
@@ -33,6 +34,7 @@ void audio_hal_register(const audio_driver_ops_t* driver) {
 }
 void audio_hal_init(void) {
     device_count = 0;
+    if (hda_probe() == 0) audio_hal_register(&hda_ops);
     if (sb16_probe() == 0) audio_hal_register(&sb16_ops);
     audio_hal_register(&pc_speaker_ops);
     selected = 0; active_driver = devices[0];
