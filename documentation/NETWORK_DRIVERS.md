@@ -53,6 +53,40 @@ The e1000 match table currently lists `8086:100E`, `100F`, `1004`, `1000`, and `
 
 The adapter initialization argument to `sys_net_init(uint16_t io)` is currently ignored; the selector performs PCI discovery itself. The PCnet driver can also be initialized directly with an I/O base, but normal kernel startup uses automatic discovery.
 
+## Broadcom Tg3 bring-up
+
+Detection still uses the original PCI table. The driver implementation
+now uses the hardware's 32-byte RX descriptors, 16-byte TX descriptors,
+80-byte status block, and 512-entry rings. It uses eight RX buffers and up to
+seven outstanding TX buffers to stay within the kernel's static memory limit.
+
+Polling follows DMA status producer/consumer indices. TX rejects requests when
+its buffers are occupied and counts completion only after the NIC consumes a
+descriptor. RX checks descriptor type, buffer index, errors and length, strips
+the FCS, and reposts buffers in producer order. Link polling configures copper
+MII/GMII and duplex after autonegotiation. Initialization now checks BAR access,
+MAC validity, MDIO failures, PHY reset and DMA stop timeouts. `netdiag` exposes
+PHY and traffic counters; serial messages start with `[TG3]` and `[DHCP]`.
+
+The implementation remains experimental on physical hardware. Chip-specific
+core reset/firmware handshakes, NVRAM MAC fallback and silicon errata are not
+fully implemented. It expects firmware to have loaded a valid MAC into the
+MAC registers. Host tests and successful compilation do not establish that a
+physical Tg3 adapter can acquire a lease. QEMU has no Tg3 model in the tested
+installation; the QEMU boot regression uses e1000.
+
+Run the host DMA/ring tests on Linux x86 with:
+
+```sh
+cc -O2 -fno-pie -no-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast tests/net_tg3_test.c -o /tmp/net_tg3_test
+/tmp/net_tg3_test
+```
+
+These tests emulate DMA/MMIO memory, not physical PCI or MDIO transactions.
+Register and descriptor layouts were checked against the Linux
+[Tg3 definitions](https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/broadcom/tg3.h)
+and [driver](https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/broadcom/tg3.c).
+
 ## Kernel network wrapper
 
 `src/kernel/kernel_net.h` exposes the active-device wrapper functions to kernel code:
