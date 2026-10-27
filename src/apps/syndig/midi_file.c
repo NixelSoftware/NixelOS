@@ -34,6 +34,7 @@ int midi_file_load(const char *path,midi_song_t *song){
    if(status>=0xf0)return -16;
    uint8_t type=status&0xf0,ch=status&15;uint32_t n=(type==0xc0||type==0xd0)?1:2;
    if(n>end-pos)return -17;uint8_t a=data[pos++],b=n==2?data[pos++]:0;
+   if(type==0xb0 && (a==91||a==93) && b==255)b=127;
    if(a>127||b>127)return -18;
    if(type==0x90||type==0x80||type==0xb0||type==0xc0){if(song->count>=MIDI_MAX_EVENTS)return -14;midi_event_t *e=&song->events[song->count++];e->tick=tick;e->type=(type==0x90&&b==0)?0x80:type;e->channel=ch;e->note=a;e->velocity=b;}
   }
