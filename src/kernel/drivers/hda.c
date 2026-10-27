@@ -201,7 +201,10 @@ static void service(void) {
     uint8_t status=r8(stream+3);
     if(status&0x18) { debug_audio_print("[HDA] DMA FIFO/descriptor error: status=");debug_audio_hex(status);debug_audio_print("\n"); failed=1; stop(); return; }
     uint32_t position=r32(stream+4);
-    if(position>=SLOTS*BLOCK) { debug_audio_print("[HDA] Invalid DMA position: ");debug_audio_hex(position);debug_audio_print("\n"); failed=1; stop(); return; }
+    /* ICH8 can expose CBL at the end of a cyclic transfer before LPIB
+     * becomes zero. This is the wrap boundary, not an out-of-range DMA. */
+    if(position==SLOTS*BLOCK) position=0;
+    if(position>SLOTS*BLOCK) { debug_audio_print("[HDA] Invalid DMA position: ");debug_audio_hex(position);debug_audio_print("\n"); failed=1; stop(); return; }
     uint32_t current=position/BLOCK;
     while(queued && head!=current) {
         for(uint32_t j=0;j<BLOCK/2;j++) samples[head][j]=0;
