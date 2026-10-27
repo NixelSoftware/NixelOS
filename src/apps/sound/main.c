@@ -1,11 +1,6 @@
 /* Windowed PCM WAV player. Original ECE391 example by Soumithri Bala. */
 #include "../../system/user/sys_api.h"
 
-/* Apps have a fixed 2 MiB address space. Leave room for code, PCM and stack. */
-#define WAV_CACHE_CAPACITY (1536u * 1024u)
-static uint8_t wav_cache[WAV_CACHE_CAPACITY];
-static uint32_t wav_cache_size;
-static const char* playback_failure;
 static uint8_t buffer[16384];
 static uint16_t output_pcm[8192];
 static uint32_t output_frames;
@@ -92,14 +87,10 @@ static int submit_pcm(const void* data, uint32_t length) {
     uint32_t started = sys_get_ticks(), offset = 0;
     while (offset < length) {
         int32_t written = sys_audio_write((const uint8_t*)data + offset, length - offset);
-        if (written < 0 || (uint32_t)written > length - offset || (written & 3)) {
-            playback_failure = "Audio device rejected PCM data."; return 0;
-        }
+        if (written < 0 || (uint32_t)written > length - offset || (written & 3)) return 0;
         if (written > 0) { offset += written; started = sys_get_ticks(); }
         else {
-            if ((uint32_t)(sys_get_ticks() - started) > 300u) {
-                playback_failure = "Audio queue stalled for 3 seconds."; return 0;
-            }
+            if ((uint32_t)(sys_get_ticks() - started) > 300u) return 0;
             poll_player();
             if (close_requested || stop_requested) return 0;
             sys_yield();
@@ -141,13 +132,6 @@ static int tag(const uint8_t* p, const char* s) {
     return 1;
 }
 
-static int32_t cached_read(void* destination, uint32_t length, uint32_t offset) {
-    if (offset > wav_cache_size || length > wav_cache_size - offset) return -1;
-    uint8_t* out = destination;
-    for (uint32_t i = 0; i < length; ++i) out[i] = wav_cache[offset + i];
-    return (int32_t)length;
-}
-
 static void play_file(const char* path, int process_only) {
     unsigned path_length = 0;
     while (path[path_length]) path_length++;
@@ -157,27 +141,8 @@ static void play_file(const char* path, int process_only) {
         path[path_length-1] == '3') {
         print("MP3 decoding is not supported yet."); return;
     }
-    playback_failure = "Invalid cached WAV data.";
-    wav_cache_size = 0;
-    print("Loading WAV into RAM...");
     int32_t size = sys_fs_read(path, 0, 0);
-    if (size < 12) { print("WAV file missing or too short."); return; }
-    if ((uint32_t)size > WAV_CACHE_CAPACITY) {
-        print("WAV exceeds the 1536 KiB RAM preload limit."); return;
-    }
-    for (uint32_t loaded = 0; loaded < (uint32_t)size;) {
-        poll_player();
-        if (close_requested || stop_requested) { print("Stopped"); return; }
-        uint32_t count = (uint32_t)size - loaded;
-        if (count > sizeof(buffer)) count = sizeof(buffer);
-        if (sys_fs_read_at(path, wav_cache + loaded, count, loaded) != (int32_t)count) {
-            print("Disk read failed while preloading WAV; playback not started."); return;
-        }
-        loaded += count;
-        sys_yield();
-    }
-    wav_cache_size = (uint32_t)size;
-    if (size < 12 || cached_read(buffer, 12, 0) != 12 ||
+    if (size < 12 || sys_fs_read_at(path, buffer, 12, 0) != 12 ||
         !tag(buffer, "RIFF") || !tag(buffer+8, "WAVE")) {
         print("sound: cannot read a RIFF WAV file\n"); return;
     }
@@ -189,13 +154,13 @@ static void play_file(const char* path, int process_only) {
     int valid_format = 0;
     uint32_t channels = 0, bits = 0, frame_size = 0;
     for (uint32_t offset = 12; offset <= end-8;) {
-        if (cached_read(buffer, 8, offset) != 8) break;
+        if (sys_fs_read_at(path, buffer, 8, offset) != 8) break;
         uint32_t length = le32(buffer+4);
         offset += 8;
         if (length > end-offset) break;
         if (tag(buffer, "fmt ")) {
             valid_format = 0;
-            if (length < 16 || cached_read(buffer, 16, offset) != 16 ||
+            if (length < 16 || sys_fs_read_at(path, buffer, 16, offset) != 16 ||
                 le16(buffer) != 1) break;
             channels = le16(buffer+2); bits = le16(buffer+14);
             if ((channels != 1 && channels != 2) || (bits != 8 && bits != 16)) break;
@@ -255,7 +220,7 @@ static void play_file(const char* path, int process_only) {
         uint32_t processing_started = sys_get_ticks();
         uint32_t capacity = (sizeof(buffer) / 4) * frame_size;
         uint32_t chunk = data_size < capacity ? data_size : capacity;
-        if (cached_read(buffer, chunk, data_offset) != (int32_t)chunk) goto failed;
+        if (sys_fs_read_at(path, buffer, chunk, data_offset) != (int32_t)chunk) goto failed;
         /* Expand backwards so unread source samples are preserved. */
         uint32_t frames = chunk / frame_size;
         for (uint32_t i = frames; i-- > 0;) {
@@ -303,7 +268,6 @@ static void play_file(const char* path, int process_only) {
         return;
     }
     if (output_frames && !submit_pcm(output_pcm, output_frames * 4u)) goto failed;
-    playback_failure = "Audio device failed while draining.";
     if (sys_audio_drain() < 0) goto failed;
     /* Drain all queued blocks, including the exact-length final block. */
     uint32_t started = sys_get_ticks();
@@ -311,9 +275,7 @@ static void play_file(const char* path, int process_only) {
     while ((status = sys_audio_status()) == 1) {
         poll_player();
         if (close_requested || stop_requested) goto failed;
-        if ((uint32_t)(sys_get_ticks()-started) > 300u) {
-            playback_failure = "Audio drain timed out."; goto failed;
-        }
+        if ((uint32_t)(sys_get_ticks()-started) > 300u) goto failed;
         sys_yield();
     }
     if (status < 0) goto failed;
@@ -331,7 +293,7 @@ failed:
     poll_player();
     clock_running = 0;
     if (!process_only) sys_audio_shutdown();
-    print(stop_requested || close_requested ? "Stopped" : playback_failure);
+    print(stop_requested || close_requested ? "Stopped" : "Playback or file read failed");
     return;
 }
 
