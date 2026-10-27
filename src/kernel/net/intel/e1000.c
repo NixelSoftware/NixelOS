@@ -1,8 +1,7 @@
-#include "net_e1000.h"
-#include "serial.h"
+#include "e1000.h"
+#include "../../drivers/pci.h"
+#include "../../drivers/serial.h"
 
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA    0xCFC
 
 #define INTEL_VENDOR_ID    0x8086
 
@@ -97,20 +96,6 @@ static e1000_tx_desc_t tx_descs[E1000_NUM_TX_DESC] __attribute__((aligned(16)));
 static uint8_t rx_buffers[E1000_NUM_RX_DESC][E1000_BUF_SIZE] __attribute__((aligned(16)));
 static uint8_t tx_buffers[E1000_NUM_TX_DESC][E1000_BUF_SIZE] __attribute__((aligned(16)));
 
-static uint32_t pci_read(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
-}
-
-static void pci_write32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint32_t val) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, val);
-}
-
 static inline void e1000_write(uint32_t reg, uint32_t val) {
     if (use_mmio && e1000_mmio_base != 0) {
         *((volatile uint32_t*)(e1000_mmio_base + reg)) = val;
@@ -132,7 +117,7 @@ static inline uint32_t e1000_read(uint32_t reg) {
 
 static uint16_t e1000_eeprom_read(uint8_t addr) {
     uint32_t tmp = 0;
-    
+
     e1000_write(REG_EERD, 1 | ((uint32_t)addr << 8));
     for (int i = 0; i < 10000; i++) {
         tmp = e1000_read(REG_EERD);
@@ -159,57 +144,56 @@ static int is_e1000_device(uint16_t dev_id) {
 }
 
 static int e1000_pci_find(void) {
-    for (uint16_t bus = 0; bus < 256; bus++) {
-        for (uint8_t slot = 0; slot < 32; slot++) {
-            for (uint8_t func = 0; func < 8; func++) {
-                uint32_t id = pci_read((uint8_t)bus, slot, func, 0);
-                uint16_t vendor = (uint16_t)id;
-                uint16_t device = (uint16_t)(id >> 16);
+    for (uint32_t index = 0; index < pci_device_count(); index++) {
+        const pci_device_t* dev = pci_device_at(index);
+        uint8_t bus = dev->bus, slot = dev->slot, func = dev->function;
+        uint32_t id = pci_config_read32((uint8_t)bus, slot, func, 0);
+        uint16_t vendor = (uint16_t)id;
+        uint16_t device = (uint16_t)(id >> 16);
 
-                if (vendor == INTEL_VENDOR_ID && is_e1000_device(device)) {
-                    
-                    uint32_t cmd = pci_read((uint8_t)bus, slot, func, 0x04);
-                    cmd |= 0x0007;
-                    pci_write32((uint8_t)bus, slot, func, 0x04, cmd);
+        if (vendor == INTEL_VENDOR_ID && is_e1000_device(device)) {
 
-                    uint32_t bar0 = pci_read((uint8_t)bus, slot, func, 0x10);
-                    uint32_t bar1 = pci_read((uint8_t)bus, slot, func, 0x14);
+            uint32_t cmd = pci_config_read32((uint8_t)bus, slot, func, 0x04);
+            cmd |= 0x0007;
+            pci_config_write16((uint8_t)bus, slot, func, 0x04, (uint16_t)cmd);
 
-                    if ((bar0 & ~0xFU) == 0 && (bar1 & ~0x3U) == 0) {
-                        diag.init_failure = NET_INIT_FAILURE_DISCOVERY;
-                        return 0;
-                    }
+            uint32_t bar0 = pci_config_read32((uint8_t)bus, slot, func, 0x10);
+            uint32_t bar1 = pci_config_read32((uint8_t)bus, slot, func, 0x14);
 
-                    e1000_mmio_base = bar0 & ~0xF;
-                    e1000_io_base = (uint16_t)(bar1 & ~0x3);
-
-                    
-                    use_mmio = 1;
-                    uint32_t test_val = e1000_read(REG_STATUS);
-                    if (test_val == 0 || test_val == 0xFFFFFFFF) {
-                        
-                        use_mmio = 0;
-                        test_val = e1000_read(REG_STATUS);
-                    }
-
-                    debug_print("[E1000] Access Mode: ");
-                    debug_print(use_mmio ? "MMIO (" : "IO Ports (");
-                    debug_hex(use_mmio ? e1000_mmio_base : e1000_io_base);
-                    debug_print(") Initial STATUS: ");
-                    debug_hex(test_val);
-                    debug_print("\n");
-
-                    if (test_val == 0xFFFFFFFFU) {
-                        diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
-                        diag.last_error_status = 0xFFFF;
-                        diag.dw_csr0 = test_val;
-                        return 0;
-                    }
-
-                    return 1;
-                }
+            if ((bar0 & ~0xFU) == 0 && (bar1 & ~0x3U) == 0) {
+                diag.init_failure = NET_INIT_FAILURE_DISCOVERY;
+                return 0;
             }
+
+            e1000_mmio_base = bar0 & ~0xF;
+            e1000_io_base = (uint16_t)(bar1 & ~0x3);
+
+
+            use_mmio = 1;
+            uint32_t test_val = e1000_read(REG_STATUS);
+            if (test_val == 0 || test_val == 0xFFFFFFFF) {
+
+                use_mmio = 0;
+                test_val = e1000_read(REG_STATUS);
+            }
+
+            debug_print("[E1000] Access Mode: ");
+            debug_print(use_mmio ? "MMIO (" : "IO Ports (");
+            debug_hex(use_mmio ? e1000_mmio_base : e1000_io_base);
+            debug_print(") Initial STATUS: ");
+            debug_hex(test_val);
+            debug_print("\n");
+
+            if (test_val == 0xFFFFFFFFU) {
+                diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
+                diag.last_error_status = 0xFFFF;
+                diag.dw_csr0 = test_val;
+                return 0;
+            }
+
+            return 1;
         }
+
     }
     return 0;
 }
@@ -226,7 +210,7 @@ uint8_t e1000_init(void) {
         return 0;
     }
 
-    
+
     e1000_write(REG_CTRL, e1000_read(REG_CTRL) | CTRL_RST);
     for (volatile int i = 0; i < 50000; i++) __asm__ volatile ("pause");
     if (e1000_read(REG_CTRL) & CTRL_RST) {
@@ -236,14 +220,14 @@ uint8_t e1000_init(void) {
         return 0;
     }
 
-    
+
     e1000_write(REG_CTRL, CTRL_SLU | (1 << 5));
 
-    
+
     e1000_write(REG_IMC, 0xFFFFFFFF);
     e1000_read(REG_ICR);
 
-    
+
     uint16_t eeprom0 = e1000_eeprom_read(0);
     uint16_t eeprom1 = e1000_eeprom_read(1);
     uint16_t eeprom2 = e1000_eeprom_read(2);
@@ -262,7 +246,7 @@ uint8_t e1000_init(void) {
         mac_bytes[4] = (uint8_t)(eeprom2 & 0xFF);
         mac_bytes[5] = (uint8_t)((eeprom2 >> 8) & 0xFF);
     } else {
-        
+
         uint32_t ral = e1000_read(REG_RAL);
         uint32_t rah = e1000_read(REG_RAH);
         mac_bytes[0] = (uint8_t)(ral & 0xFF);
@@ -283,17 +267,17 @@ uint8_t e1000_init(void) {
     debug_hex((uint32_t)mac_addr);
     debug_print("\n");
 
-    
+
     uint32_t write_ral = (uint32_t)mac_bytes[0] | ((uint32_t)mac_bytes[1] << 8) |
                          ((uint32_t)mac_bytes[2] << 16) | ((uint32_t)mac_bytes[3] << 24);
     uint32_t write_rah = (uint32_t)mac_bytes[4] | ((uint32_t)mac_bytes[5] << 8) | 0x80000000U;
     e1000_write(REG_RAL, write_ral);
     e1000_write(REG_RAH, write_rah);
 
-    
+
     for (int i = 0; i < 128; i++) e1000_write(REG_MTA + (i * 4), 0);
 
-    
+
     rx_cur = 0;
     for (int i = 0; i < E1000_NUM_RX_DESC; i++) {
         rx_descs[i].buffer_addr = (uint32_t)&rx_buffers[i][0];
@@ -306,7 +290,7 @@ uint8_t e1000_init(void) {
     e1000_write(REG_RDT, E1000_NUM_RX_DESC - 1);
     e1000_write(REG_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_BSIZE_2K | RCTL_SECRC);
 
-    
+
     tx_cur = 0;
     for (int i = 0; i < E1000_NUM_TX_DESC; i++) {
         tx_descs[i].buffer_addr = (uint32_t)&tx_buffers[i][0];
@@ -342,7 +326,7 @@ uint8_t e1000_init(void) {
 uint8_t e1000_is_ready(void) {
     if (!ready) return 0;
     uint32_t status = e1000_read(REG_STATUS);
-    
+
     return (status & 0x02) ? 1 : 0;
 }
 

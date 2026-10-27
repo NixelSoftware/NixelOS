@@ -1,6 +1,6 @@
 #ifndef NET_B44_H
 #define NET_B44_H
-#include "net.h"
+#include "../../hal/net_types.h"
 /* Optional boot-only observer; unset after initialization. */
 void b44_set_init_progress(void (*progress)(const char* status));
 uint8_t b44_init(void);

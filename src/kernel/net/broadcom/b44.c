@@ -6,9 +6,10 @@
  * Copyright (c) 2006 Broadcom Corporation; SSB work by Michael Buesch.
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
-#include "net_b44.h"
-#include "net_b44_regs.h"
-#include "serial.h"
+#include "b44.h"
+#include "b44_regs.h"
+#include "../../drivers/serial.h"
+#include "../../drivers/pci.h"
 
 #define COUNT 16U
 #define BUFFER_SIZE 1600U
@@ -64,36 +65,34 @@ static uint8_t wait_reg(uint32_t reg, uint32_t mask, uint8_t set) {
     return 0;
 }
 static uint32_t pci_read(uint8_t reg) {
-    outl(0xCF8, pci_address | (reg & 0xFC));
-    return inl(0xCFC);
+    return pci_config_read32(pci_address >> 16, (pci_address >> 11) & 31,
+                             (pci_address >> 8) & 7, reg);
 }
 static void pci_write(uint8_t reg, uint32_t value) {
-    outl(0xCF8, pci_address | (reg & 0xFC));
-    outl(0xCFC, value);
+    pci_config_write32(pci_address >> 16, (pci_address >> 11) & 31,
+                       (pci_address >> 8) & 7, reg, value);
 }
 static uint8_t discover(void) {
-    for (uint32_t bus = 0; bus < 256; ++bus)
-        for (uint32_t slot = 0; slot < 32; ++slot)
-            for (uint32_t fn = 0; fn < 8; ++fn) {
-                pci_address = 0x80000000U | bus << 16 | slot << 11 | fn << 8;
-                uint32_t id = pci_read(0);
-                if (id != 0x440114E4U && id != 0x170C14E4U && id != 0x440214E4U)
-                    continue;
-                uint32_t bar = pci_read(0x10);
-                if (!bar || bar == 0xFFFFFFFFU || (bar & 7)) return 0;
-                mmio = bar & ~15U;
-                /* BCM4401's fixed power-management register: enter D0.
-                 * PME status is W1C, so leave bit 15 clear. */
-                progress("BCM4401: powering PCI device");
-                uint16_t pm = (uint16_t)pci_read(0x44);
-                outl(0xCF8, pci_address | 0x44);
-                outw(0xCFC, pm & ~0x8003U);
-                delay_us(10000);
-                /* Write only command, never the write-one-to-clear PCI status. */
-                outl(0xCF8, pci_address | 4);
-                outw(0xCFC, (uint16_t)pci_read(4) | 6);
-                return 1;
-            }
+    for (uint32_t index = 0; index < pci_device_count(); index++) {
+        const pci_device_t* dev = pci_device_at(index);
+        uint8_t bus = dev->bus, slot = dev->slot, fn = dev->function;
+        pci_address = 0x80000000U | bus << 16 | slot << 11 | fn << 8;
+        uint32_t id = pci_read(0);
+        if (id != 0x440114E4U && id != 0x170C14E4U && id != 0x440214E4U)
+            continue;
+        uint32_t bar = pci_read(0x10);
+        if (!bar || bar == 0xFFFFFFFFU || (bar & 7)) return 0;
+        mmio = bar & ~15U;
+        /* BCM4401's fixed power-management register: enter D0.
+         * PME status is W1C, so leave bit 15 clear. */
+        progress("BCM4401: powering PCI device");
+        uint16_t pm = (uint16_t)pci_read(0x44);
+        pci_config_write16(bus, slot, fn, 0x44, pm & ~0x8003U);
+        delay_us(10000);
+        /* Write only command, never the write-one-to-clear PCI status. */
+        pci_config_write16(bus, slot, fn, 4, (uint16_t)pci_read(4) | 6);
+        return 1;
+    }
     return 0;
 }
 static uint8_t mdio(uint8_t reg, uint16_t* value, uint8_t write) {

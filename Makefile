@@ -91,11 +91,12 @@ KERNEL_C := \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c \
-  src/kernel/drivers/ata.c src/kernel/drivers/net.c \
-  src/kernel/drivers/net_e1000.c src/kernel/drivers/net_tg3.c src/kernel/drivers/net_b44.c \
+  src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
+  src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
+  src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
-  src/kernel/drivers/ps2.c src/kernel/kernel_net.c \
+  src/kernel/drivers/ps2.c src/kernel/hal/net.c \
   src/kernel/net/ipv4.c src/kernel/net/etherframe.c src/kernel/net/arp.c \
   src/kernel/net/tcp.c src/kernel/net/udp.c src/kernel/net/icmp.c \
   src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
@@ -235,8 +236,20 @@ clean-build:
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
 
-src/kernel/drivers/net_b44.o: src/kernel/drivers/net_b44.h src/kernel/drivers/net_b44_regs.h src/kernel/drivers/net.h
-src/kernel/kernel_net.o: src/kernel/drivers/net_b44.h
+src/kernel/net/broadcom/b44.o: src/kernel/net/broadcom/b44.h src/kernel/net/broadcom/b44_regs.h src/kernel/hal/net_types.h
+src/kernel/hal/net.o: src/kernel/net/broadcom/b44.h
 
 src/kernel/drivers/hda.o: src/kernel/drivers/hda.h src/kernel/hal/audio.h
 src/kernel/hal/audio.o: src/kernel/drivers/hda.h
+
+$(KERNEL_C:.c=.o): src/kernel/drivers/pci.h src/kernel/drivers/delay.h
+src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3_regs.h
+
+src/kernel/net/broadcom/tg3.o src/kernel/net/phys/broadcom.o: src/kernel/net/phys/broadcom.h
+
+# Shared network ABI and manufacturer-specific driver interfaces.
+$(KERNEL_C:.c=.o): src/kernel/hal/net.h src/kernel/hal/net_types.h
+src/kernel/net/amd/pcnet.o: src/kernel/net/amd/pcnet.h
+src/kernel/net/intel/e1000.o: src/kernel/net/intel/e1000.h
+src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3.h
+src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h src/kernel/net/broadcom/tg3.h

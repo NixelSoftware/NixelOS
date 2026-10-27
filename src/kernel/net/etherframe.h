@@ -2,7 +2,7 @@
 #define ETHERFRAME_H
 
 #include "../types.h"
-#include "../drivers/net.h"
+#include "../hal/net_types.h"
 
 #define ETHERFRAME_HEADER_SIZE 14
 #define ETHERFRAME_MAX_PAYLOAD (NET_MAX_FRAME_SIZE - ETHERFRAME_HEADER_SIZE)

@@ -1,8 +1,12 @@
-#ifndef KERNEL_NET_H
-#define KERNEL_NET_H
+#ifndef KERNEL_HAL_NET_H
+#define KERNEL_HAL_NET_H
 
-#include "types.h"
-#include "drivers/net.h"
+#include "../types.h"
+#include "net_types.h"
+#include "../drivers/pci.h"
+
+/* Selected PCI function, stable until the next sys_net_init(). */
+const pci_device_t* sys_net_pci_device(void);
 
 // 0 = PCNet32, 1 = Intel E1000, 2 = Tigon3, 3 = BCM4401; ~0u = none
 extern uint32_t net_driver_type;

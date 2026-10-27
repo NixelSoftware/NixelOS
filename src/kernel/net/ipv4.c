@@ -2,7 +2,7 @@
 #include "ipv4.h"
 #include "etherframe.h"
 #include "arp.h"
-#include "../kernel_net.h"
+#include "../hal/net.h"
 #include "../drivers/serial.h"
 #include "../paging.h"
 #include "../../system/loader/app_loader.h"

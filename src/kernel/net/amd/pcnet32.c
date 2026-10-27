@@ -1,5 +1,5 @@
-#include "net_pcnet32.h"
-#include "../net/etherframe.h"
+#include "pcnet32.h"
+#include "../etherframe.h"
 
 #define PCNET_DWIO_RDP    0x10
 #define PCNET_DWIO_RAP    0x14

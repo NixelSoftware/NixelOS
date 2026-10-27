@@ -3,7 +3,7 @@
 
 #include "../../kernel/types.h"
 #include "../../kernel/fs.h"
-#include "../../kernel/drivers/net.h"
+#include "../../kernel/hal/net_types.h"
 #include "window_api.h"
 #include "memory_api.h"
 

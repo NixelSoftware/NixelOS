@@ -2,7 +2,7 @@
 #include "dns.h"
 #include "udp.h"
 #include "dhcp.h"
-#include "../kernel_net.h"
+#include "../hal/net.h"
 
 #define DNS_PORT 53
 #define DNS_MAX_NAME 253

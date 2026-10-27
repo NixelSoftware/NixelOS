@@ -5,7 +5,7 @@
 #include "fs.h"
 #include "window.h"
 #include "../system/graphics/image/png.h"
-#include "drivers/net.h"
+#include "hal/net_types.h"
 #include "net/icmp.h"
 #include "net/dns.h"
 

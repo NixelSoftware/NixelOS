@@ -1,3 +1,4 @@
+#include "../pci.h"
 #include "uhci.h"
 #include "../serial.h"
 #include "../../mutex.h"
@@ -51,47 +52,32 @@ static uint64_t uhci_now(void) {
     return now;
 }
 
-static uint32_t pci_read32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(0xCF8, address);
-    return inl(0xCFC);
-}
-
-static void pci_write16(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint16_t value) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(0xCF8, address);
-    outw(0xCFC + (offset & 2), value);
-}
-
 static uint16_t find_uhci_controller(void) {
-    for (uint16_t bus = 0; bus < 256; bus++) {
-        for (uint8_t slot = 0; slot < 32; slot++) {
-            for (uint8_t func = 0; func < 8; func++) {
-                uint32_t id = pci_read32((uint8_t)bus, slot, func, 0);
-                uint16_t vendor = (uint16_t)id;
-                if (vendor == 0xFFFF) continue;
+    for (uint32_t index = 0; index < pci_device_count(); index++) {
+        const pci_device_t* dev = pci_device_at(index);
+        uint8_t bus = dev->bus, slot = dev->slot, func = dev->function;
+        uint32_t id = pci_config_read32((uint8_t)bus, slot, func, 0);
+        uint16_t vendor = (uint16_t)id;
+        if (vendor == 0xFFFF) continue;
 
-                uint32_t class_reg = pci_read32((uint8_t)bus, slot, func, 0x08);
-                uint8_t base_class = (uint8_t)(class_reg >> 24);
-                uint8_t sub_class  = (uint8_t)(class_reg >> 16);
-                uint8_t prog_if    = (uint8_t)(class_reg >> 8);
+        uint32_t class_reg = pci_config_read32((uint8_t)bus, slot, func, 0x08);
+        uint8_t base_class = (uint8_t)(class_reg >> 24);
+        uint8_t sub_class  = (uint8_t)(class_reg >> 16);
+        uint8_t prog_if    = (uint8_t)(class_reg >> 8);
 
-                if (base_class == 0x0C && sub_class == 0x03 && prog_if == 0x00) {
-                    pci_write16((uint8_t)bus, slot, func, 0xC0, 0x8F00);
+        if (base_class == 0x0C && sub_class == 0x03 && prog_if == 0x00) {
+            pci_config_write16((uint8_t)bus, slot, func, 0xC0, 0x8F00);
 
-                    uint32_t cmd = pci_read32((uint8_t)bus, slot, func, 0x04);
-                    cmd |= 0x0005; 
-                    pci_write16((uint8_t)bus, slot, func, 0x04, (uint16_t)cmd);
+            uint32_t cmd = pci_config_read32((uint8_t)bus, slot, func, 0x04);
+            cmd |= 0x0005;
+            pci_config_write16((uint8_t)bus, slot, func, 0x04, (uint16_t)cmd);
 
-                    uint32_t bar4 = pci_read32((uint8_t)bus, slot, func, 0x20);
-                    if (bar4 & 0x01) {
-                        return (uint16_t)(bar4 & ~0x0000001F);
-                    }
-                }
+            uint32_t bar4 = pci_config_read32((uint8_t)bus, slot, func, 0x20);
+            if (bar4 & 0x01) {
+                return (uint16_t)(bar4 & ~0x0000001F);
             }
         }
+
     }
     return 0;
 }

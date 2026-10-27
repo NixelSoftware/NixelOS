@@ -1,8 +1,8 @@
 #include "dhcp.h"
 #include "udp.h"
 #include "ipv4.h"
-#include "../kernel_net.h"
-#include "../drivers/net.h"
+#include "../hal/net.h"
+#include "../hal/net_types.h"
 #include "../drivers/rtc.h"
 
 #define DHCP_CLIENT_PORT 68

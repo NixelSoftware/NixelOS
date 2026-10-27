@@ -1,15 +1,17 @@
 /* Linux x86 host test; -no-pie keeps static DMA addresses below 4 GiB.
- * cc -O2 -fno-pie -no-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
+ * cc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -fno-pie -no-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
  *    tests/net_tg3_test.c -o /tmp/net_tg3_test && /tmp/net_tg3_test
  * Emulates DMA/MMIO only: physical PCI and MDIO access are not exercised. */
 #include <assert.h>
 #include <stdio.h>
-#include "../src/kernel/drivers/net_tg3.c"
+#include "../src/kernel/net/broadcom/tg3.c"
 
 static uint32_t registers[0x7000 / 4];
 static unsigned received;
 void debug_print(const char* value) { (void)value; }
 void debug_hex(uint32_t value) { (void)value; }
+void driver_delay_us(uint32_t us) { (void)us; }
+void pci_set_master(const pci_device_t* dev, int enabled) { (void)dev; (void)enabled; }
 static uint8_t receive_packet(const uint8_t* data, uint32_t length) {
     assert(data == rx_buffers[3] && length == 60);
     received++;

@@ -1,4 +1,5 @@
-#include "net.h"
+#include "pcnet.h"
+#include "../../drivers/pci.h"
 
 #define PCNET_SW_RDP 0x10
 #define PCNET_SW_RAP 0x12
@@ -31,8 +32,6 @@
 
 #define RING_COUNT 8
 #define BUFFER_SIZE 1536
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA 0xCFC
 #define PCNET_VENDOR_ID 0x1022
 #define PCNET_DEVICE_ID 0x2000
 
@@ -106,51 +105,23 @@ static void pcnet_enable_dwio(void) {
     outl(net_io_base + PCNET_DW_RDP, 0);
 }
 
-static uint32_t pci_read32(uint8_t bus, uint8_t slot, uint8_t function,
-                           uint8_t offset) {
-    uint32_t address = 0x80000000U
-                     | ((uint32_t)bus << 16)
-                     | ((uint32_t)slot << 11)
-                     | ((uint32_t)function << 8)
-                     | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
-}
-
-static void pci_write16(uint8_t bus, uint8_t slot, uint8_t function,
-                        uint8_t offset, uint16_t value) {
-    uint32_t address = 0x80000000U
-                     | ((uint32_t)bus << 16)
-                     | ((uint32_t)slot << 11)
-                     | ((uint32_t)function << 8)
-                     | (offset & 0xFC);
-    uint32_t current;
-    outl(PCI_CONFIG_ADDRESS, address);
-    current = inl(PCI_CONFIG_DATA);
-    if (offset & 2) current = (current & 0x0000FFFFU) | ((uint32_t)value << 16);
-    else current = (current & 0xFFFF0000U) | value;
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, current);
-}
-
 static uint16_t find_pcnet_io_base(void) {
-    for (uint16_t bus = 0; bus < 256; bus++) {
-        for (uint8_t slot = 0; slot < 32; slot++) {
-            for (uint8_t function = 0; function < 8; function++) {
-                uint32_t identity = pci_read32((uint8_t)bus, slot, function, 0);
-                uint16_t vendor = (uint16_t)identity;
-                uint16_t device = (uint16_t)(identity >> 16);
-                uint32_t bar;
+    for (uint32_t index = 0; index < pci_device_count(); index++) {
+        const pci_device_t* dev = pci_device_at(index);
+        uint8_t bus = dev->bus, slot = dev->slot, function = dev->function;
+        uint32_t identity = pci_config_read32((uint8_t)bus, slot, function, 0);
+        uint16_t vendor = (uint16_t)identity;
+        uint16_t device = (uint16_t)(identity >> 16);
+        uint32_t bar;
 
-                if (vendor != PCNET_VENDOR_ID || device != PCNET_DEVICE_ID)
-                    continue;
-                bar = pci_read32((uint8_t)bus, slot, function, 0x10);
-                if (!(bar & 1) || (bar & 0xFFFFFFFCU) == 0)
-                    return 0;
-                pci_write16((uint8_t)bus, slot, function, 4, 0x0005);
-                return (uint16_t)(bar & 0xFFFC);
-            }
-        }
+        if (vendor != PCNET_VENDOR_ID || device != PCNET_DEVICE_ID)
+            continue;
+        bar = pci_config_read32((uint8_t)bus, slot, function, 0x10);
+        if (!(bar & 1) || (bar & 0xFFFFFFFCU) == 0)
+            return 0;
+        pci_config_write16((uint8_t)bus, slot, function, 4, 0x0005);
+        return (uint16_t)(bar & 0xFFFC);
+
     }
     return 0;
 }

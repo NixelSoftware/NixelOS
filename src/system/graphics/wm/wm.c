@@ -17,7 +17,7 @@
 #include "../../shell/commands.h"
 #include "../../icons/network.h"
 #include "../../icons/sound.h"
-#include "../../../kernel/kernel_net.h"
+#include "../../../kernel/hal/net.h"
 
 static Window* windows[WM_MAX_WINDOWS];
 static uint32_t window_directories[WM_MAX_WINDOWS];

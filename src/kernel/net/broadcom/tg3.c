@@ -1,8 +1,11 @@
-#include "net_tg3.h"
-#include "serial.h"
+#include "tg3.h"
+#include "../../drivers/serial.h"
+#include "../../drivers/pci.h"
+#include "../../drivers/delay.h"
+#include "../../hal/net.h"
+#include "tg3_regs.h"
+#include "../phys/broadcom.h"
 
-#define PCI_CONFIG_ADDRESS          0xCF8
-#define PCI_CONFIG_DATA             0xCFC
 #define BROADCOM_VENDOR_ID          0x14E4
 
 #define TG3_PCI_MISC_HOST_CTRL      0x00000068
@@ -192,6 +195,7 @@ static uint64_t tg3_mac_addr = 0;
 static uint32_t tg3_ip_addr = 0;
 static uint8_t  tg3_phy_addr = 1;
 static uint16_t tg3_phy_id = 0;
+static uint32_t tg3_phy_identifier;
 static net_receive_handler_t tg3_rx_handler = 0;
 static net_diagnostics_t tg3_diag;
 
@@ -199,6 +203,10 @@ static uint16_t tg3_tx_prod = 0;
 static uint16_t tg3_rx_rcb_cons = 0;
 static uint16_t tg3_rx_std_prod, tg3_tx_cons;
 static uint16_t tg3_device;
+static const pci_device_t* tg3_pci;
+static uint32_t tg3_chip_revision, tg3_asic;
+static uint8_t tg3_cpmu, tg3_57765, tg3_asf;
+static uint32_t tg3_host_control;
 static uint8_t tg3_link_up;
 static uint32_t tg3_link_poll;
 
@@ -211,6 +219,14 @@ static volatile tg3_status_block_t status_block    __attribute__((aligned(64)));
 static uint8_t rx_buffers[TG3_BUFFER_COUNT][TG3_BUF_SIZE] __attribute__((aligned(64)));
 static uint8_t tx_buffers[TG3_TX_BUFFER_COUNT][TG3_BUF_SIZE] __attribute__((aligned(64)));
 
+#ifdef TG3_HOST_TEST
+/* Register model for reset-sequence tests; absent from production builds. */
+extern uint32_t tg3_test_read32(uint32_t reg);
+extern void tg3_test_write32(uint32_t reg, uint32_t value);
+extern void tg3_test_write_reset(uint32_t value);
+static inline void tg3_write32(uint32_t reg, uint32_t value) { tg3_test_write32(reg, value); }
+static inline uint32_t tg3_read32(uint32_t reg) { return tg3_test_read32(reg); }
+#else
 static inline void tg3_write32(uint32_t off, uint32_t val) {
     if (tg3_mmio_base) {
         __asm__ volatile ("" ::: "memory");
@@ -227,30 +243,32 @@ static inline uint32_t tg3_read32(uint32_t off) {
     return 0xFFFFFFFF;
 }
 
+#endif
+static void tg3_write_reset(uint32_t value) {
+#ifdef TG3_HOST_TEST
+    tg3_test_write_reset(value);
+#else
+    *((volatile uint32_t*)(tg3_mmio_base + TG3_GRC_MISC_CFG)) = value;
+    __asm__ volatile ("" ::: "memory");
+#endif
+}
+
 static inline void tg3_delay(void) {
-    for (volatile int d = 0; d < 3000; d++) {
-        outb(0x80, 0x00);
-    }
+    driver_delay_us(40);
 }
 
-static void tg3_write_mem(uint32_t off, uint32_t val) {
-    tg3_write32(TG3PCI_MEM_WIN_BASE_ADDR, off);
-    tg3_write32(TG3PCI_MEM_WIN_DATA, val);
-    tg3_write32(TG3PCI_MEM_WIN_BASE_ADDR, 0);
+/* Config-window SRAM access also works while the MMIO window is restored.
+ * The network wrapper serializes ownership of this NIC's window. */
+static void tg3_write_mem(uint32_t off, uint32_t value) {
+    pci_write32(tg3_pci, TG3PCI_MEM_WIN_BASE_ADDR, off);
+    pci_write32(tg3_pci, TG3PCI_MEM_WIN_DATA, value);
+    pci_write32(tg3_pci, TG3PCI_MEM_WIN_BASE_ADDR, 0);
 }
-
-static uint32_t pci_read(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
-}
-
-static void pci_write32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint32_t val) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, val);
+static uint32_t tg3_read_mem(uint32_t off) {
+    pci_write32(tg3_pci, TG3PCI_MEM_WIN_BASE_ADDR, off);
+    uint32_t value = pci_read32(tg3_pci, TG3PCI_MEM_WIN_DATA);
+    pci_write32(tg3_pci, TG3PCI_MEM_WIN_BASE_ADDR, 0);
+    return value;
 }
 
 static int is_tg3_device(uint16_t dev_id) {
@@ -274,37 +292,51 @@ static int is_tg3_device(uint16_t dev_id) {
 }
 
 static int tg3_pci_find(void) {
-    for (uint16_t bus = 0; bus < 256; bus++) {
-        for (uint8_t slot = 0; slot < 32; slot++) {
-            for (uint8_t func = 0; func < 8; func++) {
-                uint32_t id = pci_read((uint8_t)bus, slot, func, 0);
-                uint16_t vendor = (uint16_t)id;
-                uint16_t device = (uint16_t)(id >> 16);
-
-                if (vendor == BROADCOM_VENDOR_ID && is_tg3_device(device)) {
-                    uint32_t bar0 = pci_read((uint8_t)bus, slot, func, 0x10);
-                    /* Reject I/O, reserved BAR types, and addresses above 4 GiB. */
-                    if (!bar0 || bar0 == 0xFFFFFFFF || (bar0 & 1) ||
-                        (bar0 & 6) == 2 || (bar0 & 6) == 6 ||
-                        ((bar0 & 6) == 4 && pci_read(bus, slot, func, 0x14)))
-                        continue;
-                    tg3_mmio_base = bar0 & ~0xFU;
-                    if (!tg3_mmio_base) continue;
-                    tg3_device = device;
-                    uint32_t cmd = pci_read(bus, slot, func, 0x04) & 0xFFFF;
-                    /* Do not echo PCI status W1C bits back into config space. */
-                    pci_write32(bus, slot, func, 0x04, cmd | 0x406);
-                    return 1;
-                }
-            }
-        }
+    /* Use the function selected by the network layer, never rescan a different
+     * Broadcom adapter (important on systems with several NICs). */
+    tg3_pci = sys_net_pci_device();
+    if (!tg3_pci || tg3_pci->vendor_id != BROADCOM_VENDOR_ID ||
+        !is_tg3_device(tg3_pci->device_id) || tg3_pci->header_type != 0) return 0;
+    if (!pci_enable_device(tg3_pci, PCI_COMMAND_MEMORY)) return 0;
+    pci_set_master(tg3_pci, 0);
+    pci_bar_t bar;
+    if (!pci_probe_bar(tg3_pci, 0, &bar) || bar.io || !bar.address ||
+        bar.address > 0xFFFFFFFFu || bar.size < 0x8000 ||
+        bar.address + 0x8000 > 0x100000000ULL) return 0;
+    tg3_mmio_base = (uint32_t)bar.address;
+    tg3_device = tg3_pci->device_id;
+    pci_prepare_polling(tg3_pci);
+    /* Match Linux's register byte order before the first MMIO access. */
+    uint32_t control = pci_read32(tg3_pci, TG3PCI_MISC_HOST_CTRL);
+    if (control == 0xFFFFFFFF) return 0;
+    tg3_chip_revision = control >> 16;
+    tg3_cpmu = (tg3_chip_revision >> 12) == 0xF;
+    if (tg3_cpmu) {
+        uint16_t reg = (tg3_device & 0xFFF0) == 0x16B0 ?
+            TG3PCI_GEN15_PRODID_ASICREV : TG3PCI_PRODID_ASICREV;
+        tg3_chip_revision = pci_read32(tg3_pci, reg);
     }
-    return 0;
+    if (tg3_chip_revision == 0x5000) tg3_chip_revision = 0x6000;
+    tg3_asic = tg3_chip_revision >> 12;
+    tg3_57765 = tg3_asic == 0x57785 || tg3_asic == 0x57766;
+    tg3_host_control = (control & 0xFFFF0000u) | 0x9Au;
+    pci_write32(tg3_pci, TG3PCI_MISC_HOST_CTRL, tg3_host_control);
+    return 1;
 }
 
+static int tg3_valid_mac(uint64_t mac) {
+    return mac && mac != 0xFFFFFFFFFFFFULL && !(mac & 0x010000000000ULL);
+}
 static void tg3_read_mac(void) {
-    uint32_t hi = tg3_read32(TG3_MAC_ADDR_0_HIGH);
-    uint32_t lo = tg3_read32(TG3_MAC_ADDR_0_LOW);
+    uint32_t hi = tg3_read_mem(NIC_SRAM_MAC_ADDR_HIGH_MBOX);
+    uint32_t lo = tg3_read_mem(NIC_SRAM_MAC_ADDR_LOW_MBOX);
+    uint64_t mailbox_mac = ((uint64_t)(hi & 0xFFFF) << 32) | lo;
+    if ((hi >> 16) == 0x484B && tg3_valid_mac(mailbox_mac)) {
+        tg3_mac_addr = mailbox_mac;
+        return;
+    }
+    hi = tg3_read32(TG3_MAC_ADDR_0_HIGH);
+    lo = tg3_read32(TG3_MAC_ADDR_0_LOW);
 
     uint8_t mac[6];
     mac[0] = (uint8_t)(hi >> 8);
@@ -331,7 +363,7 @@ static int tg3_mdio_read(uint8_t phy_addr, uint8_t reg, uint32_t* val) {
     int idle;
     for (idle = 0; idle < 10000; idle++) {
         if (!(tg3_read32(TG3_MAC_MI_COM) & MI_COM_BUSY)) break;
-        outb(0x80, 0x00);
+        driver_delay_us(10);
     }
     if (idle == 10000) {
         tg3_write32(TG3_MAC_MI_MODE, orig_mi_mode);
@@ -352,7 +384,7 @@ static int tg3_mdio_read(uint8_t phy_addr, uint8_t reg, uint32_t* val) {
             ok = !(check & MI_COM_READ_FAILED);
             break;
         }
-        outb(0x80, 0x00);
+        driver_delay_us(10);
     }
 
     if (orig_mi_mode & MAC_MI_MODE_AUTO_POLL) {
@@ -373,7 +405,7 @@ static int tg3_mdio_write(uint8_t phy_addr, uint8_t reg, uint32_t val) {
     int idle;
     for (idle = 0; idle < 10000; idle++) {
         if (!(tg3_read32(TG3_MAC_MI_COM) & MI_COM_BUSY)) break;
-        outb(0x80, 0x00);
+        driver_delay_us(10);
     }
     if (idle == 10000) {
         tg3_write32(TG3_MAC_MI_MODE, orig_mi_mode);
@@ -394,7 +426,7 @@ static int tg3_mdio_write(uint8_t phy_addr, uint8_t reg, uint32_t val) {
             ok = 1;
             break;
         }
-        outb(0x80, 0x00);
+        driver_delay_us(10);
     }
 
     if (orig_mi_mode & MAC_MI_MODE_AUTO_POLL) {
@@ -405,17 +437,153 @@ static int tg3_mdio_write(uint8_t phy_addr, uint8_t reg, uint32_t val) {
     return ok;
 }
 
+/* Linux tg3_stop_fw / tg3_chip_reset / tg3_poll_fw ordering, adapted to
+ * Nixel's one polling queue and identity-mapped coherent DMA buffers. */
+static int tg3_wait_fw_event(void) {
+    for (uint32_t i = 0; i < 2500; i++) {
+        if (!(tg3_read32(GRC_RX_CPU_EVENT) & GRC_RX_CPU_DRIVER_EVENT)) return 1;
+        driver_delay_us(8);
+    }
+    return 0;
+}
+static int tg3_reset_chip(void) {
+    pci_saved_state_t saved;
+    uint32_t signature = tg3_read_mem(NIC_SRAM_DATA_SIG);
+    uint32_t config = signature == NIC_SRAM_DATA_SIG_MAGIC ?
+        tg3_read_mem(NIC_SRAM_DATA_CFG) : 0;
+    /* APE-managed devices require BAR2 and APE locking, not ASF commands. */
+    if (config & NIC_SRAM_DATA_CFG_APE_ENABLE) {
+        debug_print("[TG3] APE management requires an APE backend\n");
+        return 0;
+    }
+    tg3_asf = !!(config & NIC_SRAM_DATA_CFG_ASF_ENABLE);
+    if (tg3_asf) {
+        if (!tg3_wait_fw_event()) return 0;
+        tg3_write_mem(NIC_SRAM_FW_CMD_MBOX, FWCMD_NICDRV_PAUSE_FW);
+        tg3_write32(GRC_RX_CPU_EVENT, tg3_read32(GRC_RX_CPU_EVENT) | GRC_RX_CPU_DRIVER_EVENT);
+        if (!tg3_wait_fw_event()) return 0;
+    }
+    /* Linux arbitrates NVRAM before a core reset, which releases the grant. */
+    tg3_write32(NVRAM_SWARB, SWARB_REQ_SET1);
+    uint32_t count;
+    for (count = 0; count < 8000; count++) {
+        if (tg3_read32(NVRAM_SWARB) & SWARB_GNT1) break;
+        driver_delay_us(20);
+    }
+    if (count == 8000) {
+        tg3_write32(NVRAM_SWARB, SWARB_REQ_CLR1);
+        return 0;
+    }
+    uint8_t pcie = pci_find_capability(tg3_pci, PCI_CAP_PCIE);
+    if (pcie && pcie <= 0xEC) {
+        uint16_t ctl = pci_read16(tg3_pci, pcie + 8);
+        ctl &= ~(0x10u | 0x800u); /* relaxed ordering, no-snoop */
+        if (!tg3_cpmu) ctl &= ~0xE0u; /* older chips require 128-byte MPS */
+        pci_write16(tg3_pci, pcie + 8, ctl);
+    }
+    if (!pci_save_state(tg3_pci, &saved)) {
+        tg3_write32(NVRAM_SWARB, SWARB_REQ_CLR1);
+        return 0;
+    }
+    tg3_write_mem(NIC_SRAM_FIRMWARE_MBOX, NIC_SRAM_FIRMWARE_MBOX_MAGIC1);
+    if (tg3_asf) tg3_write_mem(NIC_SRAM_FW_DRV_STATE_MBOX, DRV_STATE_START);
+    if (tg3_asic == 6 || tg3_asic == 0xA || tg3_asic == 0xB || tg3_cpmu)
+        tg3_write32(GRC_FASTBOOT_PC, 0);
+    if (tg3_asic == 0x57780) {
+        uint32_t val = tg3_read32(TG3_PCIE_LNKCTL);
+        tg3_write32(TG3_PCIE_LNKCTL, (val & ~TG3_PCIE_LNKCTL_L1_PLL_PD_EN) | TG3_PCIE_LNKCTL_L1_PLL_PD_DIS);
+    }
+    if (pcie && !tg3_57765 && tg3_asic != 0x5785 &&
+        tg3_read32(TG3_PCIE_PHY_TSTCTL) == 0x60)
+        tg3_write32(TG3_PCIE_PHY_TSTCTL, TG3_PCIE_PHY_TSTCTL_PSCRAM);
+    uint32_t reset = GRC_MISC_CFG_CORECLK_RESET;
+    if (pcie && tg3_chip_revision != 0x4000) {
+        tg3_write32(TG3_GRC_MISC_CFG, 1u << 29);
+        reset |= 1u << 29;
+    }
+    if (!tg3_cpmu) reset |= GRC_MISC_CFG_KEEP_GPHY_PWR;
+    /* Crucial Linux rule: no MMIO flush/read immediately after core reset.
+     * The memory-enable bit may disappear while the reset write is posted. */
+    tg3_write_reset(reset);
+    driver_delay_us(120);
+    (void)pci_read16(tg3_pci, 4);
+    driver_delay_us(120);
+    if (tg3_chip_revision == 0x4000) driver_delay_us(500000);
+    if (!pci_restore_state(tg3_pci, &saved)) return 0;
+    pci_write32(tg3_pci, TG3PCI_MISC_HOST_CTRL, tg3_host_control);
+    pci_prepare_polling(tg3_pci);
+    if (pcie && pcie <= 0xEC) pci_write16(tg3_pci, pcie + 10, 0xF);
+    tg3_write32(TG3_MEMARB_MODE, TG3_MEMARB_MODE_ENABLE);
+    for (count = 0; count < 100000; count++) {
+        if (tg3_read_mem(NIC_SRAM_FIRMWARE_MBOX) == ~(uint32_t)NIC_SRAM_FIRMWARE_MBOX_MAGIC1) break;
+        if (pci_read16(tg3_pci, 0) != tg3_pci->vendor_id) return 0;
+        driver_delay_us(10);
+    }
+    if (count == 100000) debug_print("[TG3] No boot firmware acknowledgement; continuing without firmware\n");
+    if (tg3_chip_revision == 0x57785000) driver_delay_us(10000);
+    /* Restore the address saved before reset, even if reset cleared MAC regs. */
+    tg3_write32(TG3_MAC_ADDR_0_HIGH, (uint32_t)(tg3_mac_addr >> 32));
+    tg3_write32(TG3_MAC_ADDR_0_LOW, (uint32_t)tg3_mac_addr);
+    if (tg3_asf) tg3_write_mem(NIC_SRAM_FW_DRV_STATE_MBOX, DRV_STATE_START);
+    return 1;
+}
+
+/* BCM57780 power/PCIe/DMA workarounds from Linux tg3_reset_hw(). */
+static void tg3_apply_57780_quirks(void) {
+    if (tg3_asic != 0x57780) return;
+    uint32_t value = tg3_read32(PCIE_PWR_MGMT_THRESH);
+    tg3_write32(PCIE_PWR_MGMT_THRESH, (value & ~PCIE_PWR_MGMT_L1_THRESH_MSK) |
+                PCIE_PWR_MGMT_EXT_ASPM_TMR_EN | PCIE_PWR_MGMT_L1_THRESH_4MS);
+    value = tg3_read32(TG3_PCIE_EIDLE_DELAY);
+    tg3_write32(TG3_PCIE_EIDLE_DELAY, (value & ~TG3_PCIE_EIDLE_DELAY_MASK) |
+                TG3_PCIE_EIDLE_DELAY_13_CLKS);
+    tg3_write32(TG3_CORR_ERR_STAT, TG3_CORR_ERR_STAT_CLEAR);
+    value = tg3_read32(TG3_PCIE_LNKCTL);
+    tg3_write32(TG3_PCIE_LNKCTL, (value & ~TG3_PCIE_LNKCTL_L1_PLL_PD_EN) |
+                TG3_PCIE_LNKCTL_L1_PLL_PD_DIS);
+    value = tg3_read32(TG3_RDMA_RSRVCTRL_REG);
+    tg3_write32(TG3_RDMA_RSRVCTRL_REG, value | TG3_RDMA_RSRVCTRL_FIFO_OFLW_FIX);
+    /* Preserve firmware GPIO state on the onboard NIC, switch off debug UART. */
+    value = tg3_read32(GRC_LOCAL_CTRL);
+    tg3_write32(GRC_LOCAL_CTRL, value | GRC_LCLCTRL_GPIO_UART_SEL);
+}
+static int tg3_phy_read(void* context, uint8_t reg, uint16_t* value) {
+    (void)context;
+    uint32_t data;
+    if (!tg3_mdio_read(tg3_phy_addr, reg, &data)) return 0;
+    *value = data;
+    return 1;
+}
+static int tg3_phy_write(void* context, uint8_t reg, uint16_t value) {
+    (void)context;
+    return tg3_mdio_write(tg3_phy_addr, reg, value);
+}
+static uint32_t tg3_mdio_mode(void) {
+    /* CPMU parts, including BCM57780, need the constant 500 kHz clock. */
+    return tg3_cpmu ? MAC_MI_MODE_500KHZ_CONST : MAC_MI_MODE_BASE;
+}
+
 static int tg3_phy_init(void) {
     uint32_t val = 0;
 
-    tg3_write32(TG3_MAC_MI_MODE, MAC_MI_MODE_BASE | MAC_MI_MODE_CLK_10MHZ);
-    tg3_delay();
+    tg3_write32(TG3_MAC_MI_MODE, tg3_mdio_mode());
+    driver_delay_us(80);
 
+    /* Linux powers the preferred PHY before probing its ID. */
+    uint32_t control;
+    if (tg3_mdio_read(1, MII_BMCR, &control) && (control & BMCR_PDOWN)) {
+        if (!tg3_mdio_write(1, MII_BMCR, control & ~BMCR_PDOWN)) return 0;
+        driver_delay_us(1000);
+    }
     tg3_phy_addr = 1;
     int found = 0;
-    for (uint8_t a = 0; a < 32; a++) {
+    for (uint8_t i = 0; i < 32; i++) {
+        uint8_t a = i == 0 ? 1 : i == 1 ? 0 : i;
+        uint32_t low;
         val = 0;
-        if (tg3_mdio_read(a, MII_PHYID1, &val) && val != 0x0000 && val != 0xFFFF) {
+        if (tg3_mdio_read(a, MII_PHYID1, &val) && val != 0x0000 && val != 0xFFFF &&
+            tg3_mdio_read(a, MII_PHYID2, &low) && low != 0xFFFF) {
+            tg3_phy_identifier = (val << 16) | low;
             tg3_phy_addr = a;
             found = 1;
             break;
@@ -427,17 +595,28 @@ static int tg3_phy_init(void) {
 
     if (!tg3_mdio_write(tg3_phy_addr, MII_BMCR, BMCR_RESET)) return 0;
     int reset_done = 0;
-    for (int i = 0; i < 1000; i++) {
-        if (tg3_mdio_read(tg3_phy_addr, MII_BMCR, &val) && !(val & BMCR_RESET)) {
+    for (int i = 0; i < 500; i++) {
+        if (!tg3_mdio_read(tg3_phy_addr, MII_BMCR, &val)) return 0;
+        if (!(val & BMCR_RESET)) {
             reset_done = 1;
             break;
         }
-        tg3_delay();
+        driver_delay_us(1000);
     }
 
     if (!reset_done || !tg3_mdio_read(tg3_phy_addr, MII_BMCR, &val)) return 0;
-    val &= ~BMCR_PDOWN;
+    val &= ~(BMCR_PDOWN | 0x0400u); /* Also clear MII isolate. */
     if (!tg3_mdio_write(tg3_phy_addr, MII_BMCR, val)) return 0;
+
+    if (tg3_asic == 0x57780) {
+        const bcm_mdio_t bus = {0, tg3_phy_read, tg3_phy_write};
+        if (!bcm57780_phy_configure(&bus, tg3_phy_identifier)) {
+            debug_print("[TG3] BCM57780 PHY setup failed; PHY ID: ");
+            debug_hex(tg3_phy_identifier);
+            debug_print("\n");
+            return 0;
+        }
+    }
 
     if (!tg3_mdio_write(tg3_phy_addr, MII_ADVERTISE, ADVERTISE_CSMA | ADVERTISE_ALL) ||
         !tg3_mdio_write(tg3_phy_addr, MII_CTRL1000, ADVERTISE_1000FULL) ||
@@ -445,7 +624,7 @@ static int tg3_phy_init(void) {
         return 0;
 
     /* Poll copper link explicitly instead of racing firmware autopoll. */
-    tg3_write32(TG3_MAC_MI_MODE, MAC_MI_MODE_BASE | MAC_MI_MODE_CLK_10MHZ);
+    tg3_write32(TG3_MAC_MI_MODE, tg3_mdio_mode());
     tg3_delay();
     return 1;
 }
@@ -460,34 +639,51 @@ uint8_t tg3_init(void) {
     tg3_link_up = 0;
     tg3_link_poll = 0;
     tg3_mmio_base = 0;
+    tg3_pci = 0;
+    tg3_asf = 0;
+    tg3_phy_identifier = 0;
 
     for (uint32_t i = 0; i < sizeof(tg3_diag); i++) {
         ((uint8_t*)&tg3_diag)[i] = 0;
     }
 
     if (!tg3_pci_find()) {
+        if (tg3_pci) pci_disable_device(tg3_pci);
         tg3_diag.init_failure = NET_INIT_FAILURE_DISCOVERY;
         return 0;
     }
 
     debug_print("[TG3] Experimental PCIe copper driver, BAR: ");
     debug_hex(tg3_mmio_base);
+    debug_print(" chip revision: ");
+    debug_hex(tg3_chip_revision);
     debug_print("\n");
     if (tg3_read32(TG3_PCI_MISC_HOST_CTRL) == 0xFFFFFFFF) {
         tg3_diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
+        pci_disable_device(tg3_pci);
         return 0;
     }
-    tg3_write32(TG3_PCI_MISC_HOST_CTRL, (tg3_read32(TG3_PCI_MISC_HOST_CTRL) & ~0x44u) | 0x88u | TG3_MISC_HOST_CTRL_MASK_INT);
-
-    tg3_shutdown(); /* Quiesce a previous firmware/OS data path first. */
-    if (tg3_diag.init_failure == NET_INIT_FAILURE_TIMEOUT) return 0;
+    tg3_read_mac();
+    if (!tg3_valid_mac(tg3_mac_addr)) {
+        tg3_diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
+        pci_disable_device(tg3_pci);
+        return 0;
+    }
+    tg3_shutdown();
+    if (tg3_diag.init_failure == NET_INIT_FAILURE_TIMEOUT || !tg3_reset_chip()) {
+        tg3_diag.init_failure = NET_INIT_FAILURE_TIMEOUT;
+        pci_disable_device(tg3_pci);
+        return 0;
+    }
+    tg3_apply_57780_quirks();
     uint32_t misc_cfg = tg3_read32(TG3_GRC_MISC_CFG);
-    misc_cfg &= ~GRC_MISC_CFG_EPHY_IDDQ;
-    misc_cfg |= GRC_MISC_CFG_KEEP_GPHY_PWR;
+    misc_cfg &= ~(GRC_MISC_CFG_EPHY_IDDQ | 0xFFu);
+    misc_cfg |= 65u << 1; /* Linux's 66 MHz timer prescaler */
+    if (!tg3_cpmu) misc_cfg |= GRC_MISC_CFG_KEEP_GPHY_PWR;
     tg3_write32(TG3_GRC_MISC_CFG, misc_cfg);
 
     /* PCI memory-read (6) / memory-write (7) commands, plus PCIe watermark. */
-    tg3_write32(TG3_DMA_RWCTRL, 0x76180000);
+    tg3_write32(TG3_DMA_RWCTRL, tg3_57765 ? 1 : 0x76180000);
 
     uint32_t grc_mode = tg3_read32(TG3_GRC_MODE);
     /* Little-endian host descriptors, packet bytes in network order. */
@@ -498,7 +694,7 @@ uint8_t tg3_init(void) {
     tg3_write32(TG3_HOSTCC_MODE, 0);
     tg3_write32(TG3_MEMARB_MODE, TG3_MEMARB_MODE_ENABLE);
     /* Standard-MTU watermarks for the selected PCIe families. */
-    uint8_t newer = (tg3_device & 0xFFF0) == 0x16B0;
+    uint8_t newer = tg3_57765;
     tg3_write32(TG3_BUFMGR_RDMA_LOW_WATER, 0);
     tg3_write32(TG3_BUFMGR_MACRX_LOW_WATER, newer ? 0x2A : 0x10);
     tg3_write32(TG3_BUFMGR_HIGH_WATER, newer ? 0xA0 : 0x60);
@@ -507,14 +703,6 @@ uint8_t tg3_init(void) {
     tg3_write32(TG3_BUFMGR_MODE, TG3_BUFMGR_MODE_ENABLE);
     tg3_write32(TG3_FTQ_RESET, 0xFFFFFFFF);
     tg3_write32(TG3_FTQ_RESET, 0x00000000);
-
-    tg3_read_mac();
-    if (!tg3_mac_addr || tg3_mac_addr == 0xFFFFFFFFFFFFULL ||
-        (tg3_mac_addr & 0x010000000000ULL)) {
-        tg3_diag.init_failure = NET_INIT_FAILURE_REGISTER_ACCESS;
-        tg3_shutdown();
-        return 0;
-    }
 
     for (uint32_t i = 0; i < sizeof(tg3_status_block_t) / 4; i++) {
         ((volatile uint32_t*)&status_block)[i] = 0;
@@ -547,7 +735,7 @@ uint8_t tg3_init(void) {
     tg3_write32(TG3_RCVDBDI_STD_BD + 0x00, 0);
     tg3_write32(TG3_RCVDBDI_STD_BD + 0x04, (uint32_t)&rx_std_ring[0]);
     /* 57765 class encodes both ring count and buffer size. */
-    uint32_t std_config = (tg3_device & 0xFFF0) == 0x16B0 ?
+    uint32_t std_config = tg3_57765 ?
         (TG3_RX_RING_SIZE << 16) | (TG3_BUF_SIZE << 2) : TG3_RX_RING_SIZE << 16;
     tg3_write32(TG3_RCVDBDI_STD_BD + 0x08, std_config);
     tg3_write32(TG3_RCVDBDI_JUMBO_FLAGS, TG3_BD_DISABLED); /* Disable unused jumbo ring. */
@@ -582,14 +770,20 @@ uint8_t tg3_init(void) {
     tg3_write32(TG3_RCVLPC_CONFIG, 0x181);
     tg3_write32(TG3_MAC_RCV_RULE_CFG, 0x08);
     tg3_write32(TG3_RCVBDI_STD_THRESH, TG3_BUFFER_COUNT / 4);
-    tg3_write32(TG3_RDMAC_MODE, TG3_BLOCK_ENABLE); /* Read DMA */
+    uint32_t rdma = 0x3FEu | RDMAC_MODE_FIFO_LONG_BURST;
+    if (tg3_asic == 0x57780) rdma |= RDMAC_MODE_BD_SBD_CRPT_ENAB |
+        RDMAC_MODE_MBUF_RBD_CRPT_ENAB | RDMAC_MODE_MBUF_SBD_CRPT_ENAB;
+    tg3_write32(TG3_RDMAC_MODE, rdma);
     tg3_write32(TG3_RCVDCC_MODE, TG3_BLOCK_ENABLE); /* Receive data completion */
     tg3_write32(TG3_SNDDATAI_MODE, TG3_BLOCK_ENABLE); /* Send data initiator */
     tg3_write32(TG3_SNDDATAC_MODE, TG3_BLOCK_ENABLE); /* Send data completion */
     tg3_write32(TG3_SNDBDS_MODE, TG3_BLOCK_ENABLE); /* Send BD selector */
     tg3_write32(TG3_SNDBDI_MODE, TG3_BLOCK_ENABLE); /* Send BD initiator */
     tg3_write32(TG3_SNDBDC_MODE, TG3_BLOCK_ENABLE); /* Send BD completion */
-    tg3_write32(TG3_WDMAC_MODE, WDMAC_MODE_ENABLE);
+    uint32_t wdma = 0x3FEu;
+    if (tg3_asic == 0x57780 || tg3_asic == 0xA || tg3_asic == 0xB || tg3_57765)
+        wdma |= WDMAC_MODE_STATUS_TAG_FIX;
+    tg3_write32(TG3_WDMAC_MODE, wdma);
     tg3_write32(TG3_RCVLPC_MODE, RCVLPC_MODE_ENABLE);
     tg3_write32(TG3_RCVCC_MODE, RCVCC_MODE_ENABLE);
     tg3_write32(TG3_RCVBDI_MODE, RCVBDI_MODE_ENABLE);
@@ -604,12 +798,13 @@ uint8_t tg3_init(void) {
     tg3_write32(TG3_MAC_TX_LENGTHS, 0x00000020 | (0x06 << 12) | (0x02 << 16));
     tg3_write32(TG3_MAC_RX_MODE, TG3_MAC_RX_ENABLE | TG3_MAC_RX_PROMISC);
     tg3_write32(TG3_MAC_TX_MODE, TG3_MAC_TX_ENABLE);
-    tg3_write32(TG3_MAC_MODE, TG3_MAC_MODE_PORT_GMII | TG3_MAC_MODE_DMA_ENABLE);
+    tg3_write32(TG3_MAC_MODE, TG3_MAC_MODE_PORT_GMII | TG3_MAC_MODE_DMA_ENABLE | MAC_MODE_FHDE_ENABLE);
 
     if (!tg3_phy_init()) {
         tg3_diag.init_failure = NET_INIT_FAILURE_TIMEOUT;
         /* Teardown must also work after partially completed initialization. */
         tg3_shutdown();
+        pci_disable_device(tg3_pci);
         return 0;
     }
 
@@ -617,12 +812,14 @@ uint8_t tg3_init(void) {
     tg3_write32(0x00003C10, 1);
     tg3_write32(0x00003C0C, 1);
     tg3_write32(0x00003C14, 1);
+    pci_set_master(tg3_pci, 1);
     tg3_write32(TG3_HOSTCC_MODE, TG3_HOSTCC_MODE_ENABLE);
+    if (tg3_asf) tg3_write_mem(NIC_SRAM_FW_DRV_STATE_MBOX, DRV_STATE_START_DONE);
 
     debug_print("[TG3] DMA rings configured; PHY: ");
     debug_hex(tg3_phy_addr);
     debug_print(" ID: ");
-    debug_hex(tg3_phy_id);
+    debug_hex(tg3_phy_identifier);
     debug_print("\n");
     tg3_ready = 1;
     tg3_diag.initialized = 1;
@@ -631,7 +828,7 @@ uint8_t tg3_init(void) {
 
 /* MAC mode follows negotiated copper speed/duplex, not the link-change bit. */
 static void tg3_update_link(void) {
-    uint32_t status, partner, gigabit, control;
+    uint32_t status, partner, gigabit, control, local, local_gigabit;
     if (!tg3_mdio_read(tg3_phy_addr, MII_BMSR, &status) ||
         !tg3_mdio_read(tg3_phy_addr, MII_BMSR, &status) ||
         !(status & 4) || !(status & 0x20)) {
@@ -639,19 +836,30 @@ static void tg3_update_link(void) {
         return;
     }
     if (!tg3_mdio_read(tg3_phy_addr, 10, &gigabit) ||
-        !tg3_mdio_read(tg3_phy_addr, 5, &partner)) {
+        !tg3_mdio_read(tg3_phy_addr, 5, &partner) ||
+        !tg3_mdio_read(tg3_phy_addr, MII_ADVERTISE, &local) ||
+        !tg3_mdio_read(tg3_phy_addr, MII_CTRL1000, &local_gigabit)) {
         tg3_link_up = 0;
         return;
     }
     uint32_t mode = tg3_read32(TG3_MAC_MODE) & ~0xEu;
-    if (gigabit & 0x800) mode |= TG3_MAC_MODE_PORT_GMII;
+    uint32_t common = partner & local;
+    uint32_t gigabit_common = (gigabit >> 2) & local_gigabit;
+    if (gigabit_common & 0x200) mode |= TG3_MAC_MODE_PORT_GMII;
+    else if (gigabit_common & 0x100) mode |= TG3_MAC_MODE_PORT_GMII | 2;
     else {
         mode |= 4; /* MII for 10/100 */
-        if (!(partner & 0x100) && ((partner & 0x80) || !(partner & 0x40))) mode |= 2;
+        if (common & 0x100) { /* 100 full duplex */ }
+        else if (common & 0x80) mode |= 2;
+        else if (common & 0x40) { /* 10 full duplex */ }
+        else if (common & 0x20) mode |= 2;
+        else { tg3_link_up = 0; return; }
     }
     tg3_write32(TG3_MAC_MODE, mode);
     control = tg3_read32(TG3_MAC_TX_LENGTHS) & ~0xFFu;
-    tg3_write32(TG3_MAC_TX_LENGTHS, control | ((mode & 2) ? 0xFF : 0x20));
+    /* Linux uses the long slot only for 1000BASE-T half duplex. */
+    uint8_t long_slot = (mode & 0xE) == (TG3_MAC_MODE_PORT_GMII | 2);
+    tg3_write32(TG3_MAC_TX_LENGTHS, control | (long_slot ? 0xFF : 0x20));
     tg3_link_up = 1;
 }
 
@@ -675,13 +883,14 @@ void tg3_shutdown(void) {
         uint32_t wait;
         for (wait = 0; wait < 10000; wait++) {
             if (!(tg3_read32(modes[i]) & TG3_BLOCK_ENABLE)) break;
-            outb(0x80, 0);
+            driver_delay_us(10);
         }
         if (wait == 10000) {
             tg3_diag.init_failure = NET_INIT_FAILURE_TIMEOUT;
             tg3_diag.last_error_status = modes[i];
         }
     }
+    if (tg3_pci) pci_set_master(tg3_pci, 0);
     tg3_link_up = 0;
     tg3_ready = 0;
 }

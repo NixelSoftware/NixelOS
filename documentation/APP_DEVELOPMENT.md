@@ -176,7 +176,7 @@ Filename and file-count limits are defined in `src/kernel/fs.h`. Check return va
 | --- | --- |
 | `network.net_poll()` | Poll network processing. |
 | `network.net_is_ready()` | Return whether the network is ready. |
-| `network.net_get_diagnostics(out)` | Fill a `net_diagnostics_t` structure (declared in `src/kernel/drivers/net.h`). |
+| `network.net_get_diagnostics(out)` | Fill a `net_diagnostics_t` structure (declared in `src/kernel/hal/net_types.h`). |
 | `network.get_mac_address()` | Return the interface MAC address as a `uint64_t`. |
 | `network.get_configuration(mask, gateway, leased)` | Return network configuration values. |
 | `network.icmp_request_echo(ip, id, seq, payload, len)` | Send an ICMP echo request; IPv4 addresses are represented as a `uint32_t`. |

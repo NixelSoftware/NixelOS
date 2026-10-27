@@ -3,6 +3,7 @@
  * Kernel BSS and MMIO use the kernel's supervisor identity mapping.
  */
 #include "hda.h"
+#include "pci.h"
 #include "serial.h"
 #include "../paging.h"
 #define SLOTS 8u
@@ -26,7 +27,7 @@ static int wait(uint32_t r,uint32_t mask,uint32_t value) {
     for(uint32_t i=0;i<1000;i++) { if((r32(r)&mask)==value) return 0; delay(10); }
     return -1;
 }
-static uint32_t cfg(uint32_t reg) { outl(0xcf8,pci|reg); return inl(0xcfc); }
+static uint32_t cfg(uint32_t reg) { return pci_config_read32(pci >> 16, (pci >> 11) & 31, (pci >> 8) & 7, reg); }
 /* Immediate commands are used only with CORB/RIRB DMA disabled. */
 static int verb(uint32_t node,uint32_t command,uint32_t payload,uint32_t* response) {
     if(wait(0x68,1,0)<0) return -1;
@@ -115,7 +116,9 @@ static int find_output(void) {
 }
 int32_t hda_probe(void) {
     if(ready) return 0;
-    for(uint32_t b=0;b<256;b++) for(uint32_t s=0;s<32;s++) for(uint32_t f=0;f<8;f++) {
+    for(uint32_t index=0;index<pci_device_count();index++) {
+        const pci_device_t* dev=pci_device_at(index);
+        uint32_t b=dev->bus,s=dev->slot,f=dev->function;
         pci=0x80000000u|(b<<16)|(s<<11)|(f<<8);
         if(cfg(0)!=0x284b8086u) continue;
         if((cfg(8)>>8)!=0x040300) continue;
@@ -130,13 +133,13 @@ int32_t hda_probe(void) {
                 uint32_t value=cfg(cap);
                 if((value&255)==1) {
                     uint16_t pm=(uint16_t)cfg(cap+4);
-                    outl(0xcf8,pci|(cap+4)); outw(0xcfc,pm&~0x8003u);
+                    pci_config_write16(b,s,f,cap+4,pm&~0x8003u);
                     delay(10000); break;
                 }
                 cap=(value>>8)&0xfc;
             }
         }
-        outl(0xcf8,pci|4); outw(0xcfc,(uint16_t)cfg(4)|6);
+        pci_config_write16(b,s,f,4,(uint16_t)cfg(4)|6);
         w32(0x20,0); w8(0x4c,0); w8(0x5c,0);
         w32(8,r32(8)&~1u); if(wait(8,1,0)<0) return -1;
         delay(100); w32(8,r32(8)|1); if(wait(8,1,1)<0) return -1;

@@ -1,19 +1,17 @@
-#include "mutex.h"
-#include "kernel_net.h"
-#include "drivers/net.h"
-#include "drivers/net_e1000.h"
-#include "drivers/net_tg3.h"
-#include "drivers/net_b44.h"
-#include "drivers/serial.h"
-#include "net/arp.h"
-#include "net/dhcp.h"
-#include "net/icmp.h"
-#include "net/ipv4.h"
-#include "net/udp.h"
-#include "net/tcp.h"
-
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA    0xCFC
+#include "../mutex.h"
+#include "net.h"
+#include "../net/amd/pcnet.h"
+#include "../net/intel/e1000.h"
+#include "../net/broadcom/tg3.h"
+#include "../net/broadcom/b44.h"
+#include "../drivers/serial.h"
+#include "../drivers/pci.h"
+#include "../net/arp.h"
+#include "../net/dhcp.h"
+#include "../net/icmp.h"
+#include "../net/ipv4.h"
+#include "../net/udp.h"
+#include "../net/tcp.h"
 
 typedef struct {
     uint16_t vendor_id;
@@ -52,7 +50,7 @@ static const pci_net_match_t supported_cards[] = {
     { 0x14E4, 0x167B, "Broadcom BCM5755 NetXtreme Gigabit", 2 },
     { 0x14E4, 0x1690, "Broadcom BCM57780 NetLink Gigabit", 2 },
     { 0x14E4, 0x1691, "Broadcom BCM57788 NetLink Gigabit", 2 },
-    { 0x14E4, 0x1692, "Broadcom BCM57781 NetLink Gigabit", 2 },
+    { 0x14E4, 0x1692, "Broadcom BCM57780 NetLink Gigabit", 2 },
     { 0x14E4, 0x16B0, "Broadcom BCM57760 NetXtreme Gigabit", 2 },
     { 0x14E4, 0x16B1, "Broadcom BCM57785 NetLink Gigabit", 2 },
     { 0x14E4, 0x16B4, "Broadcom BCM57765 NetXtreme Gigabit", 2 },
@@ -65,13 +63,9 @@ uint32_t net_driver_type = 0xFFFFFFFF;
 uint16_t net_detected_vendor = 0;
 uint16_t net_detected_device = 0;
 const char* net_detected_name = "None";
+static const pci_device_t* selected_pci_device;
 
-static uint32_t pci_read_cfg(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
-    uint32_t address = 0x80000000U | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
-                       ((uint32_t)func << 8) | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
-}
+const pci_device_t* sys_net_pci_device(void) { return selected_pci_device; }
 
 void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out) {
     MUTEX_GUARD(kernel_mutex);
@@ -83,6 +77,7 @@ void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const c
 uint8_t sys_net_init(uint16_t io) {
     MUTEX_GUARD(kernel_mutex);
     (void)io;
+    selected_pci_device = 0;
     net_driver_type     = 0xFFFFFFFF;
     net_detected_vendor = 0;
     net_detected_device = 0;
@@ -90,46 +85,27 @@ uint8_t sys_net_init(uint16_t io) {
 
     debug_print("[NET] Probing PCI bus for network adapters...\n");
 
-    for (uint16_t bus = 0; bus < 256; bus++) {
-        for (uint8_t slot = 0; slot < 32; slot++) {
-            for (uint8_t func = 0; func < 8; func++) {
-                uint32_t id = pci_read_cfg((uint8_t)bus, slot, func, 0);
-                uint16_t vendor = (uint16_t)id;
-                uint16_t device = (uint16_t)(id >> 16);
-
-                if (vendor == 0xFFFF || vendor == 0x0000) continue;
-
-                
-                uint32_t class_reg = pci_read_cfg((uint8_t)bus, slot, func, 0x08);
-                uint8_t base_class = (uint8_t)(class_reg >> 24);
-
-                
-                if (base_class == 0x02) {
-                    
-                    if (net_detected_vendor == 0) {
-                        net_detected_vendor = vendor;
-                        net_detected_device = device;
-                        net_detected_name   = "Unsupported Network Controller";
-                    }
-
-                    
-                    for (int i = 0; supported_cards[i].vendor_id != 0; i++) {
-                        if (supported_cards[i].vendor_id == vendor &&
-                            supported_cards[i].device_id == device) {
-                            debug_print("[NET] Detected: ");
-                            debug_print(supported_cards[i].name);
-                            debug_print("\n");
-
-                            net_driver_type     = supported_cards[i].driver_id;
-                            net_detected_vendor = vendor;
-                            net_detected_device = device;
-                            net_detected_name   = supported_cards[i].name;
-
-                            goto adapter_matched;
-                        }
-                    }
-                }
-            }
+    if (!pci_init()) debug_print("[PCI] Device inventory exceeds capacity\n");
+    for (uint32_t index = 0; index < pci_device_count(); index++) {
+        const pci_device_t* dev = pci_device_at(index);
+        if (dev->class_code != 0x02) continue;
+        if (!net_detected_vendor) {
+            net_detected_vendor = dev->vendor_id;
+            net_detected_device = dev->device_id;
+            net_detected_name = "Unsupported Network Controller";
+        }
+        for (uint32_t i = 0; supported_cards[i].vendor_id; i++) {
+            if (supported_cards[i].vendor_id != dev->vendor_id ||
+                supported_cards[i].device_id != dev->device_id) continue;
+            net_driver_type = supported_cards[i].driver_id;
+            net_detected_vendor = dev->vendor_id;
+            net_detected_device = dev->device_id;
+            net_detected_name = supported_cards[i].name;
+            selected_pci_device = dev;
+            debug_print("[NET] Detected: ");
+            debug_print(net_detected_name);
+            debug_print("\n");
+            goto adapter_matched;
         }
     }
 

@@ -1,3 +1,4 @@
+#include "pci.h"
 #include "../mutex.h"
 #include "ata.h"
 #include "serial.h"
@@ -22,44 +23,41 @@ static void irq_restore(uint32_t flags) {
     __asm__ volatile ("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
 }
 static uint32_t pci_read(uint32_t address) {
-    outl(0xCF8, address);
-    return inl(0xCFC);
+    return pci_config_read32(address >> 16, (address >> 11) & 31,
+                             (address >> 8) & 7, address & 0xFC);
 }
 static void ata_find_controllers(void) {
     if (controllers_scanned) return;
     controllers_scanned = 1;
     unsigned ide = 0, ahci = 0;
-    for (unsigned bus = 0; bus < 256; bus++) {
-        for (unsigned slot = 0; slot < 32; slot++) {
-            for (unsigned fn = 0; fn < 8; fn++) {
-                uint32_t address = 0x80000000u | (bus << 16) | (slot << 11) | (fn << 8);
-                uint32_t flags = irq_save();
-                uint32_t id = pci_read(address);
-                if ((id & 0xFFFF) == 0xFFFF) { irq_restore(flags); continue; }
-                uint32_t cls = pci_read(address | 8);
-                if ((cls >> 16) == 0x0106) ahci++;
-                if ((cls >> 16) != 0x0101) { irq_restore(flags); continue; }
-                ide++;
-                uint8_t interface = cls >> 8;
-                for (unsigned ch = 0; ch < 2; ch++) {
-                    if (!(interface & (1u << (ch * 2)))) continue;
-                    uint32_t bar = pci_read(address | (0x10 + ch * 8));
-                    uint32_t ctl = pci_read(address | (0x14 + ch * 8));
-                    if (!(bar & 1) || !(ctl & 1) || (bar & ~3u) == 0 ||
-                        (ctl & ~3u) == 0 || bar > 0xFFFF || ctl > 0xFFFD) continue;
-                    uint16_t base = bar & ~3u, control = (ctl & ~3u) + 2;
-                    unsigned i = 0;
-                    while (i < channel_count && channels[i].base != base) i++;
-                    if (i == channel_count && channel_count < ATA_DRIVE_COUNT / 2)
-                        channels[channel_count++] = (ata_channel_t){base, control};
-                }
-                uint16_t command = pci_read(address | 4);
-                outl(0xCF8, address | 4);
-                /* A 16-bit write avoids clearing PCI status W1C bits. */
-                outw(0xCFC, command | 1);
-                irq_restore(flags);
-            }
+    for (uint32_t index = 0; index < pci_device_count(); index++) {
+        const pci_device_t* dev = pci_device_at(index);
+        unsigned bus = dev->bus, slot = dev->slot, fn = dev->function;
+        uint32_t address = 0x80000000u | (bus << 16) | (slot << 11) | (fn << 8);
+        uint32_t flags = irq_save();
+        uint32_t id = pci_read(address);
+        if ((id & 0xFFFF) == 0xFFFF) { irq_restore(flags); continue; }
+        uint32_t cls = pci_read(address | 8);
+        if ((cls >> 16) == 0x0106) ahci++;
+        if ((cls >> 16) != 0x0101) { irq_restore(flags); continue; }
+        ide++;
+        uint8_t interface = cls >> 8;
+        for (unsigned ch = 0; ch < 2; ch++) {
+            if (!(interface & (1u << (ch * 2)))) continue;
+            uint32_t bar = pci_read(address | (0x10 + ch * 8));
+            uint32_t ctl = pci_read(address | (0x14 + ch * 8));
+            if (!(bar & 1) || !(ctl & 1) || (bar & ~3u) == 0 ||
+                (ctl & ~3u) == 0 || bar > 0xFFFF || ctl > 0xFFFD) continue;
+            uint16_t base = bar & ~3u, control = (ctl & ~3u) + 2;
+            unsigned i = 0;
+            while (i < channel_count && channels[i].base != base) i++;
+            if (i == channel_count && channel_count < ATA_DRIVE_COUNT / 2)
+                channels[channel_count++] = (ata_channel_t){base, control};
         }
+        uint16_t command = pci_read(address | 4);
+        pci_config_write16(bus, slot, fn, 4, command | 1);
+        irq_restore(flags);
+
     }
     debug_print("[ATA] IDE channels: "); debug_hex(channel_count); debug_print("\n");
     if (!ide && ahci) debug_print("[ATA] AHCI controller detected; AHCI is not supported by this PIO driver.\n");
@@ -239,7 +237,7 @@ int ata_write_sectors(uint32_t lba, uint8_t sector_count, const uint8_t* buffer)
         for (unsigned i = 0; i < 256; i++) outw(ATA_DATA, *ptr++);
     }
 
-    
+
     ata_delay_400ns();
     if (!ata_wait(2, 30000)) return 0;
     outb(ATA_COMMAND, 0xE7);

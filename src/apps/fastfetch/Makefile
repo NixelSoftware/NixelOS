@@ -24,7 +24,7 @@ entry.o: entry.asm
 logo.h: ../../../resources/nixelos-trans.ansi.txt generate_logo.py
 	$(PYTHON) generate_logo.py $< $@
 
-main.o: main.c logo.h ../../system/user/sys_api.h ../../system/user/memory_api.h ../../kernel/types.h ../../kernel/fs.h ../../kernel/drivers/net.h ../../system/user/window_api.h
+main.o: main.c logo.h ../../system/user/sys_api.h ../../system/user/memory_api.h ../../kernel/types.h ../../kernel/fs.h ../../kernel/hal/net_types.h ../../system/user/window_api.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 fastfetch.elf: entry.o main.o

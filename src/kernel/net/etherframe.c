@@ -1,8 +1,8 @@
 #include "../mutex.h"
 #include "etherframe.h"
-#include "../drivers/net.h"
+#include "../hal/net_types.h"
 #include "../drivers/serial.h"
-#include "../kernel_net.h"
+#include "../hal/net.h"
 
 static uint8_t local_mac[6];
 static etherframe_handler_t handlers[65536];

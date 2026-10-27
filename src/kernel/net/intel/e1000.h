@@ -1,8 +1,8 @@
 #ifndef NET_E1000_H
 #define NET_E1000_H
 
-#include "../types.h"
-#include "net.h"
+#include "../../types.h"
+#include "../../hal/net_types.h"
 
 uint8_t  e1000_init(void);
 uint8_t  e1000_is_ready(void);

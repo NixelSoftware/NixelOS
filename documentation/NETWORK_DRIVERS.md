@@ -2,18 +2,36 @@
 
 This document describes the network interfaces currently in the kernel, which adapters are selected at boot, and which parts of the networking stack are usable. It is based on the implementation in `src/kernel`; support here means code is present and wired up, not that every physical card or network has been tested.
 
+## Source layout
+
+```text
+src/kernel/
+  hal/net.c, net.h       Active-adapter selection and network HAL
+  hal/net_types.h        Shared frame, callback, and diagnostics types
+  net/amd/              PCnet drivers (including the older PCnet32 implementation)
+  net/intel/            e1000 driver
+  net/broadcom/         Tg3 and B44 drivers and register definitions
+  net/phys/             Broadcom PHY support
+  net/                  Ethernet, ARP, IPv4, UDP, TCP, DHCP, DNS, and ICMP
+```
+
+PCI and delay services remain in `src/kernel/drivers`, since they are shared
+by network, storage, audio, and USB drivers.
+
 ## Which interface should I use?
 
 There are two related APIs:
 
-* A **device driver** sends and receives Ethernet frames. Driver code uses `src/kernel/drivers/net.h` conventions and is selected through `src/kernel/kernel_net.c`.
+* A **device driver** sends and receives Ethernet frames. Driver code uses `src/kernel/hal/net_types.h` conventions and is selected through `src/kernel/hal/net.c`.
 * A **kernel client or app** generally uses the protocols above the device layer. Apps receive the `os_api_t` table in `src/kernel/os_api.h`, which exposes polling, IPv4 send/receive registration, ICMP, DNS, and diagnostics. It does not expose the raw `sys_net_send` or receive-handler hooks.
 
-For new kernel protocol code, use the Ethernet, ARP, IPv4, UDP, or TCP modules in `src/kernel/net`. For a new hardware adapter, implement the driver operations and add detection/dispatch in `kernel_net.c`. Avoid having an app directly probe PCI or access device I/O ports.
+For new kernel protocol code, use the Ethernet, ARP, IPv4, UDP, or TCP modules in `src/kernel/net`. For a new hardware adapter, implement the driver operations and add detection/dispatch in `hal/net.c`. Avoid having an app directly probe PCI or access device I/O ports.
 
 ## Driver operations
 
-The common interface is in `src/kernel/drivers/net.h`:
+Shared types are in `src/kernel/hal/net_types.h`; PCnet operations below are
+declared in `src/kernel/net/amd/pcnet.h`, and active-adapter operations in
+`src/kernel/hal/net.h`:
 
 | Function | Meaning |
 | --- | --- |
@@ -40,14 +58,14 @@ Keep this callback bounded and nonblocking. It runs from `net_poll()` and the bu
 
 ## Drivers currently selected by the kernel
 
-`sys_net_init()` scans PCI bus/device/function numbers and selects the first matching device in `kernel_net.c`.
+`sys_net_init()` scans PCI bus/device/function numbers and selects the first matching device in `hal/net.c`.
 
 | Adapter path | Current state |
 | --- | --- |
-| AMD PCnet-PCI II, PCI ID `1022:2000` | Wired to `drivers/net.c`. Initializes descriptor rings, polls RX/TX, sends frames, and reports driver diagnostics. |
-| Intel e1000 family IDs listed in `kernel_net.c` | Wired to `drivers/net_e1000.c`. Uses RX/TX descriptor rings and polling, with limited diagnostics. The code checks link state in `e1000_is_ready()`. |
+| AMD PCnet-PCI II, PCI ID `1022:2000` | Wired to `net/amd/pcnet.c`. Initializes descriptor rings, polls RX/TX, sends frames, and reports driver diagnostics. |
+| Intel e1000 family IDs listed in `hal/net.c` | Wired to `net/intel/e1000.c`. Uses RX/TX descriptor rings and polling, with limited diagnostics. The code checks link state in `e1000_is_ready()`. |
 | AMD PCnet-FAST III, PCI ID `1022:2001` | Listed in PCI matching, but the active PCnet initializer searches only for `1022:2000`. Detection may select this device and then initialization can fail. This needs alignment before treating `2001` as supported. |
-| `drivers/net_pcnet32.c` interface | Separate/older PCnet implementation. It is not the implementation selected by `kernel_net.c`; the active PCnet path is `drivers/net.c`. |
+| `net/amd/pcnet32.c` interface | Separate/older PCnet implementation. It is not the implementation selected by `hal/net.c`; the active PCnet path is `net/amd/pcnet.c`. |
 
 The e1000 match table currently lists `8086:100E`, `100F`, `1004`, `1000`, and `10D3`. This is a small explicit ID list, not generic support for every Intel adapter sold as an e1000. Both active paths are polled rather than interrupt driven. The kernel main loop calls the network poll function regularly.
 
@@ -68,28 +86,62 @@ MII/GMII and duplex after autonegotiation. Initialization now checks BAR access,
 MAC validity, MDIO failures, PHY reset and DMA stop timeouts. `netdiag` exposes
 PHY and traffic counters; serial messages start with `[TG3]` and `[DHCP]`.
 
-The implementation remains experimental on physical hardware. Chip-specific
-core reset/firmware handshakes, NVRAM MAC fallback and silicon errata are not
-fully implemented. It expects firmware to have loaded a valid MAC into the
-MAC registers. Host tests and successful compilation do not establish that a
+The implementation remains experimental on physical hardware. The Linux-style core reset/PCI restore/firmware acknowledgement path is now
+ported through Nixel's shared PCI services. It preserves the MAC from the SRAM
+mailbox or MAC registers across reset. NVRAM MAC fallback, APE management,
+and the full collection of chip-specific PHY/silicon errata remain incomplete.
+APE-managed hardware is rejected explicitly rather than accessed without its
+management locks. Host tests and successful compilation do not establish that a
 physical Tg3 adapter can acquire a lease. QEMU has no Tg3 model in the tested
 installation; the QEMU boot regression uses e1000.
+
+For the BCM57780 (`14e4:1692`), the port now selects the CPMU's constant
+500 kHz MDIO clock and identifies the full PHY ID before configuration.
+`phy_broadcom.c` adapts the supplied Linux `broadcom.c` initialization through
+native MDIO callbacks: interrupt masking, reference-clock/automatic-power-down
+shadows, and the EXP75 DSP oscillator workaround with cleanup on failure.
+The MAC path also applies the BCM57780 PCIe idle-delay/L1 PLL settings,
+read-DMA FIFO/descriptor fixes, write-DMA status-tag fix and frame-header DMA
+enablement. Link speed/duplex resolution uses the intersection of local and
+partner advertisements. Factory MAC addresses are read from hardware, never
+hardcoded from a particular machine.
+
+The PCI core (`drivers/pci.h`) provides cached firmware-assigned device
+inventory, serialized width-correct config access, capability traversal,
+BAR decoding/sizing, D0 transitions, polled interrupt masking and endpoint
+state save/restore. All current PCI users use this shared config interface.
+The current backend is x86 segment 0, CF8/CFC, with a 128-device inventory.
+Resource assignment, ECAM, hotplug, IOMMU and MSI interrupt routing are outside
+this port; firmware must configure bridge windows and BARs.
 
 Run the host DMA/ring tests on Linux x86 with:
 
 ```sh
-cc -O2 -fno-pie -no-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast tests/net_tg3_test.c -o /tmp/net_tg3_test
+cc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -fno-pie -no-pie -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast tests/net_tg3_test.c -o /tmp/net_tg3_test
 /tmp/net_tg3_test
+cc -O2 -Wall -Wextra -Itests tests/pci_test.c -o /tmp/pci_test
+/tmp/pci_test
+cc -O2 -Wall -Wextra tests/phy_broadcom_test.c -o /tmp/phy_broadcom_test
+/tmp/phy_broadcom_test
+cc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast tests/net_tg3_phy_test.c -o /tmp/net_tg3_phy_test
+/tmp/net_tg3_phy_test
+cc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast tests/net_tg3_reset_test.c -o /tmp/net_tg3_reset_test
+/tmp/net_tg3_reset_test
 ```
 
-These tests emulate DMA/MMIO memory, not physical PCI or MDIO transactions.
+These tests model config-space, DMA/MMIO and MDIO register behavior; they do
+not establish physical-card compatibility. The PHY model includes a powered-down
+BCM57780, full MDIO-to-PHY callback integration, negotiation and every injected
+configuration error. Register helper encodings were also checked against
+[Linux bcm-phy-lib.c](https://github.com/torvalds/linux/blob/master/drivers/net/phy/bcm-phy-lib.c)
+and the installed Linux `include/linux/brcmphy.h` definitions.
 Register and descriptor layouts were checked against the Linux
 [Tg3 definitions](https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/broadcom/tg3.h)
 and [driver](https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/broadcom/tg3.c).
 
 ## Kernel network wrapper
 
-`src/kernel/kernel_net.h` exposes the active-device wrapper functions to kernel code:
+`src/kernel/hal/net.h` exposes the active-device wrapper functions to kernel code:
 
 * `sys_net_init`, `sys_net_is_ready`, `sys_net_shutdown`
 * `sys_net_poll`, `sys_net_send`
@@ -116,11 +168,11 @@ These are small OS components, not a complete standards-grade stack. In particul
 
 ## Diagnostics and debugging
 
-`net_diagnostics_t` in `drivers/net.h` includes readiness, I/O base, register snapshots, TX/RX ring indexes, send/completion/error counters, the last RX length, and descriptor snapshots. `netdiag` prints a subset. Both active drivers populate the common counters, but hardware-specific status meanings differ and e1000 does not decode every possible transmit error cause; zero is not proof that no hardware error occurred.
+`net_diagnostics_t` in `hal/net_types.h` includes readiness, I/O base, register snapshots, TX/RX ring indexes, send/completion/error counters, the last RX length, and descriptor snapshots. `netdiag` prints a subset. Both active drivers populate the common counters, but hardware-specific status meanings differ and e1000 does not decode every possible transmit error cause; zero is not proof that no hardware error occurred.
 
 ### Initialization failure codes
 
-The `Init failure` number printed by `netdiag` comes from `net_diagnostics_t.init_failure`. The shared constants are declared in `drivers/net.h` as `NET_INIT_FAILURE_*`; PCnet and e1000 use these values:
+The `Init failure` number printed by `netdiag` comes from `net_diagnostics_t.init_failure`. The shared constants are declared in `hal/net_types.h` as `NET_INIT_FAILURE_*`; PCnet and e1000 use these values:
 
 | Code | Meaning | What to check |
 | --- | --- | --- |

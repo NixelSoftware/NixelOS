@@ -1,8 +1,8 @@
 #ifndef NET_TG3_H
 #define NET_TG3_H
 
-#include "../types.h"
-#include "net.h"
+#include "../../types.h"
+#include "../../hal/net_types.h"
 
 uint8_t  tg3_init(void);
 uint8_t  tg3_is_ready(void);

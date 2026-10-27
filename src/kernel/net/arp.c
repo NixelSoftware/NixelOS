@@ -2,7 +2,7 @@
 #include "arp.h"
 #include "etherframe.h"
 #include "ipv4.h"
-#include "../kernel_net.h"
+#include "../hal/net.h"
 
 #define ARP_PACKET_SIZE 28
 extern volatile uint32_t frame_timer;

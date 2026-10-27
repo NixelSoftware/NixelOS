@@ -1,7 +1,7 @@
 #ifndef NET_PCNET32_H
 #define NET_PCNET32_H
 
-#include "../types.h"
+#include "../../types.h"
 
 #define PCNET_VENDOR_ID   0x1022
 #define PCNET_DEVICE_ID   0x2000
