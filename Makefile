@@ -11,13 +11,12 @@ QEMU ?= qemu-system-i386
 QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 128M
-QEMU_DHCP ?= 10.0.1.0/24,dhcpstart=10.0.1.227
+QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_DISPLAY ?= sdl
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_AUDIO_DRIVER ?= sdl
 QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_DRIVER),id=audio0 -machine pcspk-audiodev=audio0
 QEMU_EXTRA ?=
-# QEMU's SB16 emulates PCM only; AdLib supplies the OPL2 ports at 0x388.
 QEMU_OPL ?= 1
 ifeq ($(QEMU_OPL),1)
 QEMU_OPL_FLAGS = -device adlib,audiodev=audio0

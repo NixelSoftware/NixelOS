@@ -266,8 +266,14 @@ void sys_net_initialize_stack(void) {
 void sys_net_configure_address(void) {
     MUTEX_GUARD(kernel_mutex);
     dhcp_lease_t lease;
-    if (!dhcp_request(&lease, 100000))
+    if (!dhcp_request(&lease, 4)) {
+        debug_print("[DHCP] No lease; using static fallback 10.0.0.227\n");
         ipv4_set_configuration(0x0A0000E3, 0x0A000002, 0xFFFFFF00);
+    } else {
+        debug_print("[DHCP] Lease acquired: ");
+        debug_hex(lease.address);
+        debug_print("\n");
+    }
 }
 
 void sys_net_get_configuration(uint32_t* subnet_mask, uint32_t* gateway,

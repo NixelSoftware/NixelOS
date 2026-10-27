@@ -3,6 +3,7 @@
 #include "ipv4.h"
 #include "../kernel_net.h"
 #include "../drivers/net.h"
+#include "../drivers/rtc.h"
 
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
@@ -28,6 +29,26 @@ static uint8_t response_received;
 static uint8_t response_type;
 static uint32_t server_identifier;
 static uint8_t request_packet[548];
+
+/* DHCP runs before timer IRQs and the scheduler are enabled. Use the RTC
+ * instead of an instruction-count timeout, which varies with acceleration. */
+static uint8_t wait_for_response(uint32_t timeout_seconds) {
+    rtc_time_t now;
+    rtc_get_time(&now);
+    uint8_t previous = now.second;
+    uint32_t elapsed = 0;
+    while (elapsed < timeout_seconds) {
+        for (uint32_t i = 0; i < 256; i++) {
+            sys_net_poll();
+            if (response_received) return 1;
+            __asm__ volatile ("pause");
+        }
+        rtc_get_time(&now);
+        elapsed += (now.second + 60u - previous) % 60u;
+        previous = now.second;
+    }
+    return 0;
+}
 
 static void write_be32(uint8_t* p, uint32_t value) {
     p[0] = (uint8_t)(value >> 24);
@@ -111,12 +132,23 @@ static uint8_t send_message(uint8_t message_type, uint32_t requested_ip) {
     return udp_send(dhcp_socket, request_packet, offset);
 }
 
-uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t wait_iterations) {
+static uint8_t exchange(uint8_t type, uint32_t address, uint8_t expected,
+                        uint32_t timeout_seconds) {
+    for (uint8_t attempt = 0; attempt < 3; attempt++) {
+        response_received = 0;
+        response_type = 0;
+        if (send_message(type, address) && wait_for_response(timeout_seconds)
+            && response_type == expected) return 1;
+    }
+    return 0;
+}
+
+uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t timeout_seconds) {
     dhcp_socket = udp_connect(0xFFFFFFFF, DHCP_SERVER_PORT);
     if (!dhcp_socket) return 0;
     udp_set_local_port(dhcp_socket, DHCP_CLIENT_PORT);
     udp_bind(dhcp_socket, dhcp_receive);
-    current_lease.leased = 0;
+    current_lease = (dhcp_lease_t){0};
     current_lease.subnet_mask = 0xFFFFFF00;
     current_lease.gateway = 0;
     current_lease.dns = 0;
@@ -125,25 +157,15 @@ uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t wait_iterations) {
     server_identifier = 0;
     transaction_id++;
 
-    if (!send_message(DHCP_DISCOVER, 0)) return 0;
-
-    // delay loop
-    for (uint32_t i = 0; i < wait_iterations && !response_received; i++) {
-        sys_net_poll();
-        for (volatile int d = 0; d < 200; d++) __asm__ volatile ("pause");
+    if (!exchange(DHCP_DISCOVER, 0, DHCP_OFFER, timeout_seconds)
+        || !exchange(DHCP_REQUEST, current_lease.address, DHCP_ACK,
+                     timeout_seconds)) {
+        udp_disconnect(dhcp_socket);
+        dhcp_socket = 0;
+        return 0;
     }
-
-    if (!response_received || response_type != DHCP_OFFER) return 0;
-    response_received = 0;
-
-    if (!send_message(DHCP_REQUEST, current_lease.address)) return 0;
-
-    for (uint32_t i = 0; i < wait_iterations && !response_received; i++) {
-        sys_net_poll();
-        for (volatile int d = 0; d < 200; d++) __asm__ volatile ("pause");
-    }
-
-    if (!response_received || response_type != DHCP_ACK) return 0;
+    udp_disconnect(dhcp_socket);
+    dhcp_socket = 0;
     current_lease.server = server_identifier;
     current_lease.leased = 1;
     ipv4_set_configuration(current_lease.address, current_lease.gateway,
