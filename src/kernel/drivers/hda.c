@@ -147,7 +147,7 @@ int32_t hda_probe(void) {
         w32(0x70,0); w32(0x74,0);
         for(codec=0;codec<15;codec++) if(present&(1u<<codec)) {
             failed=0;
-            if(find_output()==0) { ready=1; debug_print("[AUDIO] Intel ICH8 HD Audio analog output ready\n"); return 0; }
+            if(find_output()==0) { ready=1; debug_audio_print("[AUDIO] Intel ICH8 HD Audio analog output ready\n"); return 0; }
         }
         return -1;
     }
@@ -161,8 +161,8 @@ static int32_t init(uint32_t rate) {
     if(!ready || opened) return -1;
     uint32_t i; for(i=0;i<7 && rates[i]!=rate;i++) {}
     if(i==7 || !(pcm_caps&(1u<<i)) || !(pcm_caps&(1u<<17))) {
-        debug_print("[HDA] Unsupported PCM rate/caps: rate=");debug_hex(rate);
-        debug_print(" caps=");debug_hex(pcm_caps);debug_print("\n");return -1;
+        debug_audio_print("[HDA] Unsupported PCM rate/caps: rate=");debug_audio_hex(rate);
+        debug_audio_print(" caps=");debug_audio_hex(pcm_caps);debug_audio_print("\n");return -1;
     }
     if(!samples[0]) {
         for(uint32_t j=0;j<SLOTS;j++) {
@@ -193,12 +193,12 @@ static int32_t init(uint32_t rate) {
 static void service(void) {
     if(!opened || !running) return;
     uint32_t now=r32(0x30); /* WALLCLK: 24 MHz, wraps naturally. */
-    if(now-last_poll>=poll_limit) { debug_print("[HDA] DMA service timeout: gap=");debug_hex(now-last_poll);debug_print(" limit=");debug_hex(poll_limit);debug_print("\n"); failed=1; stop(); return; }
+    if(now-last_poll>=poll_limit) { debug_audio_print("[HDA] DMA service timeout: gap=");debug_audio_hex(now-last_poll);debug_audio_print(" limit=");debug_audio_hex(poll_limit);debug_audio_print("\n"); failed=1; stop(); return; }
     last_poll=now;
     uint8_t status=r8(stream+3);
-    if(status&0x18) { debug_print("[HDA] DMA FIFO/descriptor error: status=");debug_hex(status);debug_print("\n"); failed=1; stop(); return; }
+    if(status&0x18) { debug_audio_print("[HDA] DMA FIFO/descriptor error: status=");debug_audio_hex(status);debug_audio_print("\n"); failed=1; stop(); return; }
     uint32_t position=r32(stream+4);
-    if(position>=SLOTS*BLOCK) { debug_print("[HDA] Invalid DMA position: ");debug_hex(position);debug_print("\n"); failed=1; stop(); return; }
+    if(position>=SLOTS*BLOCK) { debug_audio_print("[HDA] Invalid DMA position: ");debug_audio_hex(position);debug_audio_print("\n"); failed=1; stop(); return; }
     uint32_t current=position/BLOCK;
     while(queued && head!=current) {
         for(uint32_t j=0;j<BLOCK/2;j++) samples[head][j]=0;

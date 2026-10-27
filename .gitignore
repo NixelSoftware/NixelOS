@@ -7,3 +7,4 @@ struct
 *pyc
 *.o
 *.tmp
+.audio-debug-config

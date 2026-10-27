@@ -26,6 +26,8 @@ endif
 
 ENABLE_OOBE ?= 0
 DEBUG_SUBSYSTEMS ?= 0
+# Suppress audio HAL, driver, and audio syscall debug logs.
+NO_AUDIO_DEBUG ?= 0
 STARTUP_TRACE ?= 0
 # 0=normal, 1=input-only runtime, 2=normal without audio, 3=idle runtime.
 STARTUP_PROFILE ?= 0
@@ -55,6 +57,9 @@ LDFLAGS := -m $(LD_FORMAT)
 ifneq ($(filter-out 0 1,$(DEBUG_SUBSYSTEMS)),)
   $(error DEBUG_SUBSYSTEMS must be 0 or 1)
 endif
+ifneq ($(filter-out 0 1,$(NO_AUDIO_DEBUG)),)
+  $(error NO_AUDIO_DEBUG must be 0 or 1)
+endif
 ifneq ($(filter-out 0 1,$(STARTUP_TRACE)),)
   $(error STARTUP_TRACE must be 0 or 1)
 endif
@@ -74,7 +79,7 @@ endif
 CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) \
           -O2 -m32 -ffreestanding -fno-leading-underscore -fno-pie \
           -mno-stack-arg-probe -mno-sse -mno-sse2 -mno-mmx \
-          -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) $(OOBE_VAL) -Isrc/include
+          -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) -DNO_AUDIO_DEBUG=$(NO_AUDIO_DEBUG) $(OOBE_VAL) -Isrc/include
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
@@ -113,6 +118,12 @@ KERNEL_HEADERS := src/kernel/startup_trace.h src/kernel/task.h src/kernel/schedu
                   src/kernel/mutex.h src/kernel/sched_policy.h src/kernel/sched_wide.h \
                   src/kernel/arch_fpu.h
 $(KERNEL_OBJ): $(KERNEL_HEADERS)
+
+.PHONY: FORCE_AUDIO_DEBUG_CONFIG
+.audio-debug-config: FORCE_AUDIO_DEBUG_CONFIG
+	$(PYTHON) -c "from pathlib import Path; p=Path('$@'); value='$(NO_AUDIO_DEBUG)\n'; p.write_text(value) if not p.exists() or p.read_text() != value else None"
+
+src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
 # Single-main applications; each MUST provide src/apps/<name>/entry.asm.
 STANDARD_APPS := files mines calc hexview floppy_debug ping netdiag com0 http_test curl \

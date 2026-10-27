@@ -26,6 +26,18 @@ void debug_present_timing(uint64_t requested, const debug_present_sample_t* samp
 void debug_input_progress(uint64_t requested, uint64_t acquired, uint64_t finished,
                           uint32_t keys, uint32_t mouse);
 
+/* Independently control audio logs without suppressing other subsystems. */
+#ifndef NO_AUDIO_DEBUG
+#define NO_AUDIO_DEBUG 0
+#endif
+#if NO_AUDIO_DEBUG
+#define debug_audio_print(...) ((void)0)
+#define debug_audio_hex(...) ((void)0)
+#else
+#define debug_audio_print(...) debug_print(__VA_ARGS__)
+#define debug_audio_hex(...) debug_hex(__VA_ARGS__)
+#endif
+
 /* Set to 1 (or compile with -DDEBUG_SUBSYSTEMS=1) for verbose subsystem traces. */
 #ifndef DEBUG_SUBSYSTEMS
 #define DEBUG_SUBSYSTEMS 0

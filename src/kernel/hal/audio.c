@@ -13,10 +13,10 @@ static uint32_t device_count, selected, volume = 100;
  * At runtime debug_print only queues UART output, so audio never waits for TX. */
 static void audio_trace(const char* call, uint32_t a, uint32_t b, const char* phase, int32_t result) {
     uint32_t flags = task_irq_save();
-    debug_print("[AUDIO] "); debug_print(call); debug_print(" "); debug_print(phase);
-    debug_print(" device="); debug_print(active_driver ? active_driver->name : "none");
-    debug_print(" a="); debug_hex(a); debug_print(" b="); debug_hex(b);
-    debug_print(" result="); debug_hex((uint32_t)result); debug_print("\n");
+    debug_audio_print("[AUDIO] "); debug_audio_print(call); debug_audio_print(" "); debug_audio_print(phase);
+    debug_audio_print(" device="); debug_audio_print(active_driver ? active_driver->name : "none");
+    debug_audio_print(" a="); debug_audio_hex(a); debug_audio_print(" b="); debug_audio_hex(b);
+    debug_audio_print(" result="); debug_audio_hex((uint32_t)result); debug_audio_print("\n");
     task_irq_restore(flags);
 }
 static int32_t audio_result(const char* call, uint32_t a, uint32_t b, int32_t result) {

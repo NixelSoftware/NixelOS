@@ -832,9 +832,9 @@ void syscall_dispatch(registers_t* regs) {
             uint32_t call = regs->eax;
             syscall_dispatch_impl(regs);
             if ((int32_t)regs->eax < 0) {
-                debug_print("[AUDIO] syscall failed: number=");debug_hex(call);
-                debug_print(" owner=");debug_hex(audio_owner);
-                debug_print(" caller=");debug_hex(paging_current_directory());debug_print("\n");
+                debug_audio_print("[AUDIO] syscall failed: number=");debug_audio_hex(call);
+                debug_audio_print(" owner=");debug_audio_hex(audio_owner);
+                debug_audio_print(" caller=");debug_audio_hex(paging_current_directory());debug_audio_print("\n");
             }
             return;
         }

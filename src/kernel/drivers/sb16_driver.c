@@ -11,7 +11,7 @@ static uint32_t accepted_bytes, completed_bytes, completed_blocks;
 static uint32_t slow_blocks, refill_stalls;
 
 static void report(const char* name, uint32_t value) {
-    debug_print(name); debug_hex(value);
+    debug_audio_print(name); debug_audio_hex(value);
 }
 
 
@@ -68,11 +68,11 @@ void sb16_shutdown(void) {
     flags = irq_save();
     outb(0x21, (inb(0x21) & ~0x20u) | saved_irq_mask);
     irq_restore(flags);
-    debug_print("[AUDIO] playback counters (hex):");
+    debug_audio_print("[AUDIO] playback counters (hex):");
     report(" rate=", sample_rate);
     report(" accepted=", accepted_bytes); report(" completed=", completed_bytes);
     report(" blocks=", completed_blocks); report(" slow_blocks=", slow_blocks);
-    report(" refill_stalls=", refill_stalls); debug_print("\n");
+    report(" refill_stalls=", refill_stalls); debug_audio_print("\n");
 }
 
 int32_t sb16_init(uint32_t rate) {
@@ -272,11 +272,11 @@ void sb16_opl_write(uint8_t reg, uint8_t value) {
 int32_t sb16_opl_init(void) {
     MUTEX_GUARD(audio_mutex);
     if (opened) {
-        debug_print("[SB16] OPL probe skipped: PCM device busy\n");
+        debug_audio_print("[SB16] OPL probe skipped: PCM device busy\n");
         return -1;
     }
     if (reset() < 0) {
-        debug_print("[SB16] OPL unavailable: sound card not responding\n");
+        debug_audio_print("[SB16] OPL unavailable: sound card not responding\n");
         return -1;
     }
     sb16_opl_write(4, 0x60); sb16_opl_write(4, 0x80);
@@ -287,7 +287,7 @@ int32_t sb16_opl_init(void) {
     uint8_t after = inb(0x388);
     sb16_opl_write(4, 0x60); sb16_opl_write(4, 0x80);
     if ((before & 0xE0) || (after & 0xE0) != 0xC0) {
-        debug_print("[SB16] OPL unavailable: timer probe failed at port 0x388\n");
+        debug_audio_print("[SB16] OPL unavailable: timer probe failed at port 0x388\n");
         return -1;
     }
     for (int i = 0x20; i < 256; i++) sb16_opl_write(i, 0);
@@ -300,7 +300,7 @@ int32_t sb16_opl_init(void) {
     outb(0x224, 0x31); outb(0x225, 0xF8);
     outb(0x224, 0x34); outb(0x225, 0xF8);
     outb(0x224, 0x35); outb(0x225, 0xF8);
-    debug_print("[SB16] OPL available at port 0x388 (OPL2-compatible mode)\n");
+    debug_audio_print("[SB16] OPL available at port 0x388 (OPL2-compatible mode)\n");
     return 0;
 }
 
