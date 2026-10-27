@@ -123,9 +123,8 @@ static void browser_user_close(void) {
     user_window_closed = 1;
 }
 
-//static char url_input[MAX_URL_LEN] = "connectiontest.menifeetech.pp.ua";
-static char url_input[MAX_URL_LEN] = "home.menifeetech.pp.ua";
-static int  url_cursor = 22; // pmo
+static char url_input[MAX_URL_LEN] = "home.nixelos.org";
+static int  url_cursor = 16; // pmo
 static char status_text[64] = "Ready";
 static int  scroll_y = 0;
 

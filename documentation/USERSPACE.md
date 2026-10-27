@@ -120,7 +120,7 @@ printing responses or saving response bodies through `sys_fs_write`. It uses
 `browser` is the thirteenth ring-3 app. It creates its own WM surface, receives
 keyboard and mouse events through the user window API, and fetches HTTP pages
 with the owner-scoped DNS and TCP syscalls. It opens the original
-`home.menifeetech.pp.ua` homepage at startup and retains the original HTML
+`home.nixelos.org` homepage at startup and retains the original HTML
 layout, links, form controls, and PNG image handling; it supports HTTP on port
 
 The GDT includes ring-3 code/data segments and a TSS kernel stack, while IDT

@@ -121,9 +121,9 @@ static uint32_t find_body_start(const uint8_t* response, uint32_t length) {
 
 void user_main(const char* arguments) {
     (void)arguments;
-    print_text("1. Testing connection to connectiontest.menifeetech.pp.ua...\n");
+    print_text("1. Testing connection to connectiontest.nixelos.org...\n");
     uint32_t response_length = 0;
-    if (perform_http_transaction("connectiontest.menifeetech.pp.ua", "/",
+    if (perform_http_transaction("connectiontest.nixelos.org", "/",
                                  response_buffer, 4096u, &response_length)) {
         uint32_t body_start = find_body_start(response_buffer, response_length);
         print_text("Connection Test OK!\nBody: ");
