@@ -1,12 +1,24 @@
 /* Standard MIDI file parser for Syndig: formats 0/1, PPQN timing. */
 #include "midi_file.h"
 #include "../../system/user/sys_api.h"
-static uint8_t data[MIDI_FILE_CAPACITY];
-static midi_event_t scratch[MIDI_MAX_EVENTS];
+/* Parsing finishes before sorting starts, so these buffers can share memory.
+ * Stable merging only needs a copy of the left half of the event range. */
+static union {
+ uint8_t data[MIDI_FILE_CAPACITY];
+ midi_event_t scratch[MIDI_MAX_EVENTS/2];
+} workspace;
+#define data workspace.data
+#define scratch workspace.scratch
 static uint32_t be16(const uint8_t *p){return ((uint32_t)p[0]<<8)|p[1];}
 static uint32_t be32(const uint8_t *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static int vlq(uint32_t *pos,uint32_t end,uint32_t *v){*v=0;for(int i=0;i<4;i++){if(*pos>=end)return -1;uint8_t b=data[(*pos)++];*v=(*v<<7)|(b&127);if(!(b&128))return 0;}return -1;}
-static void merge(midi_event_t *a,uint32_t l,uint32_t m,uint32_t r){uint32_t i=l,j=m,k=l;while(i<m&&j<r)scratch[k++]=(a[i].tick<=a[j].tick)?a[i++]:a[j++];while(i<m)scratch[k++]=a[i++];while(j<r)scratch[k++]=a[j++];for(k=l;k<r;k++)a[k]=scratch[k];}
+static void merge(midi_event_t *a,uint32_t l,uint32_t m,uint32_t r){
+ uint32_t left=m-l;
+ for(uint32_t i=0;i<left;i++)scratch[i]=a[l+i];
+ uint32_t i=0,j=m,k=l;
+ while(i<left&&j<r)a[k++]=(scratch[i].tick<=a[j].tick)?scratch[i++]:a[j++];
+ while(i<left)a[k++]=scratch[i++];
+}
 static void sort(midi_event_t *a,uint32_t l,uint32_t r){if(r-l<2)return;uint32_t m=l+(r-l)/2;sort(a,l,m);sort(a,m,r);merge(a,l,m,r);}
 int midi_file_load(const char *path,midi_song_t *song){
  song->count=0;song->duration_frames=0;
@@ -27,7 +39,7 @@ int midi_file_load(const char *path,midi_song_t *song){
    if(status&0x80){pos++;if(status<0xf0)running=status;else running=0;}
    else {if(!running)return -11;status=running;}
    if(status==0xff){if(pos>=end)return -12;uint8_t kind=data[pos++];uint32_t n;if(vlq(&pos,end,&n)||n>end-pos)return -13;
-    if(kind==0x51&&n==3){if(song->count>=MIDI_MAX_EVENTS)return -14;midi_event_t *e=&song->events[song->count++];e->tick=tick;e->type=0xff;e->tempo=((uint32_t)data[pos]<<16)|((uint32_t)data[pos+1]<<8)|data[pos+2];if(!e->tempo)e->tempo=500000;}
+    if(kind==0x51&&n==3){if(song->count>=MIDI_MAX_EVENTS)return -14;midi_event_t *e=&song->events[song->count++];e->tick=tick;e->type=0xff;e->channel=data[pos];e->note=data[pos+1];e->velocity=data[pos+2];}
     pos+=n;if(kind==0x2f){pos=end;break;}continue;
    }
    if(status==0xf0||status==0xf7){uint32_t n;if(vlq(&pos,end,&n)||n>end-pos)return -15;pos+=n;continue;}
@@ -43,10 +55,10 @@ int midi_file_load(const char *path,midi_song_t *song){
  sort(song->events,0,song->count);
  uint32_t last_tick=0,tempo=500000;uint64_t us=0,rem=0;
  for(uint32_t i=0;i<song->count;i++){
-  midi_event_t *e=&song->events[i];uint32_t dt=e->tick-last_tick;
+  midi_event_t *e=&song->events[i];uint32_t tick=e->tick,dt=tick-last_tick;
   uint64_t n=(uint64_t)dt*tempo+rem;us+=n/ppqn;rem=n%ppqn;
-  e->frame=us*44100u/1000000u;last_tick=e->tick;
-  if(e->type==0xff)tempo=e->tempo;
+  e->frame=us*44100u/1000000u;last_tick=tick;
+  if(e->type==0xff){tempo=((uint32_t)e->channel<<16)|((uint32_t)e->note<<8)|e->velocity;if(!tempo)tempo=500000;}
   if(e->frame>song->duration_frames)song->duration_frames=e->frame;
  }
  return 0;

@@ -21,10 +21,18 @@ static void silence(void){stop_all_sound();if(opl_enabled)opl_stop_all();}
 #define BLUE 0x000000AA
 #define AUDIO_FRAMES 1024
 #define VISUAL_FRAME_SAMPLES (44100u / 30u)
-#define TILE_TOP 319
+#define TILE_TOP 331
 #define TILE_TARGET 397
 #define TILE_HEIGHT 4
 #define TILE_LOOKAHEAD (44100u * 3u)
+#define TILE_LEFT 16
+#define TILE_WIDTH (13*43)
+static const uint32_t part_colors[16]={
+ 0x00255CC4,0x00C43C32,0x002C803E,0x008D3CB0,
+ 0x00B86513,0x00007886,0x00B33379,0x00656D13,
+ 0x00534BA8,0x00823F21,0x001E8266,0x00913D58,
+ 0x004D6891,0x00806B26,0x00685077,0x003D7476
+};
 static uint32_t wh;
 static int close_requested, audio_ready;
 static int ui_dirty = 1;
@@ -106,29 +114,45 @@ static void draw(void) {
   label(16,181,"Keyboard: A W S E D F T G Y H U J K | Space: release");
   label(16,303,playback_error?playback_error:audio_device);
   label(16,197,opl_enabled?"Synth: hardware OPL (9 voices)":"Synth: software");
+  for(int ch=0;ch<16;ch++){
+   int x=TILE_LEFT+ch*35;
+   rect(x,293,6,7,part_colors[ch]);
+   number(ch+1,s);label(x+8,293,s);
+  }
  }
  rect(160,171,72,8,BG);
  number((int)(played_frames/44100u),s);label(160,171,s);
  /* Repaint the moving lane only; avoid clearing the entire window at 30 Hz. */
- rect(16,TILE_TOP,13*43,TILE_TARGET-TILE_TOP,BG);
+ rect(TILE_LEFT,TILE_TOP,TILE_WIDTH,TILE_TARGET-TILE_TOP,BG);
  if(song_loaded){
-  uint32_t count=0;
-  for(uint32_t i=song_index;i<song.count && count<48;i++){
+  for(uint32_t i=song_index;i<song.count;i++){
    midi_event_t *e=&song.events[i];
    if(e->frame>played_frames+TILE_LOOKAHEAD)break;
-   if(e->type!=0x90||e->note<60||e->note>72||e->frame<played_frames)continue;
+   if(e->type!=0x90||e->frame<played_frames)continue;
    uint64_t ahead=e->frame-played_frames;
-   int x=16+(e->note-60)*43;
+   int x=TILE_LEFT+e->note*TILE_WIDTH/128;
+   int width=(e->note+1)*TILE_WIDTH/128-e->note*TILE_WIDTH/128;
    /* The tile's bottom meets the indicator exactly at note-on. */
    int y=TILE_TARGET-TILE_HEIGHT-(int)(ahead*(TILE_TARGET-TILE_HEIGHT-TILE_TOP)/TILE_LOOKAHEAD);
-   rect(x+3,y,34,TILE_HEIGHT,BLUE);count++;
+   rect(x,y,width-1,TILE_HEIGHT,part_colors[e->channel]);
+  }
+ }
+ rect(TILE_LEFT,TILE_TARGET,TILE_WIDTH,18,DARK);
+ for(int note=0;note<128;note++)if(held[note]){
+  int x=TILE_LEFT+note*TILE_WIDTH/128;
+  int width=(note+1)*TILE_WIDTH/128-note*TILE_WIDTH/128;
+  /* Stack colours when several parts hold the same pitch. */
+  int parts=0,part=0;
+  for(int ch=0;ch<16;ch++)if(held[note]&(1u<<ch))parts++;
+  for(int ch=0;ch<16;ch++)if(held[note]&(1u<<ch)){
+   int top=part*18/parts,bottom=(part+1)*18/parts;
+   rect(x,TILE_TARGET+top,width-1,bottom-top,part_colors[ch]);part++;
   }
  }
  for(int i=0;i<13;i++){
   int x=16+i*43, note=60+i;
   if(full || previous_held[i]!=held[note] ||
      (previous_active==note)!=(active_note==note)){
-   rect(x,TILE_TARGET,40,18,held[note]?BLUE:DARK);
    rect(x,211,40,80,(note==active_note||held[note])?0x0088BBFF:WHITE);
    rect(x,211,40,1,BLACK);rect(x,211,1,80,BLACK);rect(x+39,211,1,80,BLACK);
    number(note,s);label(x+8,271,s);
