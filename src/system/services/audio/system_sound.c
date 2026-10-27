@@ -2,6 +2,8 @@
 #include "../../../kernel/fs.h"
 #include "../../../kernel/hal/audio.h"
 #include "../../../kernel/paging.h"
+#include "../../../kernel/mutex.h"
+#include "../../../kernel/drivers/serial.h"
 
 extern volatile uint32_t frame_timer;
 #define STARTUP_FILE_MAX (40u * PAGE_SIZE)
@@ -9,7 +11,14 @@ static uint8_t buffer[AUDIO_BUFFER_CHUNK_SIZE];
 static uint32_t startup_frames[40];
 static uint32_t startup_size, startup_frame_count;
 static uint32_t offset, remaining, pending, pending_offset, last_progress;
+/* Desktop initialization and the audio worker run in different tasks.
+ * Protect publication, resampler position, pending buffers and frame lifetime. */
+static mutex_t startup_mutex;
 static int active, owns_audio;
+static const char* startup_stage = "idle";
+static void startup_log(const char* text) {
+    debug_audio_print("[STARTUP AUDIO] "); debug_audio_print(text); debug_audio_print("\n");
+}
 static uint32_t channels, bits, frame_size;
 static uint32_t source_rate, output_rate, source_frames, source_index, fraction;
 
@@ -23,6 +32,7 @@ static int tag(const uint8_t* p, const char* s) {
     return 1;
 }
 static void stop(void) {
+    startup_log(startup_stage);
     if (owns_audio) audio_shutdown();
     owns_audio = 0;
     while (startup_frame_count)
@@ -51,9 +61,14 @@ static int startup_read(void* destination, uint32_t length, uint32_t file_offset
 }
 
 void system_sound_start(void) {
+    MUTEX_GUARD(startup_mutex);
     if (active) return;
-    int size = fs_read_file("startup.wav", 0, 0);
-    if (size < 12 || (uint32_t)size > STARTUP_FILE_MAX) return;
+    startup_log("starting /startup.wav");
+    startup_stage = "file lookup/size failed";
+    int size = fs_read_file("/startup.wav", 0, 0);
+    debug_audio_print("[STARTUP AUDIO] source bytes="); debug_audio_hex((uint32_t)size); debug_audio_print("\n");
+    if (size < 12 || (uint32_t)size > STARTUP_FILE_MAX) { startup_log(startup_stage); return; }
+    startup_stage = "RAM allocation or source preload failed";
     startup_size = (uint32_t)size;
     uint32_t pages = (startup_size + PAGE_SIZE - 1u) / PAGE_SIZE;
     startup_frame_count = 0;
@@ -64,13 +79,14 @@ void system_sound_start(void) {
         uint32_t file_offset = i * PAGE_SIZE;
         uint32_t amount = startup_size - file_offset;
         if (amount > PAGE_SIZE) amount = PAGE_SIZE;
-        if (fs_read_file_at("startup.wav", (uint8_t*)startup_frames[i],
+        if (fs_read_file_at("/startup.wav", (uint8_t*)startup_frames[i],
                             amount, file_offset) != (int)amount) {
             stop();
             return;
         }
     }
 
+    startup_stage = "invalid WAV header/format";
     uint8_t header[16];
     if (!startup_read(header, 12, 0) || !tag(header, "RIFF") ||
         !tag(header + 8, "WAVE")) { stop(); return; }
@@ -106,6 +122,7 @@ void system_sound_start(void) {
         pos += length + (length & 1u);
     }
     if (!rate || !remaining || (remaining % frame_size)) { stop(); return; }
+    startup_stage = "HAL initialization failed at source/44100/48000 Hz";
     source_rate = output_rate = rate;
     if (audio_init(output_rate) < 0) {
         if (rate != 44100u && audio_init(44100u) == 0) output_rate = 44100u;
@@ -115,9 +132,11 @@ void system_sound_start(void) {
     owns_audio = 1;
     source_frames = remaining / frame_size;
     source_index = fraction = pending = pending_offset = 0;
+    debug_audio_print("[STARTUP AUDIO] output rate="); debug_audio_hex(output_rate);
+    debug_audio_print(" device="); debug_audio_print(audio_device_name(audio_device_selected())); debug_audio_print("\n");
     active = 1;
     last_progress = frame_timer;
-    system_sound_poll();
+    /* Only the audio worker pumps the stream, after publication is complete. */
 }
 
 static int startup_sample(uint32_t index, int32_t* left, int32_t* right) {
@@ -135,12 +154,17 @@ static int32_t startup_interpolate(int32_t a, int32_t b) {
     return a + (delta < 0 ? -step : step);
 }
 void system_sound_poll(void) {
+    MUTEX_GUARD(startup_mutex);
     if (!active) return;
-    if (audio_status() < 0 || (uint32_t)(frame_timer - last_progress) > 300u) {
-        stop(); return;
+    if (audio_status() < 0) {
+        startup_stage = "audio device reported a playback error"; stop(); return;
+    }
+    if ((uint32_t)(frame_timer - last_progress) > 300u) {
+        startup_stage = "audio queue/drain timed out after 3 seconds"; stop(); return;
     }
     if (source_index >= source_frames && !pending) {
-        if (audio_drain() < 0 || audio_status() == 0) stop();
+        if (audio_drain() < 0) { startup_stage = "audio drain failed"; stop(); }
+        else if (audio_status() == 0) { startup_stage = "playback completed"; stop(); }
         return;
     }
     if (!pending) {
@@ -150,6 +174,7 @@ void system_sound_poll(void) {
         while (frames < 1024u && source_index < source_frames) {
             int32_t a, b, c, d;
             uint32_t next = source_index + 1 < source_frames ? source_index + 1 : source_index;
+            startup_stage = "cached sample read failed";
             if (!startup_sample(source_index, &a, &b) || !startup_sample(next, &c, &d)) {
                 stop(); return;
             }
@@ -168,6 +193,7 @@ void system_sound_poll(void) {
     int32_t written = audio_write(buffer + pending_offset, pending - pending_offset);
     if (written == 0) return;
     if (written < 0 || (uint32_t)written > pending - pending_offset || (written & 3)) {
+        startup_stage = "audio device rejected startup PCM";
         stop(); return;
     }
     pending_offset += (uint32_t)written;

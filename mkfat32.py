@@ -107,7 +107,7 @@ def main():
     # Audio resources are included in the image root under their FAT 8.3 names.
     files = [Path(name) for name in ROOT_FILES if Path(name).is_file()]
     files += sorted((p for p in Path("resources").rglob("*")
-                     if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav"}),
+                     if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav", ".mp3"}),
                     key=lambda p: p.as_posix().lower())
     names = set()
     for p in files:

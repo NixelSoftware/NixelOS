@@ -13,6 +13,14 @@ Thank you to everyone who contributed to the development of this project!
 
 ---
 
+## MP3 Decoder
+
+Sound Player uses [minimp3 by lieff and contributors](https://github.com/lieff/minimp3),
+released under CC0-1.0. The original source and license are retained in
+`src/apps/sound/upstream/`.
+
+---
+
 ## Browser Engine
 
 Thanks to **Dajo Frey**, creator of [Netzhaut](https://github.com/dajofrey/Netzhaut),

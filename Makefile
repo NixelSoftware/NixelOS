@@ -146,6 +146,12 @@ $(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True)"
 
+# minimp3's private freestanding libc subset must not affect other apps.
+src/apps/sound/mp3.o: CFLAGS += -Isrc/apps/sound/compat
+src/apps/sound/mp3.o: src/apps/sound/mp3.h src/apps/sound/upstream/minimp3.h src/apps/sound/compat/string.h src/apps/sound/compat/stdlib.h
+src/apps/sound/main.o: src/apps/sound/mp3.h
+sound.bin: src/apps/sound/mp3.o
+
 SYNDIG_DIR := src/apps/syndig
 SYNDIG_C := \
     $(SYNDIG_DIR)/main.c \
@@ -220,7 +226,7 @@ src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
 	$(PYTHON) -c "import pathlib,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
 	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sys.exit(subprocess.call(['$(NASM)','-f','bin','-D',f'KERNEL_SECTORS={(n+511)//512}','-D',f'KERNEL_SIZE_BYTES={n}','src/boot/boot_stage2.asm','-o','src/boot_stage2.bin']))"
 
-RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav'}))")
+RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
 
 os.img: $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
 	$(PYTHON) mkfat32.py os.img.new

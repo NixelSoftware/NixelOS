@@ -6,14 +6,14 @@
 #include "pci.h"
 #include "serial.h"
 #include "../paging.h"
-#define SLOTS 8u
+#define SLOTS 32u
 #define BLOCK PAGE_SIZE
 static uint32_t base, stream, pci, codec, afg, dac, pin;
 static uint32_t caps[256], seen[256], path[16], choice[16], depth;
 static uint32_t head, tail, queued, vol = 100, pcm_caps;
 static int ready, opened, running, draining, failed;
 static uint16_t format;
-static uint32_t last_poll, poll_limit;
+static uint32_t last_poll, poll_limit, prefill_started, underruns;
 static struct { uint32_t lo, hi, length, flags; } bdl[SLOTS] __attribute__((aligned(128)));
 static int16_t* samples[SLOTS];
 static uint8_t r8(uint32_t r) { return *(volatile uint8_t*)(base+r); }
@@ -191,10 +191,46 @@ static int32_t init(uint32_t rate) {
     w32(stream+0x18,(uint32_t)bdl); w32(stream+0x1c,0);
     w32(stream+8,SLOTS*BLOCK); w16(stream+0xc,SLOTS-1); w16(stream+0x12,format);
     w8(stream+2,0x10); w8(stream+3,0x1c);
-    head=tail=queued=0; draining=0; opened=1; return 0;
+    head=tail=queued=underruns=0; draining=0; opened=1; return 0;
+}
+static void start_stream(void) {
+    /* SSYNC holds link transmission while DMA fills the output FIFO. Real
+     * ICH8 needs this startup sequence even when emulators start immediately. */
+    uint32_t bit=1u<<((stream-0x80u)/0x20u);
+    uint32_t sync=r32(0x34);
+    w32(0x34,sync|bit);
+    w8(stream+3,0x1c);
+    __asm__ volatile("" ::: "memory");
+    w8(stream,2);
+    uint32_t attempt;
+    for(attempt=0;attempt<1000;attempt++) {
+        uint8_t state=r8(stream+3);
+        if(state&0x18) break;
+        if(state&0x20) break; /* FIFORDY */
+        delay(10);
+    }
+    uint8_t state=r8(stream+3);
+    if(attempt==1000 || !(state&0x20) || (state&0x18)) {
+        failed=1;
+        stop();
+        w32(0x34,sync);
+        debug_audio_print("[HDA] Output FIFO failed to prime: status=");
+        debug_audio_hex(state);debug_audio_print("\n");
+        return;
+    }
+    last_poll=r32(0x30);
+    w32(0x34,sync); /* release the primed stream onto the link */
+    running=1;
 }
 static void service(void) {
-    if(!opened || !running) return;
+    if(!opened || failed) return;
+    if(!running) {
+        /* Start once three blocks are queued, after a bounded 20 ms prefill,
+         * or immediately on drain so a short clip cannot wait forever. */
+        if(queued && (queued>=3 || draining || r32(0x30)-prefill_started>=480000u))
+            start_stream();
+        return;
+    }
     uint32_t now=r32(0x30); /* WALLCLK: 24 MHz, wraps naturally. */
     if(now-last_poll>=poll_limit) { debug_audio_print("[HDA] DMA service timeout: gap=");debug_audio_hex(now-last_poll);debug_audio_print(" limit=");debug_audio_hex(poll_limit);debug_audio_print("\n"); failed=1; stop(); return; }
     last_poll=now;
@@ -211,7 +247,14 @@ static void service(void) {
         head=(head+1)%SLOTS; queued--;
     }
     w8(stream+3,4);
-    if(!queued) stop();
+    if(!queued) {
+        if(!draining) {
+            ++underruns;
+            debug_audio_print("[HDA] PCM queue underrun, count=");
+            debug_audio_hex(underruns);debug_audio_print("\n");
+        }
+        stop();
+    }
 }
 static int32_t write_pcm(const void* data,uint32_t length) {
     if(!opened || failed || draining || (!data && length) || (length&3)) return -1;
@@ -219,7 +262,8 @@ static int32_t write_pcm(const void* data,uint32_t length) {
     if(!length) return 0;
     /* Keep one silent guard block so underrun cannot immediately replay data. */
     if(queued>=SLOTS-1) return 0;
-    if(!running) {
+    if(!running && !queued) {
+        prefill_started=r32(0x30);
         /* Reset the DMA position before reusing a stopped ring. */
         w8(stream,1); if(wait(stream,1,1)<0) { failed=1; return -1; }
         w8(stream,0); if(wait(stream,1,0)<0) { failed=1; return -1; }
@@ -235,8 +279,8 @@ static int32_t write_pcm(const void* data,uint32_t length) {
     }
     for(uint32_t j=length/2;j<BLOCK/2;j++) samples[tail][j]=0;
     __asm__ volatile("" ::: "memory"); tail=(tail+1)%SLOTS; queued++;
-    if(!running) { w8(stream+3,0x1c); last_poll=r32(0x30); w8(stream,2); running=1; }
-    return length;
+    if(!running && queued>=3) start_stream();
+    return failed?-1:(int32_t)length;
 }
 static int32_t status(void) { service(); return !opened || failed ? -1 : queued!=0; }
 static int32_t drain(void) { if(!opened || failed) return -1; draining=1; service(); return failed?-1:0; }

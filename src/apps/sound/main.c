@@ -1,16 +1,18 @@
-/* Windowed PCM WAV player. Original ECE391 example by Soumithri Bala. */
+/* Windowed WAV/MP3 player. Original ECE391 example by Soumithri Bala. */
 #include "../../system/user/sys_api.h"
+#include "mp3.h"
 
+#define OUTPUT_FRAMES 1024u
 static uint8_t buffer[16384];
-static uint16_t output_pcm[8192];
+static uint16_t output_pcm[OUTPUT_FRAMES * 2u];
 static uint32_t output_frames;
 
 static uint32_t window_handle, progress, last_draw;
 static uint32_t elapsed_seconds, total_seconds, playback_tick;
-static int clock_running;
+static int clock_running, duration_known;
 static int close_requested, stop_requested, play_requested, playing;
 static const char* current_path;
-static const char* player_status = "Choose a WAV file in Files to play.";
+static const char* player_status = "Choose a WAV or MP3 file in Files to play.";
 
 static void draw(uint32_t op, int x, int y, int w, int h,
                  const char* text, uint32_t color) {
@@ -52,7 +54,11 @@ static void redraw(void) {
     char timestamp[32];
     unsigned t = format_time(timestamp, elapsed_seconds);
     timestamp[t++] = ' '; timestamp[t++] = '/'; timestamp[t++] = ' ';
-    format_time(timestamp+t, total_seconds);
+    if (duration_known) format_time(timestamp+t, total_seconds);
+    else {
+        const char* unknown = "--:--";
+        for (unsigned i = 0; i <= 5; i++) timestamp[t+i] = unknown[i];
+    }
     draw(USER_WINDOW_DRAW_TEXT, 232, 124, 0, 0, timestamp, 0);
     draw(USER_WINDOW_DRAW_TEXT, 16, 158, 0, 0, player_status, 0);
     draw(USER_WINDOW_DRAW_TEXT, 16, 178, 0, 0, audio_device, 0);
@@ -63,7 +69,7 @@ static void poll_player(void) {
     if (!window_handle) return;
     if (clock_running) {
         elapsed_seconds = (uint32_t)(sys_get_ticks() - playback_tick) / 100u;
-        if (elapsed_seconds > total_seconds) elapsed_seconds = total_seconds;
+        if (duration_known && elapsed_seconds > total_seconds) elapsed_seconds = total_seconds;
         if ((uint32_t)(sys_get_ticks() - last_draw) >= 25u) redraw();
     }
     user_window_event_t e;
@@ -82,7 +88,6 @@ static void poll_player(void) {
 }
 
 static int submit_pcm(const void* data, uint32_t length) {
-    poll_player();
     if (close_requested || stop_requested) return 0;
     uint32_t started = sys_get_ticks(), offset = 0;
     while (offset < length) {
@@ -101,7 +106,7 @@ static int submit_pcm(const void* data, uint32_t length) {
 static int emit_frame(int32_t left, int32_t right) {
     output_pcm[output_frames * 2u] = (uint16_t)left;
     output_pcm[output_frames * 2u + 1u] = (uint16_t)right;
-    if (++output_frames < 4096u) return 1;
+    if (++output_frames < OUTPUT_FRAMES) return 1;
     output_frames = 0;
     return submit_pcm(output_pcm, sizeof(output_pcm));
 }
@@ -132,56 +137,72 @@ static int tag(const uint8_t* p, const char* s) {
     return 1;
 }
 
+static int32_t read_mp3(void* context, void* data, uint32_t count, uint32_t offset) {
+    return sys_fs_read_at((const char*)context, data, count, offset);
+}
+
 static void play_file(const char* path, int process_only) {
     unsigned path_length = 0;
     while (path[path_length]) path_length++;
-    if (path_length >= 4 && path[path_length-4] == '.' &&
+    int is_mp3 = path_length >= 4 && path[path_length-4] == '.' &&
         (path[path_length-3] == 'm' || path[path_length-3] == 'M') &&
         (path[path_length-2] == 'p' || path[path_length-2] == 'P') &&
-        path[path_length-1] == '3') {
-        print("MP3 decoding is not supported yet."); return;
-    }
+        path[path_length-1] == '3';
     int32_t size = sys_fs_read(path, 0, 0);
-    if (size < 12 || sys_fs_read_at(path, buffer, 12, 0) != 12 ||
-        !tag(buffer, "RIFF") || !tag(buffer+8, "WAVE")) {
-        print("sound: cannot read a RIFF WAV file\n"); return;
-    }
-    uint32_t riff_size = le32(buffer+4);
-    if (riff_size < 4 || riff_size > (uint32_t)size-8) {
-        print("sound: truncated WAV file\n"); return;
-    }
-    uint32_t end = riff_size+8, rate = 0, data_offset = 0, data_size = 0;
-    int valid_format = 0;
+    uint32_t rate = 0, data_offset = 0, data_size = 0, total_frames = 0;
     uint32_t channels = 0, bits = 0, frame_size = 0;
-    for (uint32_t offset = 12; offset <= end-8;) {
-        if (sys_fs_read_at(path, buffer, 8, offset) != 8) break;
-        uint32_t length = le32(buffer+4);
-        offset += 8;
-        if (length > end-offset) break;
-        if (tag(buffer, "fmt ")) {
-            valid_format = 0;
-            if (length < 16 || sys_fs_read_at(path, buffer, 16, offset) != 16 ||
-                le16(buffer) != 1) break;
-            channels = le16(buffer+2); bits = le16(buffer+14);
-            if ((channels != 1 && channels != 2) || (bits != 8 && bits != 16)) break;
-            frame_size = channels * (bits / 8);
-            if (le16(buffer+12) != frame_size) break;
-            rate = le32(buffer+4);
-            if (rate < 5000 || rate > 48000 || le32(buffer+8) != rate*frame_size) break;
-            valid_format = 1;
-        } else if (tag(buffer, "data")) {
-            data_offset = offset; data_size = length;
-            if (rate) break;
+    int pending_frames = 0;
+    duration_known = !is_mp3;
+    if (is_mp3) {
+        if (size <= 0) { print("sound: cannot read MP3 file\n"); return; }
+        /* Prime just one frame to select the device rate. Keep its PCM for
+         * the playback loop; all remaining decoding happens on demand. */
+        sound_mp3_open(read_mp3, (void*)path, (uint32_t)size);
+        pending_frames = sound_mp3_next((int16_t*)buffer, &rate);
+        if (pending_frames <= 0) { print("sound: invalid or unreadable MP3 file\n"); return; }
+        data_size = (uint32_t)size;
+    } else {
+        if (size < 12 || sys_fs_read_at(path, buffer, 12, 0) != 12 ||
+            !tag(buffer, "RIFF") || !tag(buffer+8, "WAVE")) {
+            print("sound: cannot read a RIFF WAV file\n"); return;
         }
-        if (length == end-offset) break;
-        offset += length + (length & 1u);
-    }
-    if (!valid_format || !data_offset || !data_size || (data_size % frame_size)) {
-        print(window_handle ? "Unsupported WAV format (PCM 8/16-bit only)." :
-              "sound: expected PCM WAV, 8/16-bit mono/stereo, 5000..48000 Hz\n"); return;
+        uint32_t riff_size = le32(buffer+4);
+        if (riff_size < 4 || riff_size > (uint32_t)size-8) {
+            print("sound: truncated WAV file\n"); return;
+        }
+        uint32_t end = riff_size+8;
+        int valid_format = 0;
+        for (uint32_t offset = 12; offset <= end-8;) {
+            if (sys_fs_read_at(path, buffer, 8, offset) != 8) break;
+            uint32_t length = le32(buffer+4);
+            offset += 8;
+            if (length > end-offset) break;
+            if (tag(buffer, "fmt ")) {
+                valid_format = 0;
+                if (length < 16 || sys_fs_read_at(path, buffer, 16, offset) != 16 ||
+                    le16(buffer) != 1) break;
+                channels = le16(buffer+2); bits = le16(buffer+14);
+                if ((channels != 1 && channels != 2) || (bits != 8 && bits != 16)) break;
+                frame_size = channels * (bits / 8);
+                if (le16(buffer+12) != frame_size) break;
+                rate = le32(buffer+4);
+                if (rate < 5000 || rate > 48000 || le32(buffer+8) != rate*frame_size) break;
+                valid_format = 1;
+            } else if (tag(buffer, "data")) {
+                data_offset = offset; data_size = length;
+                if (rate) break;
+            }
+            if (length == end-offset) break;
+            offset += length + (length & 1u);
+        }
+        if (!valid_format || !data_offset || !data_size || (data_size % frame_size)) {
+            print(window_handle ? "Unsupported WAV format (PCM 8/16-bit only)." :
+                  "sound: expected PCM WAV, 8/16-bit mono/stereo, 5000..48000 Hz\n"); return;
+        }
+        total_frames = data_size / frame_size;
     }
     /* Prefer the existing playback rate, then try standard codec rates.
-     * HDA codecs need not support a WAV's source rate (e.g. 22.05 kHz).
+     * HDA codecs need not support the source rate (e.g. 22.05 kHz).
      * Convert in either direction while preserving phase across file reads. */
     uint32_t playback_rate = rate > 44100u ? 44100u : rate;
     uint32_t phase = 0;
@@ -198,7 +219,6 @@ static void play_file(const char* path, int process_only) {
         }
     }
     (void)sys_audio_device_name(audio_device, sizeof(audio_device));
-    uint32_t total_frames = data_size / frame_size;
     total_seconds = total_frames / rate;
     elapsed_seconds = 0;
     playback_tick = sys_get_ticks();
@@ -207,39 +227,64 @@ static void play_file(const char* path, int process_only) {
     uint32_t playback_started = sys_get_ticks();
     if (window_handle) { player_status = "Playing"; redraw(); }
     else { print(process_only ? "Processing " : "Playing "); print(path); print("\n"); }
+    const char* failure = "Audio device failed or playback queue stalled";
     while (data_size) {
-        poll_player();
+        /* Audio gets first chance to refill; UI work runs on queue backpressure. */
+        if (process_only) poll_player();
         if (close_requested || stop_requested) goto failed;
         /* Scale without overflowing on long files. */
+        uint32_t progress_total = is_mp3 ? (uint32_t)size : total_frames;
+        uint32_t progress_done = is_mp3 ? sound_mp3_position() : processed_frames;
         progress = 0;
-        while (progress < 100u && processed_frames >=
-               (total_frames / 100u) * (progress+1u) +
-               ((total_frames % 100u) * (progress+1u) + 99u) / 100u)
+        while (progress < 100u && progress_done >=
+               (progress_total / 100u) * (progress+1u) +
+               ((progress_total % 100u) * (progress+1u) + 99u) / 100u)
             progress++;
-        if (window_handle && (uint32_t)(sys_get_ticks()-last_draw) >= 25u) redraw();
+
         uint32_t processing_started = sys_get_ticks();
-        uint32_t capacity = (sizeof(buffer) / 4) * frame_size;
-        uint32_t chunk = data_size < capacity ? data_size : capacity;
-        if (sys_fs_read_at(path, buffer, chunk, data_offset) != (int32_t)chunk) goto failed;
-        /* Expand backwards so unread source samples are preserved. */
-        uint32_t frames = chunk / frame_size;
-        for (uint32_t i = frames; i-- > 0;) {
-            uint32_t source = i * frame_size;
-            uint16_t left, right;
-            if (bits == 8) {
-                left = (uint16_t)(((int)buffer[source] - 128) * 256);
-                right = channels == 2 ? (uint16_t)(((int)buffer[source+1] - 128) * 256) : left;
-            } else {
-                left = le16(buffer+source);
-                right = channels == 2 ? le16(buffer+source+2) : left;
+        uint32_t frames, chunk = 0;
+        if (is_mp3) {
+            uint32_t decoded_rate = rate;
+            int decoded = pending_frames;
+            pending_frames = 0;
+            if (!decoded) decoded = sound_mp3_next((int16_t*)buffer, &decoded_rate);
+            if (decoded < 0 || (decoded > 0 && decoded_rate != rate)) {
+                failure = "MP3 read or decode failed"; goto failed;
             }
-            buffer[i*4] = left; buffer[i*4+1] = left >> 8;
-            buffer[i*4+2] = right; buffer[i*4+3] = right >> 8;
+            if (!decoded) { data_size = 0; break; }
+            frames = (uint32_t)decoded;
+        } else {
+            uint32_t capacity = (sizeof(buffer) / 4) * frame_size;
+            chunk = data_size < capacity ? data_size : capacity;
+            if (sys_fs_read_at(path, buffer, chunk, data_offset) != (int32_t)chunk) {
+                failure = "Disk read failed during WAV playback"; goto failed;
+            }
+            /* Expand backwards so unread source samples are preserved. */
+            frames = chunk / frame_size;
+            for (uint32_t i = frames; i-- > 0;) {
+                uint32_t source = i * frame_size;
+                uint16_t left, right;
+                if (bits == 8) {
+                    left = (uint16_t)(((int)buffer[source] - 128) * 256);
+                    right = channels == 2 ? (uint16_t)(((int)buffer[source+1] - 128) * 256) : left;
+                } else {
+                    left = le16(buffer+source);
+                    right = channels == 2 ? le16(buffer+source+2) : left;
+                }
+                buffer[i*4] = left; buffer[i*4+1] = left >> 8;
+                buffer[i*4+2] = right; buffer[i*4+3] = right >> 8;
+            }
+        }
+        if (processed_frames > 0xffffffffu - frames) {
+            failure = "Audio stream exceeds supported length"; goto failed;
         }
         processed_frames += frames;
         if ((uint32_t)(sys_get_ticks()-processing_started) > (frames * 100u + rate - 1u) / rate)
             late_processing++;
-        if (process_only) { data_size -= chunk; data_offset += chunk; continue; }
+        if (process_only) {
+            if (!is_mp3) { data_size -= chunk; data_offset += chunk; }
+            continue;
+        }
         if (rate != playback_rate) {
             for (uint32_t i = 0; i < frames; i++) {
                 int32_t left = (int16_t)le16(buffer + i * 4u);
@@ -259,10 +304,13 @@ static void play_file(const char* path, int process_only) {
                 previous_left = left; previous_right = right;
             }
         } else if (!submit_pcm(buffer, frames * 4u)) goto failed;
-        data_size -= chunk;
-        data_offset += chunk;
+        if (!is_mp3) { data_size -= chunk; data_offset += chunk; }
     }
-    if (processed_frames != total_frames) goto failed;
+    if (is_mp3) {
+        total_frames = processed_frames;
+        total_seconds = total_frames / rate;
+        duration_known = 1;
+    } else if (processed_frames != total_frames) goto failed;
     if (process_only) {
         print("Processed frames: "); print_u32(processed_frames); print(" (no audio submitted)\n");
         return;
@@ -293,7 +341,7 @@ failed:
     poll_player();
     clock_running = 0;
     if (!process_only) sys_audio_shutdown();
-    print(stop_requested || close_requested ? "Stopped" : "Playback or file read failed");
+    print(stop_requested || close_requested ? "Stopped" : failure);
     return;
 }
 
@@ -314,7 +362,7 @@ void user_main(const char* argument) {
     while (*argument && n < sizeof(path)-1) path[n++] = *argument++;
     while (n && path[n-1] == ' ') n--;
     path[n] = 0;
-    if (*argument || (process_only && !n)) { print("Usage: sound [--process-only] <file.wav>\n"); return; }
+    if (*argument || (process_only && !n)) { print("Usage: sound [--process-only] <file.wav|file.mp3>\n"); return; }
     if (process_only) { play_file(path, 1); return; }
     current_path = path;
     (void)sys_audio_device_name(audio_device, sizeof(audio_device));
@@ -332,7 +380,7 @@ void user_main(const char* argument) {
         poll_player();
         if (play_requested && !close_requested) {
             play_requested = 0; stop_requested = 0; progress = 0;
-            elapsed_seconds = total_seconds = 0; clock_running = 0;
+            elapsed_seconds = total_seconds = 0; clock_running = 0; duration_known = 0;
             playing = 1;
             if (n) play_file(path, 0);
             playing = 0;
