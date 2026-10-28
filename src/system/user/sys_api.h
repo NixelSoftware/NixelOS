@@ -52,7 +52,9 @@ enum {
     SYS_GETPPID = 38,
     SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FAT attributes */
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
-    SYS_APP_LAUNCH = 40 /* EBX: executable path, ECX: arguments; starts detached */
+    SYS_APP_LAUNCH = 40, /* EBX: executable path, ECX: arguments; starts detached */
+    SYS_TCP_LISTEN = 45, /* EBX: local port; returns listener handle or -1 */
+    SYS_TCP_ACCEPT = 46 /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
 };
 
 typedef struct { uint32_t next, lost; } user_serial_cursor_t;
@@ -429,6 +431,24 @@ static inline int32_t sys_window_close(uint32_t handle) {
     __asm__ volatile ("int $0x80"
                       : "=a"(result)
                       : "0"((uint32_t)SYS_WINDOW_CLOSE), "b"(handle)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_tcp_listen(uint16_t local_port) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_TCP_LISTEN), "b"((uint32_t)local_port)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_tcp_accept(uint32_t listener_handle) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_TCP_ACCEPT), "b"(listener_handle)
                       : "ecx", "edx", "memory", "cc");
     return result;
 }

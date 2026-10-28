@@ -111,7 +111,7 @@ KERNEL_C := \
   src/system/icons/network.h src/kernel/hal/audio.c \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
   src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c \
-  src/kernel/login.c src/kernel/http_server.c
+  src/kernel/login.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm
@@ -128,7 +128,8 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
-                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
+                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
+                 qksrv
 APPS := $(STANDARD_APPS) syndig
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 

@@ -194,6 +194,8 @@ static uint8_t tcp_receive(uint32_t source_ip, uint32_t destination_ip,
         if (!send_segment(child, 0, 0, TCP_FLAG_SYN | TCP_FLAG_ACK)) {
             release_socket(child);
         }
+        extern void syscall_tcp_on_accept(tcp_socket_t* listener, tcp_socket_t* child);
+        syscall_tcp_on_accept(socket, child);
         return 0;
     }
 

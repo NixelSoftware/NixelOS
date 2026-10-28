@@ -27,6 +27,7 @@ static unsigned int audio_owner;
 #define FLOPPY_SECTOR_SIZE 512u
 #define USER_TCP_SOCKET_MAX 8u
 #define USER_TCP_QUEUE_SIZE 131072u
+#define USER_TCP_BACKLOG    8u
 //#define SYS_FS_WRITE_MAX 65536u
 #define SYS_FS_WRITE_MAX 2097152u
 #define SYS_TCP_SEND_MAX TCP_MAX_PAYLOAD
@@ -52,7 +53,7 @@ typedef struct {
     uint8_t active;
     uint8_t completed;
     uint8_t timed_out;
-} user_ping_request_t;
+} user_ping_request_t;  
 
 static user_ping_request_t user_ping_requests[USER_PING_REQUEST_MAX];
 static uint32_t next_ping_handle = 1;
@@ -65,6 +66,10 @@ typedef struct {
     uint32_t read_head;
     uint32_t read_count;
     uint8_t active;
+    uint8_t is_listener;
+    uint32_t accepted_handles[USER_TCP_BACKLOG];
+    uint8_t accept_head;
+    uint8_t accept_count;
     uint8_t data[USER_TCP_QUEUE_SIZE];
 } user_tcp_socket_t;
 
@@ -525,6 +530,58 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = 0;
             return;
         }
+        case SYS_TCP_LISTEN: {
+            uint32_t owner_directory = paging_current_directory();
+            user_tcp_socket_t* slot = 0;
+            for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+                if (!user_tcp_sockets[i].active) {
+                    slot = &user_tcp_sockets[i];
+                    break;
+                }
+            }
+            if (!slot || !regs->ebx || regs->ebx > 65535u) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            tcp_socket_t* socket = tcp_listen((uint16_t)regs->ebx);
+            if (!socket) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            uint32_t handle = next_tcp_handle++;
+            if (!handle || handle > 0x7FFFFFFFu) {
+                next_tcp_handle = 2;
+                handle = 1;
+            }
+            slot->owner_directory = owner_directory;
+            slot->handle = handle;
+            slot->socket = socket;
+            slot->read_head = 0;
+            slot->read_count = 0;
+            slot->active = 1;
+            slot->is_listener = 1;
+            slot->accept_head = 0;
+            slot->accept_count = 0;
+            regs->eax = handle;
+            return;
+        }
+        case SYS_TCP_ACCEPT: {
+            user_tcp_socket_t* slot = user_tcp_by_handle(
+                regs->ebx, paging_current_directory());
+            if (!slot || !slot->is_listener) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            if (slot->accept_count == 0) {
+                regs->eax = 0; // No incoming client yet
+                return;
+            }
+            uint32_t client_handle = slot->accepted_handles[slot->accept_head];
+            slot->accept_head = (slot->accept_head + 1u) % USER_TCP_BACKLOG;
+            slot->accept_count--;
+            regs->eax = client_handle;
+            return;
+        }
         case SYS_FLOPPY_INIT:
             regs->eax = (uint32_t)floppy_init();
             return;
@@ -841,6 +898,46 @@ void syscall_dispatch(registers_t* regs) {
         default: {
             MUTEX_GUARD(kernel_mutex);
             syscall_dispatch_impl(regs);
+            return;
+        }
+    }
+}
+
+void syscall_tcp_on_accept(tcp_socket_t* listener, tcp_socket_t* child) {
+    for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+        user_tcp_socket_t* slot = &user_tcp_sockets[i];
+        if (slot->active && slot->is_listener && slot->socket == listener) {
+            // Find a free user socket slot for the new connection
+            user_tcp_socket_t* child_slot = 0;
+            for (uint32_t j = 0; j < USER_TCP_SOCKET_MAX; j++) {
+                if (!user_tcp_sockets[j].active) {
+                    child_slot = &user_tcp_sockets[j];
+                    break;
+                }
+            }
+            if (!child_slot || slot->accept_count >= USER_TCP_BACKLOG) {
+                tcp_release(child); 
+                return;
+            }
+
+            uint32_t handle = next_tcp_handle++;
+            if (!handle || handle > 0x7FFFFFFFu) {
+                next_tcp_handle = 2;
+                handle = 1;
+            }
+
+            child_slot->owner_directory = slot->owner_directory;
+            child_slot->handle = handle;
+            child_slot->socket = child;
+            child_slot->read_head = 0;
+            child_slot->read_count = 0;
+            child_slot->active = 1;
+            child_slot->is_listener = 0;
+            tcp_bind(child, user_tcp_receive);
+
+            uint32_t tail = (slot->accept_head + slot->accept_count) % USER_TCP_BACKLOG;
+            slot->accepted_handles[tail] = handle;
+            slot->accept_count++;
             return;
         }
     }
