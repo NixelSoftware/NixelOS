@@ -63,6 +63,7 @@ static uint8_t api_ipv4_send(uint32_t destination_ip, uint8_t protocol,
 static uint8_t api_dns_resolve(const char* hostname, uint32_t* address);
 extern void irq0_timer_handler(void);
 extern void login_screen_task(void* arg);
+extern void http_server_service(void* arg);
 
 volatile uint32_t frame_timer = 0;
 static uint8_t needs_redraw = 1;
@@ -453,6 +454,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 #endif
         task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
         task_create_nice(usb_service, 0, "usb", 2) < 0 ||
+        task_create_nice(http_server_service, 0, "httpsrv", 2) < 0 ||
         display_start_async() < 0 || serial_start_async() < 0) {
 #else
     if (serial_start_async() < 0) {
