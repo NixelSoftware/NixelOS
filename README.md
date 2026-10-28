@@ -135,3 +135,9 @@ application needs more than the default 128 MiB.
 | Broadcom BCM57785 NetLink Gigabit | `0x14E4` | `0x16B1` |
 | Broadcom BCM57786 NetLink Gigabit | `0x14E4` | `0x16B5` |
 | Broadcom BCM57788 NetLink Gigabit | `0x14E4` | `0x1691` |
+
+## Chess
+
+Launch `chess.bin` to play White against a basic computer opponent. Click a
+piece and a highlighted square to move. Includes undo and promotion choices.
+See [Chess controls and engine tests](src/apps/chess/README.md).

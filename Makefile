@@ -127,7 +127,7 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
 # Single-main applications; each MUST provide src/apps/<name>/entry.asm.
-STANDARD_APPS := files mines calc hexview floppy_debug ping netdiag com0 http_test curl \
+STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
 APPS := $(STANDARD_APPS) syndig
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
@@ -145,6 +145,12 @@ $(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(LD) $(LDFLAGS) -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True)"
+
+src/apps/chess/piece_assets.h: src/apps/chess/embed_assets.py $(wildcard src/apps/chess/assets/*.png)
+	$(PYTHON) src/apps/chess/embed_assets.py $@
+src/apps/chess/main.o: src/apps/chess/piece_assets.h
+src/apps/chess/main.o src/apps/chess/engine.o: src/apps/chess/engine.h
+chess.bin: src/apps/chess/engine.o
 
 # minimp3's private freestanding libc subset must not affect other apps.
 src/apps/sound/mp3.o: CFLAGS += -Isrc/apps/sound/compat
