@@ -130,6 +130,7 @@ void ipv4_set_protocol_handler(uint8_t protocol,
     MUTEX_GUARD(kernel_mutex);
     uint32_t current_directory = paging_current_directory();
     uint32_t kernel_directory = paging_kernel_directory();
+    /*
     debug_print("[NET RX] handler registration protocol/current/old/new: ");
     debug_hex(protocol);
     debug_print("/");
@@ -139,6 +140,7 @@ void ipv4_set_protocol_handler(uint8_t protocol,
     debug_print("/");
     debug_hex((uint32_t)handler);
     debug_print("\n");
+    */
 
     if (current_directory != kernel_directory) {
         if (protocol_handler_directories[protocol] != 0 &&
@@ -226,6 +228,7 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
     }
 
     if (header->protocol == 6) {
+        /*
         debug_print("[NET RX] TCP packet src/dst/local: ");
         debug_hex(read_be32((const uint8_t*)&header->source_ip));
         debug_print("/");
@@ -233,6 +236,7 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
         debug_print("/");
         debug_hex(local_ip);
         debug_print("\n");
+        */
     }
 
     if (ipv4_checksum(header, header_length) != 0) return 0;
@@ -249,11 +253,13 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
     payload_length = total_length - header_length;
     ipv4_protocol_handler_t handler = protocol_handlers[header->protocol];
     if (header->protocol == 6) {
+        /*
         debug_print("[NET RX] TCP handler/owner: ");
         debug_hex((uint32_t)handler);
         debug_print("/");
         debug_hex(protocol_handler_directories[header->protocol]);
         debug_print("\n");
+        */
     }
     if (handler) {
         uint32_t handler_directory = protocol_handler_directories[header->protocol];

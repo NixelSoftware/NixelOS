@@ -12,6 +12,7 @@ static uint8_t http_server_handler(tcp_socket_t* socket, const uint8_t* data, ui
         "Content-Type: text/html\r\n"
         "Content-Length: 26\r\n"
         "Connection: close\r\n"
+        "Server: QuarkServe\r\n"
         "\r\n"
         "<h1>Hello from NixelOS!</h1>";
 
