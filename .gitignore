@@ -8,3 +8,5 @@ struct
 *.o
 *.tmp
 .audio-debug-config
+
+/src/include/os_version.h

@@ -1,3 +1,4 @@
+#include "../../include/os_version.h"
 #include "../../kernel/mutex.h"
 #include "commands.h"
 #include "../../kernel/users.h"
@@ -253,6 +254,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
     if (account_command(command)) return;
     if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
         print("Commands:\n"
+                    " ver             Show OS version and build ID\n"
                     " users / whoami / id   Show accounts or identity\n"
                     " sudo <command>  Run as root (password required)\n"
                     " su <account>    Switch identity (root only)\n"
@@ -273,6 +275,8 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ifconfig        Show network configuration\n"
                     " netdev          Show detected network hardware\n"
                     " clear           Clear screen\n");
+    } else if (has_prefix(command, "ver") && (!command[3] || command[3] == ' ')) {
+        print(OS_VERSION_DESCRIPTION "\n");
     } else if ((has_prefix(command, "ps") && (!command[2] || command[2] == ' '))) {
         task_info_t processes[MAX_TASKS];
         int count = task_snapshot(processes, MAX_TASKS);

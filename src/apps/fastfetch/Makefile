@@ -15,7 +15,7 @@ else
     NASM_FMT     = elf32
 endif
 
-.PHONY: all package clean
+.PHONY: all package clean FORCE_VERSION
 all: fastfetch.bin
 
 entry.o: entry.asm
@@ -24,8 +24,11 @@ entry.o: entry.asm
 logo.h: ../../../resources/nixelos-trans.ansi.txt generate_logo.py
 	$(PYTHON) generate_logo.py $< $@
 
-main.o: main.c logo.h ../../system/user/sys_api.h ../../system/user/memory_api.h ../../kernel/types.h ../../kernel/fs.h ../../kernel/hal/net_types.h ../../system/user/window_api.h
-	$(CC) $(CFLAGS) -c $< -o $@
+../../../src/include/os_version.h: FORCE_VERSION ../../../VERSION ../../../tools/generate_version.py
+	$(PYTHON) ../../../tools/generate_version.py
+
+main.o: ../../../src/include/os_version.h main.c logo.h ../../system/user/sys_api.h ../../system/user/memory_api.h ../../kernel/types.h ../../kernel/fs.h ../../kernel/hal/net_types.h ../../system/user/window_api.h
+	$(CC) $(CFLAGS) -c main.c -o $@
 
 fastfetch.elf: entry.o main.o
 	$(LD) -m $(LD_EMULATION) -Ttext 0xC00000 -e _start $^ -o $@

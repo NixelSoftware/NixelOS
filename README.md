@@ -141,3 +141,14 @@ application needs more than the default 128 MiB.
 Launch `chess.bin` to play White against a basic computer opponent. Click a
 piece and a highlighted square to move. Includes undo and promotion choices.
 See [Chess controls and engine tests](src/apps/chess/README.md).
+
+
+## OS version
+
+Run `ver`, run `fastfetch`, or open **Start → Help** to see the OS version and
+build ID. Edit `VERSION` to change the release number (initially `0.1.0`).
+The build generates `src/include/os_version.h` from that file and the latest
+commit's committer Unix timestamp (`git log -1 --format=%ct`). Rebuilding a
+commit keeps its build ID; uncommitted edits do not change it. Source archives
+without Git metadata report build ID `0` (unknown). The standalone Fastfetch
+build uses the same generator.

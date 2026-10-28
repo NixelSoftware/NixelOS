@@ -1,3 +1,4 @@
+#include "../../../include/os_version.h"
 #include "start.h"
 #include "wm.h"
 #include "../terminal/terminal.h"
@@ -137,7 +138,7 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
                     break;
                 case START_ITEM_HELP:
                     if (s_api && s_api->windows.show_info_dialog) {
-                        s_api->windows.show_info_dialog("Help", "NixelOS Workstation\nBuilt on x86 Architecture");
+                        s_api->windows.show_info_dialog("Help", OS_NAME " Workstation\nVersion " OS_VERSION "\nBuild " OS_BUILD_ID "\nBuilt on x86 Architecture");
                     }
                     break;
                 case START_ITEM_SHUTDOWN:

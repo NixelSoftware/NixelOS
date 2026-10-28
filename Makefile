@@ -126,13 +126,17 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
-# Single-main applications; each MUST provide src/apps/<name>/entry.asm.
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
 APPS := $(STANDARD_APPS) syndig
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
-.PHONY: all run clean clean-build
+.PHONY: all run clean clean-build FORCE_VERSION
+
+src/include/os_version.h: FORCE_VERSION VERSION tools/generate_version.py
+	$(PYTHON) tools/generate_version.py
+
+src/system/shell/commands.o src/system/graphics/wm/start.o: src/include/os_version.h
 all: os.img
 
 %.o: %.c Makefile
@@ -152,7 +156,6 @@ src/apps/chess/main.o: src/apps/chess/piece_assets.h
 src/apps/chess/main.o src/apps/chess/engine.o: src/apps/chess/engine.h
 chess.bin: src/apps/chess/engine.o
 
-# minimp3's private freestanding libc subset must not affect other apps.
 src/apps/sound/mp3.o: CFLAGS += -Isrc/apps/sound/compat
 src/apps/sound/mp3.o: src/apps/sound/mp3.h src/apps/sound/upstream/minimp3.h src/apps/sound/compat/string.h src/apps/sound/compat/stdlib.h
 src/apps/sound/main.o: src/apps/sound/mp3.h
@@ -211,9 +214,8 @@ browser.bin: Makefile $(BROWSER_OBJ)
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(NIXPLORER_DIR)/browser/browser.tmp').unlink(missing_ok=True)"
 
-# Fastfetch uses its own subdirectory Makefile.
 .PHONY: fastfetch.bin
-fastfetch.bin:
+fastfetch.bin: src/include/os_version.h
 	$(MAKE) -C src/apps/fastfetch
 	$(PYTHON) -c "from pathlib import Path; Path('fastfetch.bin').write_bytes(Path('src/apps/fastfetch/fastfetch.bin').read_bytes())"
 
@@ -259,7 +261,6 @@ src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3_regs.h
 
 src/kernel/net/broadcom/tg3.o src/kernel/net/phys/broadcom.o: src/kernel/net/phys/broadcom.h
 
-# Shared network ABI and manufacturer-specific driver interfaces.
 $(KERNEL_C:.c=.o): src/kernel/hal/net.h src/kernel/hal/net_types.h
 src/kernel/net/amd/pcnet.o: src/kernel/net/amd/pcnet.h
 src/kernel/net/intel/e1000.o: src/kernel/net/intel/e1000.h

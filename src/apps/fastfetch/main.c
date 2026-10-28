@@ -1,3 +1,4 @@
+#include "../../include/os_version.h"
 #include "../../system/user/sys_api.h"
 #include <cpuid.h>
 
@@ -103,7 +104,8 @@ void user_main(const char* args) {
         }
         args += n;
     }
-    key("OS"); print("NixelOS i386\n");
+    key("OS"); print(OS_NAME " " OS_VERSION " i386\n");
+    key("Build"); print(OS_BUILD_ID "\n");
     key("Shell"); print("Built-in shell\n");
     key("Terminal"); print("System Terminal\n");
     key("CPU"); cpu(); print("\n");

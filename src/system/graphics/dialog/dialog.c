@@ -95,14 +95,21 @@ void show_info_dialog(const char* title, const char* message) {
     str_copy(dialog_title_buf, title ? title : "Information", 32);
     str_copy(dialog_msg_buf, message ? message : "", 128);
 
-    int msg_len = 0;
-    while (dialog_msg_buf[msg_len]) msg_len++;
-    int calc_w = 40 + (msg_len * 8) + 24;
+    int longest = 0, line_length = 0, lines = 1;
+    for (int i = 0; dialog_msg_buf[i]; i++) {
+        if (dialog_msg_buf[i] == '\n') {
+            if (line_length > longest) longest = line_length;
+            line_length = 0;
+            lines++;
+        } else line_length++;
+    }
+    if (line_length > longest) longest = line_length;
+    int calc_w = 40 + (longest * 8) + 24;
     if (calc_w < 180) calc_w = 180;
     if (calc_w > 400) calc_w = 400;
 
     dialog_window.w = calc_w;
-    dialog_window.h = 100;
+    dialog_window.h = 100 + (lines - 1) * 10;
     dialog_window.x = (640 / 2) - (dialog_window.w / 2);
     dialog_window.y = (480 / 2) - (dialog_window.h / 2);
     dialog_window.title = dialog_title_buf;
