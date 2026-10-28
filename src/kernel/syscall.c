@@ -11,6 +11,7 @@ static unsigned int audio_owner;
 #include "drivers/power.h"
 #include "hal/net_types.h"
 #include "drivers/floppy.h"
+#include "drivers/rtc.h"
 #include "net/tcp.h"
 #include "fs.h"
 #include "../system/loader/app_loader.h"
@@ -485,6 +486,12 @@ static void syscall_dispatch_impl(registers_t* regs) {
                              : (uint32_t)-1;
             return;
         }
+        case SYS_TCP_REMOTE_IP: {
+            user_tcp_socket_t* slot = user_tcp_by_handle(
+                regs->ebx, paging_current_directory());
+            regs->eax = (slot && slot->socket) ? tcp_get_remote_ip(slot->socket) : 0;
+            return;
+        }
         case SYS_TCP_SEND: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
                 regs->ebx, paging_current_directory());
@@ -714,6 +721,17 @@ static void syscall_dispatch_impl(registers_t* regs) {
             power_reboot();
             regs->eax = (uint32_t)-1;
             return;
+        case SYS_RTC_TIME: {
+            if (!user_writable(regs->ebx, sizeof(rtc_time_t))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            rtc_time_t t;
+            rtc_get_time(&t);
+            *(rtc_time_t*)regs->ebx = t;
+            regs->eax = 0;
+            return;
+        }
         case SYS_NET_DIAGNOSTICS: {
             uint32_t address = regs->ebx;
             if (!user_writable(address, sizeof(net_diagnostics_t))) {

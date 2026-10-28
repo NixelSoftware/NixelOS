@@ -128,9 +128,8 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
-                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
-                 qksrv
-APPS := $(STANDARD_APPS) syndig
+                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
+APPS := $(STANDARD_APPS) syndig qksrv
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
 .PHONY: all run clean clean-build FORCE_VERSION
@@ -215,6 +214,20 @@ browser.bin: Makefile $(BROWSER_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(NIXPLORER_DIR)/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(NIXPLORER_DIR)/browser/browser.tmp').unlink(missing_ok=True)"
+
+QUARK_DIR := src/apps/qksrv
+QUARK_C := \
+    $(QUARK_DIR)/main.c \
+    $(QUARK_DIR)/config.c \
+    $(QUARK_DIR)/requestbuilder.c \
+    $(QUARK_DIR)/404.c \
+    $(QUARK_DIR)/logger.c
+QUARK_OBJ := $(QUARK_DIR)/entry.o $(QUARK_C:.c=.o)
+$(QUARK_C:.c=.o): $(QUARK_DIR)/quark.h $(QUARK_DIR)/logger.h
+qksrv.bin: Makefile $(QUARK_OBJ)
+	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(QUARK_DIR)/qksrv.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(QUARK_DIR)/qksrv.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(QUARK_DIR)/qksrv.tmp').unlink(missing_ok=True)"
 
 .PHONY: fastfetch.bin
 fastfetch.bin: src/include/os_version.h

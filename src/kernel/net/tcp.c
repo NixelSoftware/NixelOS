@@ -325,3 +325,9 @@ tcp_socket_state_t tcp_get_state(const tcp_socket_t* socket) {
     if (!socket || !socket->in_use) return TCP_CLOSED;
     return socket->state;
 }
+
+uint32_t tcp_get_remote_ip(const tcp_socket_t* socket) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!socket || !socket->in_use) return 0;
+    return socket->remote_ip;
+}

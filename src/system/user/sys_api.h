@@ -54,7 +54,9 @@ enum {
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
     SYS_APP_LAUNCH = 40, /* EBX: executable path, ECX: arguments; starts detached */
     SYS_TCP_LISTEN = 45, /* EBX: local port; returns listener handle or -1 */
-    SYS_TCP_ACCEPT = 46 /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
+    SYS_TCP_ACCEPT = 46, /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
+    SYS_TCP_REMOTE_IP = 47, /* EBX: socket handle; returns uint32_t IPv4 address */
+    SYS_RTC_TIME = 48 /* EBX: writable user_rtc_time_t* */
 };
 
 typedef struct { uint32_t next, lost; } user_serial_cursor_t;
@@ -449,6 +451,33 @@ static inline int32_t sys_tcp_accept(uint32_t listener_handle) {
     __asm__ volatile ("int $0x80"
                       : "=a"(result)
                       : "0"((uint32_t)SYS_TCP_ACCEPT), "b"(listener_handle)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+static inline uint32_t sys_tcp_remote_ip(uint32_t handle) {
+    uint32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_TCP_REMOTE_IP), "b"(handle)
+                      : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+typedef struct {
+    uint8_t second;
+    uint8_t minute;
+    uint8_t hour;
+    uint8_t day;
+    uint8_t month;
+    uint16_t year;
+} user_rtc_time_t;
+
+static inline int32_t sys_rtc_time(user_rtc_time_t* out) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_RTC_TIME), "b"(out)
                       : "ecx", "edx", "memory", "cc");
     return result;
 }

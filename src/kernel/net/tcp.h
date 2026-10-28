@@ -41,5 +41,6 @@ uint8_t tcp_send(tcp_socket_t* socket, const uint8_t* data, uint16_t length);
 void tcp_disconnect(tcp_socket_t* socket);
 void tcp_release(tcp_socket_t* socket);
 tcp_socket_state_t tcp_get_state(const tcp_socket_t* socket);
+uint32_t tcp_get_remote_ip(const tcp_socket_t* socket);
 
 #endif
