@@ -105,32 +105,30 @@ static uint64_t ata_now(void) {
 /* phase: 0=ready for I/O, 1=data, 2=completion, 3=idle for IDENTIFY.
  * Old ERR is ignored before a new command; ATAPI need not assert DRDY. */
 static int ata_wait(unsigned phase, uint32_t timeout_ms) {
-    int running = scheduler_running();
-    uint64_t start = running ? ata_now() : 0;
-    uint32_t previous = running ? 0 : ata_pit_count(), elapsed = 0;
-    uint32_t budget = timeout_ms * 2387u;
-    for (;;) {
+    // 30 seconds is too long for probing empty slots; cap probe timeouts
+    uint32_t max_iterations = (timeout_ms > 1000 ? 1000 : timeout_ms) * 5000;
+
+    for (uint32_t iter = 0; iter < max_iterations; iter++) {
         uint8_t status = inb(ATA_STATUS);
-        if (status == 0xFF) return 0;
+
+        // Floating bus (nothing connected or open line)
+        if (status == 0xFF || status == 0x7F) return 0;
+
         if (!(status & ATA_STATUS_BSY)) {
             if ((phase == 1 || phase == 2) &&
                 (status & (ATA_STATUS_ERR | ATA_STATUS_DF))) return 0;
+
             if (phase == 1) {
                 if (status & ATA_STATUS_DRQ) return 1;
             } else if (!(status & ATA_STATUS_DRQ) && status &&
                        (phase == 2 || phase == 3 || (status & 0x40))) return 1;
         }
-        if (running) {
-            if (ata_now() - start >= (uint64_t)timeout_ms * 1000000u) break;
-            task_sleep_ms(1);
-        } else {
-            uint32_t count = ata_pit_count();
-            if (count <= 11931 && previous <= 11931)
-                elapsed += previous >= count ? previous - count : previous + 11931 - count;
-            previous = count;
-            if (elapsed >= budget) break;
-        }
+
+        // Small 1us delay per check
+        outb(0x80, 0);
+        __asm__ volatile ("pause");
     }
+
     debug_print("[ATA] Timeout, status: "); debug_hex(inb(ATA_STATUS)); debug_print("\n");
     return 0;
 }
@@ -148,17 +146,30 @@ int ata_select_drive(unsigned drive) {
     if (drive >= ATA_DRIVE_COUNT) return 0;
     ata_find_controllers();
     if (drive / 2 >= channel_count || drive_state[drive] == 2) return 0;
+
     ata_base = channels[drive / 2].base;
     ata_control = channels[drive / 2].control;
     ata_device = (drive & 1) << 4;
     ata_drive = drive;
+
     /* This is a polling driver; do not leave disk IRQs pending. */
     outb(ata_control, 2);
     outb(ATA_DRIVE_SELECT, 0xA0 | ata_device);
     ata_delay_400ns();
+
     uint8_t status = inb(ATA_STATUS);
-    if (status == 0 || status == 0xFF) return 0;
-    if (!ata_wait(3, 30000)) return 0;
+    /* Immediate cancel on missing/floating hardware */
+    if (status == 0 || status == 0xFF || status == 0x7F) {
+        drive_state[drive] = 2; /* Mark dead/unpopulated */
+        return 0;
+    }
+
+    /* Wait up to 50ms for BSY to clear on drive select */
+    if (!ata_wait(3, 50)) {
+        drive_state[drive] = 2;
+        return 0;
+    }
+
     if (!drive_state[drive]) {
         uint16_t identify[256];
         outb(ATA_SECTOR_COUNT, 0);
@@ -167,22 +178,36 @@ int ata_select_drive(unsigned drive) {
         outb(ATA_LBA_HIGH, 0);
         outb(ATA_COMMAND, 0xEC); /* IDENTIFY DEVICE, rejects ATAPI devices. */
         ata_delay_400ns();
-        if (!ata_wait(1, 30000)) { drive_state[drive] = 2; return 0; }
+
+        /* Give drive up to 100ms to assert DRQ for IDENTIFY data */
+        if (!ata_wait(1, 100)) {
+            drive_state[drive] = 2;
+            return 0;
+        }
+
         for (unsigned i = 0; i < 256; i++) identify[i] = inw(ATA_DATA);
         ata_delay_400ns();
-        if (!ata_wait(2, 30000) || !(identify[49] & (1u << 9)) ||
+
+        /* Verify completion and LBA support */
+        if (!ata_wait(2, 100) || !(identify[49] & (1u << 9)) ||
             ((identify[106] & 0xD000) == 0x5000 &&
              (identify[117] != 256 || identify[118]))) {
             drive_state[drive] = 2;
             debug_print("[ATA] Unsupported disk (requires LBA and 512-byte sectors).\n");
             return 0;
         }
+
         drive_sectors[drive] = identify[60] | ((uint32_t)identify[61] << 16);
-        if (!drive_sectors[drive]) { drive_state[drive] = 2; return 0; }
+        if (!drive_sectors[drive]) {
+            drive_state[drive] = 2;
+            return 0;
+        }
+
         drive_state[drive] = 1;
         debug_print("[ATA] Disk "); debug_hex(drive);
         debug_print(" at I/O "); debug_hex(ata_base); debug_print("\n");
     }
+
     ata_selected = 1;
     return 1;
 }
