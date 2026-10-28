@@ -197,6 +197,31 @@ static void kernel_panic(registers_t* regs) {
 
 void isr_handler(registers_t* regs) {
     if (regs && regs->int_no == 37) { audio_interrupt((uint8_t)regs->int_no); return; }
+    if (regs->int_no == 39) {
+        outb(0x20, 0x0B);
+        uint8_t isr = inb(0x20);
+
+        if (!(isr & (1 << 7))) {
+            return;
+        }
+
+        outb(0x20, 0x20);
+        return;
+    }
+
+    if (regs->int_no == 47) {
+        outb(0xA0, 0x0B);
+        uint8_t isr = inb(0xA0);
+
+        if (!(isr & (1 << 7))) {
+            outb(0x20, 0x20);
+            return;
+        }
+
+        outb(0xA0, 0x20);
+        outb(0x20, 0x20);
+        return;
+    }
     if (regs && regs->int_no < 32 && (regs->cs & 3u) == 3u) {
         debug_print("[USER] exception ");
         debug_hex(regs->int_no);
