@@ -77,24 +77,71 @@ static void handle_client(uint32_t client) {
         return;
     }
 
-    if (req_path[0] == '/' && req_path[1] == '\0') {
-        req_path[0] = '/';
-        req_path[1] = 'i'; req_path[2] = 'n'; req_path[3] = 'd'; req_path[4] = 'e';
-        req_path[5] = 'x'; req_path[6] = '.'; req_path[7] = 'h'; req_path[8] = 't';
-        req_path[9] = 'm'; req_path[10] = 'l'; req_path[11] = '\0';
-    }
-
     char full_path[256];
     int p = 0;
-    for (int i = 0; config.root[i] && p < (int)sizeof(full_path) - 1; i++) full_path[p++] = config.root[i];
-    if (p > 0 && full_path[p - 1] == '/' && req_path[0] == '/') p--;
-    for (int i = 0; req_path[i] && p < (int)sizeof(full_path) - 1; i++) full_path[p++] = req_path[i];
+    for (int i = 0; config.root[i] && p < (int)sizeof(full_path) - 1; i++) {
+        full_path[p++] = config.root[i];
+    }
+
+    if (p > 1 && full_path[p - 1] == '/') {
+        p--;
+    }
+
+
+    for (int i = 0; req_path[i] && p < (int)sizeof(full_path) - 1; i++) {
+        full_path[p++] = req_path[i];
+    }
     full_path[p] = '\0';
 
-    int32_t file_size = sys_fs_read(full_path, 0, 0);
+
+    char fs_lookup_path[256];
+    int lp = 0;
+    while (full_path[lp]) {
+        fs_lookup_path[lp] = full_path[lp];
+        lp++;
+    }
+    fs_lookup_path[lp] = '\0';
+    if (lp > 1 && fs_lookup_path[lp - 1] == '/') {
+        fs_lookup_path[lp - 1] = '\0';
+    }
+
+    char target_path[256];
+    int tp = 0;
+    while (fs_lookup_path[tp]) {
+        target_path[tp] = fs_lookup_path[tp];
+        tp++;
+    }
+    target_path[tp] = '\0';
+
+    char index_path[256];
+    int ip = 0;
+    while (fs_lookup_path[ip]) {
+        index_path[ip] = fs_lookup_path[ip];
+        ip++;
+    }
+    if (ip > 0 && index_path[ip - 1] != '/') {
+        index_path[ip++] = '/';
+    }
+    const char* idx = "index.html";
+    for (int k = 0; idx[k] && ip < (int)sizeof(index_path) - 1; k++) {
+        index_path[ip++] = idx[k];
+    }
+    index_path[ip] = '\0';
+
+    int32_t file_size = sys_fs_read(index_path, 0, 0);
+    if (file_size >= 0) {
+        tp = 0;
+        while (index_path[tp]) {
+            target_path[tp] = index_path[tp];
+            tp++;
+        }
+        target_path[tp] = '\0';
+    } else {
+        file_size = sys_fs_read(fs_lookup_path, 0, 0);
+    }
 
     if (file_size >= 0) {
-        const char* mime = get_mime_type(full_path);
+        const char* mime = get_mime_type(target_path);
         build_http_header(client, 200, mime, (uint32_t)file_size);
 
         uint32_t offset = 0;
@@ -102,7 +149,7 @@ static void handle_client(uint32_t client) {
             uint32_t to_read = (uint32_t)file_size - offset;
             if (to_read > sizeof(chunk_buffer)) to_read = sizeof(chunk_buffer);
 
-            int32_t bytes = sys_fs_read_at(full_path, chunk_buffer, to_read, offset);
+            int32_t bytes = sys_fs_read_at(target_path, chunk_buffer, to_read, offset);
             if (bytes <= 0) break;
 
             send_all(client, chunk_buffer, (uint32_t)bytes);
@@ -110,6 +157,8 @@ static void handle_client(uint32_t client) {
         }
 
         logger_log_combined(client_ip_str, first_line, 200, (uint32_t)file_size, referer, user_agent);
+    } else if (config.dirlisting && serve_directory_listing(client, fs_lookup_path, req_path)) {
+        logger_log_combined(client_ip_str, first_line, 200, 1024, referer, user_agent);
     } else {
         serve_404(client);
         logger_log_combined(client_ip_str, first_line, 404, 175, referer, user_agent);

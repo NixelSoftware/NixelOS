@@ -18,6 +18,7 @@ static void str_copy(char* dest, const char* src, int max) {
 
 void config_load(quark_config_t* cfg) {
     cfg->port = DEFAULT_PORT;
+    cfg->dirlisting = 1; /* Default: enabled */
     str_copy(cfg->root, DEFAULT_ROOT, sizeof(cfg->root));
 
     char buf[512];
@@ -45,7 +46,22 @@ void config_load(quark_config_t* cfg) {
                 cfg->root[out++] = buf[i++];
             }
             cfg->root[out] = '\0';
+        } else if (str_equal_prefix(&buf[i], "dirlisting=", 11)) {
+            i += 11;
+            while (i < bytes && buf[i] == ' ') i++;
+            if (str_equal_prefix(&buf[i], "off", 3) || 
+                str_equal_prefix(&buf[i], "0", 1) || 
+                str_equal_prefix(&buf[i], "false", 5) || 
+                str_equal_prefix(&buf[i], "no", 2)) {
+                cfg->dirlisting = 0;
+            } else if (str_equal_prefix(&buf[i], "on", 2) || 
+                       str_equal_prefix(&buf[i], "1", 1) || 
+                       str_equal_prefix(&buf[i], "true", 4) || 
+                       str_equal_prefix(&buf[i], "yes", 3)) {
+                cfg->dirlisting = 1;
+            }
         }
+        //while (i < bytes && cfg[i] != '\n' && i < bytes) i++;
         while (i < bytes && buf[i] != '\n') i++;
     }
 }

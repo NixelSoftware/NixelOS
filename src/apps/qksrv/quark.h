@@ -12,6 +12,7 @@
 typedef struct {
     uint16_t port;
     char root[128];
+    uint8_t dirlisting;
 } quark_config_t;
 
 /* config.c */
@@ -32,5 +33,8 @@ void serve_404(uint32_t socket);
 
 /* logger.c */
 #include "logger.h"
+
+/* dirlisting.c */
+#include "dirlisting.h"
 
 #endif

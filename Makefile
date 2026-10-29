@@ -221,9 +221,10 @@ QUARK_C := \
     $(QUARK_DIR)/config.c \
     $(QUARK_DIR)/requestbuilder.c \
     $(QUARK_DIR)/404.c \
-    $(QUARK_DIR)/logger.c
+    $(QUARK_DIR)/logger.c \
+    $(QUARK_DIR)/dirlisting.c
 QUARK_OBJ := $(QUARK_DIR)/entry.o $(QUARK_C:.c=.o)
-$(QUARK_C:.c=.o): $(QUARK_DIR)/quark.h $(QUARK_DIR)/logger.h
+$(QUARK_C:.c=.o): $(QUARK_DIR)/quark.h $(QUARK_DIR)/logger.h $(QUARK_DIR)/dirlisting.h
 qksrv.bin: Makefile $(QUARK_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(QUARK_DIR)/qksrv.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(QUARK_DIR)/qksrv.tmp $@
