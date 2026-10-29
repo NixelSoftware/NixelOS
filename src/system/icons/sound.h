@@ -27,7 +27,7 @@ static const uint8_t icon_sound[SOUND_ICON_H][SOUND_ICON_W] = {
 
 static inline uint32_t sound_icon_color(uint8_t c) {
     switch (c) {
-        case 1: return COLOR_BLACK;
+        case 1: return COLOR_WHITE;
         case 2: return COLOR_WHITE;
         case 3: return COLOR_DARK_GRAY;
         case 4: return 0x00C0C000;
