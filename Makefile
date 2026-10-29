@@ -12,7 +12,7 @@ QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 128M
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
-QEMU_FORWARD ?= ",hostfwd=tcp::2423-:8080"
+QEMU_FORWARD ?= ",hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000"
 QEMU_DISPLAY ?= sdl
 QEMU_VGA ?= std
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
@@ -131,7 +131,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
-APPS := $(STANDARD_APPS) syndig qksrv
+APPS := $(STANDARD_APPS) syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
 .PHONY: all run clean clean-build FORCE_VERSION
@@ -217,6 +217,7 @@ browser.bin: Makefile $(BROWSER_OBJ)
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(NIXPLORER_DIR)/browser/browser.tmp').unlink(missing_ok=True)"
 
+# QuarkServe
 QUARK_DIR := src/apps/qksrv
 QUARK_C := \
     $(QUARK_DIR)/main.c \
@@ -231,6 +232,19 @@ qksrv.bin: Makefile $(QUARK_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(QUARK_DIR)/qksrv.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(QUARK_DIR)/qksrv.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(QUARK_DIR)/qksrv.tmp').unlink(missing_ok=True)"
+
+# QuarkFTP
+FTP_DIR := src/apps/qkftp
+FTP_C := \
+    $(FTP_DIR)/main.c \
+    $(FTP_DIR)/commands.c
+FTP_OBJ := $(FTP_DIR)/entry.o $(FTP_C:.c=.o)
+$(FTP_C:.c=.o): $(FTP_DIR)/ftp.h
+
+qkftp.bin: Makefile $(FTP_OBJ)
+	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(FTP_DIR)/qkftp.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(FTP_DIR)/qkftp.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(FTP_DIR)/qkftp.tmp').unlink(missing_ok=True)"
 
 .PHONY: fastfetch.bin
 fastfetch.bin: src/include/os_version.h

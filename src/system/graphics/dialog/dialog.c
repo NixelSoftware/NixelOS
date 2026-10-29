@@ -1,5 +1,6 @@
 #include "dialog.h"
 #include "dialog_icon.h"
+#include "../wm/theme.h"
 #include "../../../kernel/window.h"
 #include "../../../kernel/os_api.h"
 
@@ -29,12 +30,12 @@ static void str_copy(char* dest, const char* src, int max) {
 
 static void draw_dialog_button(int32_t x, int32_t y, int32_t w, int32_t h, const char* label) {
     if (!os) return;
-    os->graphics.fill_rect(x, y, w, h, COLOR_WIN_BG);
-    os->graphics.fill_rect(x, y, w, 1, COLOR_WHITE);
-    os->graphics.fill_rect(x, y, 1, h, COLOR_WHITE);
-    os->graphics.fill_rect(x, y + h - 1, w, 1, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x + w - 1, y, 1, h, COLOR_DARK_GRAY);
-    os->graphics.draw_string(x + (w / 2) - 8, y + 4, label, COLOR_BLACK);
+    os->graphics.fill_rect(x, y, w, h, COLOR_SURFACE);
+    os->graphics.fill_rect(x, y, w, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x, y + h - 1, w, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x, y, 1, h, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x + w - 1, y, 1, h, COLOR_SURFACE_BORDER);
+    os->graphics.draw_string(x + (w / 2) - 8, y + 6, label, COLOR_WHITE);
 }
 
 static void dialog_draw_content(Window* win) {
@@ -52,7 +53,7 @@ static void dialog_draw_content(Window* win) {
         }
     }
 
-    os->graphics.draw_string(win->x + 40, win->y + 34, dialog_msg_buf, COLOR_BLACK);
+    os->graphics.draw_string(win->x + 40, win->y + 34, dialog_msg_buf, COLOR_TEXT_PRIMARY);
 
     int32_t btn_w = 60;
     int32_t btn_h = 22;

@@ -81,6 +81,24 @@ static uint32_t user_dns_owner;
 static uint32_t user_dns_handle;
 static uint32_t next_dns_handle = 1;
 
+static void user_tcp_reap_closed(uint32_t owner_dir) {
+    for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
+        if (user_tcp_sockets[i].active &&
+            user_tcp_sockets[i].owner_directory == owner_dir &&
+            user_tcp_sockets[i].socket) {
+            
+            tcp_socket_state_t st = tcp_get_state(user_tcp_sockets[i].socket);
+            if (st == TCP_CLOSED) {
+                tcp_release(user_tcp_sockets[i].socket);
+                user_tcp_sockets[i].socket = 0;
+                user_tcp_sockets[i].active = 0;
+                user_tcp_sockets[i].read_head = 0;
+                user_tcp_sockets[i].read_count = 0;
+            }
+        }
+    }
+}
+
 static user_tcp_socket_t* user_tcp_by_handle(uint32_t handle,
                                               uint32_t owner_directory) {
     for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
@@ -528,13 +546,19 @@ static void syscall_dispatch_impl(registers_t* regs) {
         case SYS_TCP_CLOSE: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
                 regs->ebx, paging_current_directory());
-            if (!slot) {
-                regs->eax = (uint32_t)-1;
+            if (slot) {
+                if (slot->socket) {
+                    tcp_disconnect(slot->socket);
+                    tcp_release(slot->socket);
+                    slot->socket = 0;
+                }
+                slot->active = 0;
+                slot->read_head = 0;
+                slot->read_count = 0;
+                regs->eax = 0;
                 return;
             }
-            tcp_release(slot->socket);
-            slot->active = 0;
-            regs->eax = 0;
+            regs->eax = (uint32_t)-1;
             return;
         }
         case SYS_TCP_LISTEN: {
@@ -573,6 +597,8 @@ static void syscall_dispatch_impl(registers_t* regs) {
             return;
         }
         case SYS_TCP_ACCEPT: {
+            uint32_t owner = paging_current_directory();
+            user_tcp_reap_closed(owner);
             user_tcp_socket_t* slot = user_tcp_by_handle(
                 regs->ebx, paging_current_directory());
             if (!slot || !slot->is_listener) {

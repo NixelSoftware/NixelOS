@@ -14,7 +14,8 @@ typedef signed long long int64_t;
 #define SCREEN_HEIGHT  600
 
 
-#define COLOR_DESKTOP     0x00008080   
+//#define COLOR_DESKTOP     0x00008080   
+#define COLOR_DESKTOP     0x00181926   
 #define COLOR_WIN_BG      0x00C0C0C0   
 #define COLOR_WHITE       0x00FFFFFF   
 #define COLOR_BLACK       0x00000000 

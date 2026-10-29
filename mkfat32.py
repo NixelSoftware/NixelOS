@@ -23,7 +23,8 @@ ROOT_FILES = [
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
-    "shutdlg.bin", "syndig.bin", "qksrv.bin", "resources/quark.cfg"
+    "shutdlg.bin", "syndig.bin", "qksrv.bin", "resources/quark.cfg",
+    "qkftp.bin"
 ]
 
 OUTPUT_IMAGE = "disk.img" if len(sys.argv) < 2 else sys.argv[1]
