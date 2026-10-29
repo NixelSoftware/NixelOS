@@ -10,6 +10,7 @@ static unsigned int audio_owner;
 #include "drivers/serial.h"
 #include "drivers/power.h"
 #include "hal/net_types.h"
+#include "drivers/pci.h"
 #include "drivers/floppy.h"
 #include "drivers/rtc.h"
 #include "net/tcp.h"
@@ -248,6 +249,40 @@ static void syscall_dispatch_impl(registers_t* regs) {
         case SYS_GET_TICKS:
             regs->eax = frame_timer;
             return;
+        case SYS_PCI_DEVICE_INFO: {
+            uint32_t index = regs->ebx;
+            uint32_t out_addr = regs->ecx;
+            if (!user_writable(out_addr, sizeof(user_pci_device_t))) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            if (index >= pci_device_count()) {
+                regs->eax = (uint32_t)-1; /* End of inventory */
+                return;
+            }
+            const pci_device_t* dev = pci_device_at(index);
+            if (!dev) {
+                regs->eax = (uint32_t)-1;
+                return;
+            }
+            user_pci_device_t info = {
+                .bus = dev->bus,
+                .slot = dev->slot,
+                .function = dev->function,
+                .header_type = dev->header_type,
+                .vendor_id = dev->vendor_id,
+                .device_id = dev->device_id,
+                .class_code = dev->class_code,
+                .subclass = dev->subclass,
+                .prog_if = dev->prog_if,
+                .revision = dev->revision,
+                .irq_line = dev->irq_line,
+                .irq_pin = dev->irq_pin
+            };
+            *(user_pci_device_t*)out_addr = info;
+            regs->eax = 0;
+            return;
+        }
         case SYS_MEMORY_INFO: {
             if (!user_writable(regs->ebx, sizeof(user_memory_info_t))) {
                 regs->eax = (uint32_t)-1;

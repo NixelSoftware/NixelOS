@@ -131,7 +131,8 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
-                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg
+                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
+                 lspci
 APPS := $(STANDARD_APPS) syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
