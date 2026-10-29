@@ -14,6 +14,7 @@ QEMU_MEMORY ?= 128M
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_FORWARD ?= ",hostfwd=tcp::2423-:8080"
 QEMU_DISPLAY ?= sdl
+QEMU_VGA ?= std
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_AUDIO_DRIVER ?= sdl
 QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_DRIVER),id=audio0 -machine pcspk-audiodev=audio0
@@ -91,7 +92,8 @@ KERNEL_C := \
   src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/loader/app_loader.c \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
-  src/system/graphics/image/png.c src/kernel/drivers/display.c \
+  src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
+  src/kernel/drivers/display/vga.c src/kernel/drivers/display/qemu.c \
   src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
   src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
@@ -258,7 +260,7 @@ os.img: $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin sr
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
+	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) syndig browser fastfetch'.split()]]"
@@ -282,3 +284,6 @@ src/kernel/net/amd/pcnet.o: src/kernel/net/amd/pcnet.h
 src/kernel/net/intel/e1000.o: src/kernel/net/intel/e1000.h
 src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3.h
 src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h src/kernel/net/broadcom/tg3.h
+
+$(KERNEL_C:.c=.o): src/kernel/hal/video.h
+src/kernel/hal/video.o src/kernel/drivers/display/vga.o src/kernel/drivers/display/qemu.o: src/kernel/drivers/display/video_drivers.h
