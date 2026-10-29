@@ -1,10 +1,13 @@
 #include "video.h"
+#include "../mutex.h"
 #include "../drivers/display/video_drivers.h"
 #include "../drivers/serial.h"
 
 int32_t screen_width = SCREEN_DEFAULT_WIDTH, screen_height = SCREEN_DEFAULT_HEIGHT;
 static video_framebuffer_t framebuffer;
 static int virtio_active;
+static uint32_t requested_width, requested_height;
+static int resolution_status;
 int video_init(uint32_t address, uint32_t bpp, uint32_t pitch) {
     framebuffer = (video_framebuffer_t){0};
     virtio_active = virtio_gpu_init(&framebuffer);
@@ -44,7 +47,22 @@ void video_write_span(int32_t x, int32_t y, const uint32_t* pixels, uint32_t cou
     }
 }
 
+int video_request_resolution(uint32_t width, uint32_t height) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!framebuffer.address || width < 640 || height < 480 ||
+        width > SCREEN_MAX_WIDTH || height > SCREEN_MAX_HEIGHT) return 0;
+    requested_width = width; requested_height = height;
+    resolution_status = 1;
+    return 1;
+}
+int video_resolution_status(void) { return resolution_status; }
 int video_poll_resize(void) {
+    if (resolution_status == 1) {
+        int ok = virtio_active ? virtio_gpu_set_resolution(&framebuffer, requested_width, requested_height) :
+            qemu_video_set_resolution(&framebuffer, requested_width, requested_height);
+        resolution_status = ok ? 2 : -1;
+        return ok;
+    }
     return virtio_active && virtio_gpu_poll_resize(&framebuffer);
 }
 void video_present(void) {

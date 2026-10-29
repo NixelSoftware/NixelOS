@@ -108,8 +108,8 @@ void shell_network_ifconfig(shell_output_fn output) {
 
     uint64_t mac = network_api->network.get_mac_address
         ? network_api->network.get_mac_address() : 0;
-    uint32_t subnet_mask = 0xFFFFFF00;
-    uint32_t gateway = 0x0A000002;
+    uint32_t subnet_mask = 0;
+    uint32_t gateway = 0;
     uint8_t dhcp_leased = 0;
     if (network_api->network.get_configuration)
         network_api->network.get_configuration(&subnet_mask, &gateway, &dhcp_leased);

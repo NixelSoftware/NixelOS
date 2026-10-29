@@ -22,7 +22,9 @@ enum {
 enum {
     START_ACTION_NONE = -1,
     START_ACTION_LOGOFF = 100,
-    START_ACTION_SHUTDOWN = 101
+    START_ACTION_SHUTDOWN = 101,
+    START_ACTION_SETTINGS = 102,
+    START_ACTION_NETWORK = 103
 };
 
 void start_menu_init(os_api_t* api);

@@ -369,3 +369,9 @@ uint32_t ipv4_get_local_ip(void) {
     MUTEX_GUARD(kernel_mutex);
     return local_ip;
 }
+
+void ipv4_get_configuration(uint32_t* mask, uint32_t* gateway) {
+    MUTEX_GUARD(kernel_mutex);
+    if (mask) *mask = subnet_mask;
+    if (gateway) *gateway = gateway_ip;
+}

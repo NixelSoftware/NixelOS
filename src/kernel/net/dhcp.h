@@ -16,5 +16,6 @@ typedef struct {
 /* Timeout in RTC seconds per attempt; each exchange tries up to three times. */
 uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t timeout_seconds);
 const dhcp_lease_t* dhcp_get_lease(void);
+void dhcp_clear_lease(void);
 
 #endif

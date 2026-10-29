@@ -241,3 +241,8 @@ void virtio_gpu_present(void) {
     args[4] = resource;
     if (submit(48, GPU_OK)) dirty = 0;
 }
+
+int virtio_gpu_set_resolution(video_framebuffer_t* fb, uint32_t width, uint32_t height) {
+    return active && width >= 640 && height >= 480 &&
+        width <= SCREEN_MAX_WIDTH && height <= SCREEN_MAX_HEIGHT && set_mode(fb, width, height);
+}

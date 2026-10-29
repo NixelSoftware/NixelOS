@@ -147,6 +147,8 @@ void sys_net_shutdown(void) {
     else if (net_driver_type == 2) tg3_shutdown();
     else if (net_driver_type == 1) e1000_shutdown();
     else if (net_driver_type == 0) net_shutdown();
+    dhcp_clear_lease();
+    ipv4_set_configuration(0, 0, 0);
 }
 
 void sys_net_poll(void) {
@@ -238,11 +240,10 @@ void sys_net_initialize_stack(void) {
 }
 
 void sys_net_configure_address(void) {
-    MUTEX_GUARD(kernel_mutex);
+    /* dhcp_request owns short critical sections, never the whole wait. */
     dhcp_lease_t lease;
     if (!dhcp_request(&lease, 4)) {
-        debug_print("[DHCP] No lease; using static fallback 10.0.0.227\n");
-        ipv4_set_configuration(0x0A0000E3, 0x0A000002, 0xFFFFFF00);
+        debug_print("[DHCP] No lease; configure an address in Settings\n");
     } else {
         debug_print("[DHCP] Lease acquired: ");
         debug_hex(lease.address);
@@ -253,8 +254,20 @@ void sys_net_configure_address(void) {
 void sys_net_get_configuration(uint32_t* subnet_mask, uint32_t* gateway,
                                uint8_t* dhcp_leased) {
     MUTEX_GUARD(kernel_mutex);
-    const dhcp_lease_t* lease = dhcp_get_lease();
-    if (subnet_mask) *subnet_mask = lease->leased ? lease->subnet_mask : 0xFFFFFF00;
-    if (gateway) *gateway = lease->leased ? lease->gateway : 0x0A000002;
-    if (dhcp_leased) *dhcp_leased = lease->leased;
+    ipv4_get_configuration(subnet_mask, gateway);
+    if (dhcp_leased) *dhcp_leased = dhcp_get_lease()->leased;
+}
+
+uint8_t sys_net_set_manual_configuration(uint32_t address, uint32_t mask, uint32_t gateway) {
+    MUTEX_GUARD(kernel_mutex);
+    uint32_t host = ~mask;
+    if (!sys_net_is_ready() || !address || (address >> 24) == 0 ||
+        (address >> 24) == 127 || (address >> 24) >= 224 || !mask ||
+        (host & (host + 1)) || host < 3 || !(address & host) ||
+        (address & host) == host ||
+        (gateway && ((gateway & mask) != (address & mask) ||
+         !(gateway & host) || (gateway & host) == host || gateway == address))) return 0;
+    dhcp_clear_lease();
+    ipv4_set_configuration(address, gateway, mask);
+    return 1;
 }

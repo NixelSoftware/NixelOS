@@ -3,6 +3,7 @@
 
 /* QEMU Standard VGA, PCI 1234:1111, Bochs DISPI interface.
  * https://www.qemu.org/docs/master/specs/standard-vga.html */
+static uint32_t framebuffer_bytes;
 static void dispi_write(uint16_t index, uint16_t value) {
     outw(0x1CE, index);
     outw(0x1CF, value);
@@ -34,9 +35,23 @@ int qemu_video_init(video_framebuffer_t* fb) {
         dispi_write(8, 0);
         dispi_write(9, 0);
         dispi_write(4, 0x41); /* ENABLED | LFB_ENABLED */
+        framebuffer_bytes = bar.size;
         *fb = (video_framebuffer_t){(uint32_t)bar.address, 32,
                                     SCREEN_WIDTH * 4u, "QEMU Standard VGA"};
         return 1;
     }
     return 0;
+}
+
+int qemu_video_set_resolution(video_framebuffer_t* fb, uint32_t width, uint32_t height) {
+    if (width < 640 || height < 480 || width > SCREEN_MAX_WIDTH ||
+        height > SCREEN_MAX_HEIGHT || !framebuffer_bytes || width * height * 4u > framebuffer_bytes) return 0;
+    dispi_write(4, 0);
+    dispi_write(1, width); dispi_write(2, height);
+    dispi_write(3, 32); dispi_write(6, width);
+    dispi_write(8, 0); dispi_write(9, 0);
+    dispi_write(4, 0x41);
+    screen_width = width; screen_height = height;
+    fb->pitch = width * 4u;
+    return 1;
 }

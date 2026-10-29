@@ -24,6 +24,7 @@ uint32_t sys_net_get_ip_address(void);
 void     sys_net_get_diagnostics(net_diagnostics_t* d);
 void     sys_net_initialize_stack(void);
 void     sys_net_configure_address(void);
+uint8_t sys_net_set_manual_configuration(uint32_t address, uint32_t mask, uint32_t gateway);
 void     sys_net_get_configuration(uint32_t* subnet_mask, uint32_t* gateway,
                                    uint8_t* dhcp_leased);
 
