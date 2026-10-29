@@ -1,3 +1,8 @@
+# Introduction
+![NixelOS Banner](http://nixelos.org/static/images/nixelos_banner_wip.png)
+NixelOS is a simple and light operating system made to run on older machines while having a lot of neat features that you wouldn't have on an older OS.
+NixelOS is currently a work in progress but you are able to compile and use an alpha version of NixelOS with the instructions on this page
+
 ## Prerequisites
 
 Install the required build toolchain (`gcc`, `make`, `ld`), `nasm`, and `qemu` using your distribution's package manager:
