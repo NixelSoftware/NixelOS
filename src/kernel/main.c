@@ -454,7 +454,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 #endif
         task_create_nice(cleanup_service, 0, "reaper", 5) < 0 ||
         task_create_nice(usb_service, 0, "usb", 2) < 0 ||
-        //task_create_nice(http_server_service, 0, "httpsrv", 2) < 0 ||
         display_start_async() < 0 || serial_start_async() < 0) {
 #else
     if (serial_start_async() < 0) {
