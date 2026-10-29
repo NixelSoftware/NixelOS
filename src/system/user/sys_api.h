@@ -56,7 +56,8 @@ enum {
     SYS_TCP_LISTEN = 45, /* EBX: local port; returns listener handle or -1 */
     SYS_TCP_ACCEPT = 46, /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
     SYS_TCP_REMOTE_IP = 47, /* EBX: socket handle; returns uint32_t IPv4 address */
-    SYS_RTC_TIME = 48 /* EBX: writable user_rtc_time_t* */
+    SYS_RTC_TIME = 48, /* EBX: writable user_rtc_time_t* */
+    SYS_PCI_DEVICE_INFO = 49 /* EBX: index, ECX: writable user_pci_device_t* */
 };
 
 typedef struct { uint32_t next, lost; } user_serial_cursor_t;
@@ -479,6 +480,22 @@ static inline int32_t sys_rtc_time(user_rtc_time_t* out) {
                       : "=a"(result)
                       : "0"((uint32_t)SYS_RTC_TIME), "b"(out)
                       : "ecx", "edx", "memory", "cc");
+    return result;
+}
+
+typedef struct {
+    uint8_t bus, slot, function, header_type;
+    uint16_t vendor_id, device_id;
+    uint8_t class_code, subclass, prog_if, revision;
+    uint8_t irq_line, irq_pin;
+} user_pci_device_t;
+
+static inline int32_t sys_pci_device_info(uint32_t index, user_pci_device_t* out) {
+    int32_t result;
+    __asm__ volatile ("int $0x80"
+                      : "=a"(result)
+                      : "0"((uint32_t)SYS_PCI_DEVICE_INFO), "b"(index), "c"(out)
+                      : "edx", "memory", "cc");
     return result;
 }
 

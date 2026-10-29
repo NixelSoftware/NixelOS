@@ -24,7 +24,7 @@ ROOT_FILES = [
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
     "shutdlg.bin", "syndig.bin", "qksrv.bin", "resources/quark.cfg",
-    "qkftp.bin"
+    "qkftp.bin", "lspci.bin"
 ]
 
 OUTPUT_IMAGE = "disk.img" if len(sys.argv) < 2 else sys.argv[1]
