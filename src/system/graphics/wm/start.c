@@ -1,3 +1,4 @@
+#include "../settings/settings.h"
 #include "../../../include/os_version.h"
 #include "start.h"
 #include "theme.h"
@@ -100,8 +101,10 @@ void start_menu_draw(void) {
     /* Right Column Places */
     int ry = body_y + 14;
     s_api->graphics.draw_string(menu_x + left_w + 16, ry,      "My Computer",   COLOR_TEXT_PRIMARY);
-    s_api->graphics.draw_string(menu_x + left_w + 16, ry + 28, "Network",       COLOR_TEXT_PRIMARY);
-    s_api->graphics.draw_string(menu_x + left_w + 16, ry + 56, "Control Panel", COLOR_TEXT_PRIMARY);
+    s_api->graphics.draw_string(menu_x + left_w + 16, ry + 28, "Network",
+        s_hovered == START_ACTION_NETWORK ? COLOR_ACCENT : COLOR_TEXT_PRIMARY);
+    s_api->graphics.draw_string(menu_x + left_w + 16, ry + 56, "Settings",
+        s_hovered == START_ACTION_SETTINGS ? COLOR_ACCENT : COLOR_TEXT_PRIMARY);
     s_api->graphics.draw_string(menu_x + left_w + 16, ry + 84, "Recent Files",  COLOR_TEXT_MUTED);
 
     /* Footer Bar */
@@ -158,6 +161,11 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
         }
     }
 
+    if (mouse_x >= menu_x + left_w && mouse_x < menu_x + START_MENU_W) {
+        if (mouse_y >= body_y + 34 && mouse_y < body_y + 62) s_hovered = START_ACTION_NETWORK;
+        if (mouse_y >= body_y + 62 && mouse_y < body_y + 90) s_hovered = START_ACTION_SETTINGS;
+    }
+
     /* Check hover over Footer Buttons */
     if (mouse_y >= foot_y + 4 && mouse_y < foot_y + START_FOOTER_H - 4) {
         if (mouse_x >= menu_x + 114 && mouse_x < menu_x + 206) {
@@ -178,6 +186,8 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
             request_redraw();
 
             switch (selected) {
+                case START_ACTION_SETTINGS: settings_open(0); break;
+                case START_ACTION_NETWORK: settings_open(1); break;
                 case START_ITEM_TERMINAL:
                     if (terminal_launch() < 0 && s_api && s_api->windows.show_info_dialog)
                         s_api->windows.show_info_dialog("Cannot launch", "No free terminal, window, or process slots.");

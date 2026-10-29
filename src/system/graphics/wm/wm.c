@@ -1,3 +1,4 @@
+#include "../settings/settings.h"
 #include "../../../kernel/hal/audio.h"
 #include "../../../kernel/mutex.h"
 #include "wm.h"
@@ -1292,6 +1293,7 @@ void wm_poll(void) {
     uint64_t acquired = scheduler_clock();
     task_irq_restore(clock_flags);
     handle_display_resize();
+    settings_poll();
     uint32_t keys = 0, mouse = 0;
 
     static uint8_t last_min = 0xFF;

@@ -88,7 +88,7 @@ KERNEL_C := \
   src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
-  src/system/graphics/widgets.c src/system/graphics/session.c \
+  src/system/graphics/widgets.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/loader/app_loader.c \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
@@ -306,3 +306,11 @@ src/kernel/hal/video.o src/kernel/drivers/display/vga.o src/kernel/drivers/displ
 
 $(KERNEL_C:.c=.o): src/kernel/types.h src/kernel/drivers/display.h
 src/kernel/drivers/display/virtio_gpu.o: src/kernel/drivers/display/video_drivers.h
+
+# Native settings controls and their driver interfaces.
+src/system/graphics/settings/settings.o: src/system/graphics/settings/settings.h src/kernel/hal/video.h src/kernel/hal/net.h src/kernel/hal/audio.h src/system/graphics/wm/theme.h
+src/system/graphics/wm/start.o src/system/graphics/wm/wm.o: src/system/graphics/settings/settings.h src/system/graphics/wm/start.h
+src/kernel/hal/video.o: src/kernel/hal/video.h
+
+src/kernel/net/dhcp.o: src/kernel/net/dhcp.h src/kernel/net/udp.h src/kernel/net/ipv4.h
+src/kernel/net/ipv4.o src/kernel/hal/net.o: src/kernel/net/ipv4.h src/kernel/net/dhcp.h

@@ -50,5 +50,6 @@ uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,
 
 uint16_t ipv4_checksum(const void* data, uint32_t length);
 uint32_t ipv4_get_local_ip(void);
+void ipv4_get_configuration(uint32_t* mask, uint32_t* gateway);
 
 #endif
