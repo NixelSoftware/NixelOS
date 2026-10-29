@@ -1,6 +1,7 @@
 #include "../../../include/os_version.h"
 #include "start.h"
 #include "wm.h"
+#include "theme.h"
 #include "../terminal/terminal.h"
 #include "../../../kernel/drivers/display/font.h"
 
@@ -46,48 +47,38 @@ uint8_t start_menu_is_open(void) {
 
 void start_menu_draw(void) {
     if (!s_api || !s_open) return;
+    const int menu_h = (START_ITEM_COUNT * START_ITEM_H) + 12;
+    const int menu_y = WM_TASKBAR_Y - menu_h - 4; /* Floating 4px off taskbar */
+    const int menu_x = 6;
+    const int menu_w = 170;
 
-    const int menu_h = (START_ITEM_COUNT * START_ITEM_H) + 10;
-    const int menu_y = WM_TASKBAR_Y - menu_h;
-    const int menu_x = START_MENU_X;
+    /* Menu container */
+    s_api->graphics.fill_rect(menu_x, menu_y, menu_w, menu_h, COLOR_SURFACE);
 
-    s_api->graphics.fill_rect(menu_x, menu_y, START_MENU_W, menu_h, COLOR_WIN_BG);
+    /* border */
+    s_api->graphics.fill_rect(menu_x, menu_y, menu_w, 1, COLOR_SURFACE_BORDER);
+    s_api->graphics.fill_rect(menu_x, menu_y + menu_h - 1, menu_w, 1, COLOR_SURFACE_BORDER);
+    s_api->graphics.fill_rect(menu_x, menu_y, 1, menu_h, COLOR_SURFACE_BORDER);
+    s_api->graphics.fill_rect(menu_x + menu_w - 1, menu_y, 1, menu_h, COLOR_SURFACE_BORDER);
 
-    s_api->graphics.fill_rect(menu_x, menu_y, START_MENU_W, 2, COLOR_WHITE);
-    s_api->graphics.fill_rect(menu_x, menu_y, 2, menu_h, COLOR_WHITE);
-    s_api->graphics.fill_rect(menu_x + START_MENU_W - 2, menu_y, 2, menu_h, COLOR_BLACK);
-    s_api->graphics.fill_rect(menu_x, menu_y + menu_h - 2, START_MENU_W, 2, COLOR_BLACK);
-    s_api->graphics.fill_rect(menu_x + START_MENU_W - 3, menu_y + 1, 1, menu_h - 2, COLOR_DARK_GRAY);
-    s_api->graphics.fill_rect(menu_x + 1, menu_y + menu_h - 3, START_MENU_W - 2, 1, COLOR_DARK_GRAY);
-
-    s_api->graphics.fill_rect(menu_x + 2, menu_y + 2, START_BANNER_W, menu_h - 5, 0x00000080);
-    draw_vertical_string(menu_x + 8, menu_y + 12, "NIXELOS", COLOR_WHITE);
-
-    int item_x = menu_x + START_BANNER_W + 4;
-    int item_w = START_MENU_W - START_BANNER_W - 8;
-    int cur_y = menu_y + 4;
-
+    int cur_y = menu_y + 6;
     for (int i = 0; i < START_ITEM_COUNT; i++) {
         if (i == START_ITEM_SHUTDOWN) {
-            s_api->graphics.fill_rect(item_x, cur_y + 2, item_w, 1, COLOR_DARK_GRAY);
-            s_api->graphics.fill_rect(item_x, cur_y + 3, item_w, 1, COLOR_WHITE);
+            /* Subtle divider */
+            s_api->graphics.fill_rect(menu_x + 8, cur_y + 2, menu_w - 16, 1, COLOR_SURFACE_BORDER);
             cur_y += 6;
         }
 
-        uint32_t text_color = COLOR_BLACK;
-
+        uint32_t text_color = COLOR_TEXT_PRIMARY;
         if (s_hovered == i) {
-            s_api->graphics.fill_rect(item_x, cur_y, item_w, START_ITEM_H, COLOR_TITLE_BAR);
-            text_color = COLOR_WHITE;
+            /* Soft rounded-style hover highlight */
+            s_api->graphics.fill_rect(menu_x + 4, cur_y, menu_w - 8, START_ITEM_H, COLOR_TASKBAR_ITEM_ACT);
+            text_color = COLOR_ACCENT;
         }
 
-        s_api->graphics.fill_rect(item_x + 3, cur_y + 5, 12, 12, (s_hovered == i) ? COLOR_WHITE : 0x00A0A0A0);
-
-        s_api->graphics.draw_string(item_x + 20, cur_y + 7, s_labels[i], text_color);
-
-        if (i == START_ITEM_PROGRAMS) {
-            s_api->graphics.draw_string(menu_x + START_MENU_W - 14, cur_y + 7, ">", text_color);
-        }
+        /* accent dot */
+        s_api->graphics.fill_rect(menu_x + 12, cur_y + 8, 6, 6, (s_hovered == i) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+        s_api->graphics.draw_string(menu_x + 28, cur_y + 7, s_labels[i], text_color);
 
         cur_y += START_ITEM_H;
     }

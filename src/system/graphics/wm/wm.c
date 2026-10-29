@@ -5,6 +5,7 @@
 #include "desktop.h"
 #include "desktop_wallpaper.h"
 #include "cursor.h"
+#include "theme.h"
 #include "../../../kernel/paging.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../loader/app_loader.h"
@@ -279,34 +280,60 @@ void wm_initialize(os_api_t* api, void (*invalidate_callback)(void)) {
     start_menu_init(api);
 }
 
+static void draw_circle_filled(os_api_t* api, int32_t cx, int32_t cy, int32_t r, uint32_t color) {
+    for (int32_t dy = -r; dy <= r; dy++) {
+        for (int32_t dx = -r; dx <= r; dx++) {
+            if (dx * dx + dy * dy <= r * r) {
+                api->graphics.put_pixel(cx + dx, cy + dy, color);
+            }
+        }
+    }
+}
+
 void wm_draw_native_frame(int32_t x, int32_t y, int32_t w, int32_t h,
                           const char* title, uint8_t focused) {
-    if (!wm_api || w < 20 || h < 20) return;
-    wm_api->graphics.fill_rect(x, y, w, h, COLOR_WIN_BG);
-    wm_api->graphics.fill_rect(x + 2, y + 2, w - 4, 15,
-                      focused ? COLOR_TITLE_BAR : COLOR_DARK_GRAY);
-    if (title)
-        wm_api->graphics.draw_string(x + 6, y + 5, title, COLOR_WHITE);
+    if (!wm_api || w < 40 || h < 30) return;
 
-    int32_t close_x = x + w - 16;
-    int32_t close_y = y + 3;
-    wm_api->graphics.draw_button(close_x, close_y, 13, 13, 0, 0);
-    wm_api->graphics.draw_string(close_x + 3, close_y + 2, "x", COLOR_BLACK);
-    wm_api->graphics.fill_rect(x, y, w, 1, COLOR_WHITE);
-    wm_api->graphics.fill_rect(x, y, 1, h, COLOR_WHITE);
-    wm_api->graphics.fill_rect(x, y + h - 1, w, 1, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(x + w - 1, y, 1, h, COLOR_BLACK);
+    const int TITLE_H = 22;
+
+    wm_api->graphics.fill_rect(x, y + TITLE_H, w, h - TITLE_H, COLOR_SURFACE);
+
+    uint32_t tb_color = focused ? COLOR_TITLEBAR_ACTIVE : COLOR_TITLEBAR_INACTIVE;
+    wm_api->graphics.fill_rect(x, y, w, TITLE_H, tb_color);
+
+    wm_api->graphics.fill_rect(x, y + TITLE_H - 1, w, 1, COLOR_SURFACE_BORDER);
+
+    int btn_cy = y + (TITLE_H / 2);
+    int close_cx = x + w - 14;
+
+    if (focused) {
+        draw_circle_filled(wm_api, close_cx, btn_cy, 5, COLOR_BTN_CLOSE);
+    } else {
+        draw_circle_filled(wm_api, close_cx, btn_cy, 5, COLOR_BTN_MUTED);
+    }
+
+    if (title) {
+        uint32_t text_col = focused ? COLOR_TEXT_PRIMARY : COLOR_TEXT_MUTED;
+        wm_api->graphics.draw_string(x + 12, y + 7, title, text_col);
+    }
+
+    uint32_t border_col = focused ? COLOR_ACCENT : COLOR_SURFACE_BORDER;
+    wm_api->graphics.fill_rect(x, y, w, 1, border_col);
+    wm_api->graphics.fill_rect(x, y + h - 1, w, 1, border_col);
+    wm_api->graphics.fill_rect(x, y, 1, h, border_col);
+    wm_api->graphics.fill_rect(x + w - 1, y, 1, h, border_col);
 }
 
 static void draw_window_frame(Window* window) {
     if (!window || !window->visible) return;
     wm_draw_native_frame(window->x, window->y, window->w, window->h,
                          window->title, window->focused);
-    wm_api->graphics.fill_rect(window->x + window->w - 1, window->y, 1, window->h, COLOR_DARK_GRAY);
     user_window_slot_t* user_slot = user_slot_for_window(window);
     if (user_slot) {
         user_surface_composite(user_slot);
-    } else if (window->draw_content) window->draw_content(window);
+    } else if (window->draw_content) {
+        window->draw_content(window);
+    }
 }
 
 static void draw_windows_except(Window* excluded) {
@@ -463,49 +490,69 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     MUTEX_GUARD(kernel_mutex);
     if (!wm_api) return;
     const int y = WM_TASKBAR_Y;
-    wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, WM_TASKBAR_HEIGHT, COLOR_WIN_BG);
-    wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, 1, COLOR_WHITE);
-    //wm_api->graphics.draw_button(4, y + 4, 60, 24, "Start", start_menu_open);
-    wm_api->graphics.draw_button(4, y + 4, 60, 24, "Start", start_menu_is_open());
 
+    /* Base panel */
+    wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, WM_TASKBAR_HEIGHT, COLOR_TASKBAR_BG);
+    wm_api->graphics.fill_rect(0, y, SCREEN_WIDTH, 1, COLOR_TASKBAR_BORDER);
+
+    /* Start Button: Clean Flat Pill */
+    uint32_t start_bg = start_menu_is_open() ? COLOR_ACCENT : COLOR_TASKBAR_ITEM;
+    uint32_t start_text = start_menu_is_open() ? 0x0011111B : COLOR_TEXT_PRIMARY;
+    wm_api->graphics.fill_rect(6, y + 4, 60, 24, start_bg);
+    /* 1px border */
+    wm_api->graphics.fill_rect(6, y + 4, 60, 1, COLOR_SURFACE_BORDER);
+    wm_api->graphics.fill_rect(6, y + 27, 60, 1, COLOR_SURFACE_BORDER);
+    wm_api->graphics.fill_rect(6, y + 4, 1, 24, COLOR_SURFACE_BORDER);
+    wm_api->graphics.fill_rect(65, y + 4, 1, 24, COLOR_SURFACE_BORDER);
+    wm_api->graphics.draw_string(18, y + 11, "Menu", start_text);
+
+    /* Running Tasks (Pills) */
     int count = 0;
     for (int i = 0; i < WM_MAX_WINDOWS; i++) if (windows[i]) count++;
-    int width = count ? 620 / count : 100;
-    if (width > 100) width = 100;
+    int width = count ? (540 / count) : 120;
+    if (width > 130) width = 130;
+
     int button = 0;
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (!windows[i]) continue;
         uint32_t previous = window_context_enter(i);
         char label[24];
-        int capacity = (width - 10) / 8;
+        int capacity = (width - 16) / 8;
         if (capacity > 23) capacity = 23;
         int n = 0;
         while (n < capacity && windows[i]->title[n]) { label[n] = windows[i]->title[n]; n++; }
         label[n] = 0;
-        wm_api->graphics.draw_button(68 + button * width, y + 4, width - 3, 24,
-            label, windows[i]->visible && windows[i]->focused);
+
+        int bx = 74 + button * (width + 4);
+        int by = y + 4;
+        uint8_t is_focused = windows[i]->visible && windows[i]->focused;
+
+        /* Pill Background */
+        wm_api->graphics.fill_rect(bx, by, width, 24, is_focused ? COLOR_TASKBAR_ITEM_ACT : COLOR_TASKBAR_ITEM);
+        
+        /* Highlight line on active item */
+        if (is_focused) {
+            wm_api->graphics.fill_rect(bx + 4, by + 22, width - 8, 2, COLOR_ACCENT);
+        }
+
+        /* Label */
+        wm_api->graphics.draw_string(bx + 8, by + 8, label, is_focused ? COLOR_TEXT_PRIMARY : COLOR_TEXT_MUTED);
+
         window_context_leave(previous);
         button++;
     }
 
-    wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 5, 58, 22, COLOR_WIN_BG);
-    wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 5, 58, 1, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 5, 1, 22, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(SCREEN_WIDTH - 64, y + 26, 58, 1, COLOR_WHITE);
-    wm_api->graphics.fill_rect(SCREEN_WIDTH - 7, y + 5, 1, 22, COLOR_WHITE);
-
-    const int tray_w = 100;
-    const int tray_x = SCREEN_WIDTH - tray_w - 6; // 694
+    /* Modern Minimalist Tray Area */
+    const int tray_w = 90;
+    const int tray_x = SCREEN_WIDTH - tray_w - 8;
     const int tray_y = y + 5;
-    const int tray_h = 22;
+    
+    /* Clean rounded/flat tray container */
+    wm_api->graphics.fill_rect(tray_x, tray_y, tray_w, 22, COLOR_TASKBAR_ITEM);
+    wm_api->graphics.fill_rect(tray_x, tray_y, tray_w, 1, COLOR_SURFACE_BORDER);
 
-    wm_api->graphics.fill_rect(tray_x, tray_y, tray_w, tray_h, COLOR_WIN_BG);
-    wm_api->graphics.fill_rect(tray_x, tray_y, tray_w, 1, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(tray_x, tray_y, 1, tray_h, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(tray_x, tray_y + tray_h - 1, tray_w, 1, COLOR_WHITE);
-    wm_api->graphics.fill_rect(tray_x + tray_w - 1, tray_y, 1, tray_h, COLOR_WHITE);
-
-    const int sound_x = tray_x + 4;
+    /* Tray icons (Sound, Network) */
+    const int sound_x = tray_x + 6;
     const int sound_y = tray_y + 3;
     for (int r = 0; r < SOUND_ICON_H; r++) {
         for (int c = 0; c < SOUND_ICON_W; c++) {
@@ -516,18 +563,10 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
         }
     }
 
-    if (!audio_get_volume()) {
-        for (int i = 0; i < 16; i++)
-            wm_api->graphics.put_pixel(sound_x + i, sound_y + 15 - i, COLOR_RED);
-    }
-
     uint8_t net_ok = sys_net_is_ready();
     const uint8_t (*net_sprite)[NET_ICON_W] = net_ok ? icon_net_ok : icon_net_err;
-    //const int icon_x = tray_x + 4;
-    //const int icon_x = tray_x + 18;
     const int icon_x = tray_x + 26;
     const int icon_y = tray_y + 3;
-
     for (int r = 0; r < NET_ICON_H; r++) {
         for (int c = 0; c < NET_ICON_W; c++) {
             uint8_t val = net_sprite[r][c];
@@ -537,30 +576,14 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
         }
     }
 
-    /* render time from the rtc */
+    /* Clock */
     char time_str[6];
     rtc_format_time_hm(time_str);
-    //wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, "12:00", COLOR_BLACK);
-    wm_api->graphics.draw_string(SCREEN_WIDTH - 52, y + 11, time_str, COLOR_BLACK);
+    wm_api->graphics.draw_string(tray_x + 48, y + 11, time_str, COLOR_TEXT_PRIMARY);
 
     volume_draw();
     if (!start_menu_open) return;
     start_menu_draw();
-    /*
-    int menu_x = 4, menu_y = y - 96, menu_w = 120, menu_h = 92;
-    wm_api->graphics.fill_rect(menu_x, menu_y, menu_w, menu_h, COLOR_WIN_BG);
-    wm_api->graphics.fill_rect(menu_x, menu_y, menu_w, 1, COLOR_WHITE);
-    wm_api->graphics.fill_rect(menu_x, menu_y, 1, menu_h, COLOR_WHITE);
-    wm_api->graphics.fill_rect(menu_x, menu_y + menu_h - 1, menu_w, 1, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(menu_x + menu_w - 1, menu_y, 1, menu_h, COLOR_DARK_GRAY);
-    wm_api->graphics.draw_string(menu_x + 12, menu_y + 10, "Terminal", COLOR_BLACK);
-    wm_api->graphics.fill_rect(menu_x + 6, menu_y + 28, menu_w - 12, 1, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(menu_x + 6, menu_y + 29, menu_w - 12, 1, COLOR_WHITE);
-    wm_api->graphics.draw_string(menu_x + 12, menu_y + 38, "Notepad", COLOR_BLACK);
-    wm_api->graphics.fill_rect(menu_x + 6, menu_y + 56, menu_w - 12, 1, COLOR_DARK_GRAY);
-    wm_api->graphics.fill_rect(menu_x + 6, menu_y + 57, menu_w - 12, 1, COLOR_WHITE);
-    wm_api->graphics.draw_string(menu_x + 12, menu_y + 66, "Viewer", COLOR_BLACK);
-    */
 }
 
 Window* wm_get_window(int index) {
@@ -1080,9 +1103,8 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     window_context_leave(previous);
                     continue;
                 }
-                int close_x = window->x + window->w - 16;
-                int close_y = window->y + 3;
-                if (terminal_for_window(window) != 0 &&
+                                int close_x = window->x + window->w - 14;
+                int close_y = window->y + 11;                if (terminal_for_window(window) != 0 &&
                     mouse_x >= window->x + window->w - 12 &&
                     mouse_x <= window->x + window->w &&
                     mouse_y >= window->y + window->h - 12 &&
@@ -1094,8 +1116,8 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     handled = 1;
                     break;
                 }
-                if (mouse_x >= close_x && mouse_x <= close_x + 13 &&
-                    mouse_y >= close_y && mouse_y <= close_y + 13) {
+                if (mouse_x >= close_x - 8 && mouse_x <= close_x + 8 &&
+                    mouse_y >= close_y - 8 && mouse_y <= close_y + 8) {
                     if (terminal_for_window(window)) {
                         terminal_close(window);
                         dragging_window = 0; dragging_directory = 0;
@@ -1127,7 +1149,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     break;
                 }
                 if (mouse_x >= window->x && mouse_x <= window->x + window->w &&
-                    mouse_y >= window->y && mouse_y <= window->y + 18) {
+                    mouse_y >= window->y && mouse_y <= window->y + 22) {
                     uint32_t owner_directory = window_directories[i];
                     uint32_t caller_directory = previous;
                     window_context_leave(previous);
