@@ -26,4 +26,5 @@ void desktop_trace_api(const char* label);
 
 uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time);
 
+void desktop_resize(void);
 #endif

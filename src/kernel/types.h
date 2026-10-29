@@ -10,8 +10,19 @@ typedef signed short   int16_t;
 typedef signed int     int32_t;
 typedef signed long long int64_t;
 
-#define SCREEN_WIDTH   800
-#define SCREEN_HEIGHT  600
+#define SCREEN_DEFAULT_WIDTH 800
+#define SCREEN_DEFAULT_HEIGHT 600
+#define SCREEN_MAX_WIDTH 1920
+#define SCREEN_MAX_HEIGHT 1080
+#ifdef NIXEL_KERNEL
+extern int32_t screen_width, screen_height;
+#define SCREEN_WIDTH screen_width
+#define SCREEN_HEIGHT screen_height
+#else
+/* Legacy app ABI retains its default coordinates; kernel geometry is live. */
+#define SCREEN_WIDTH SCREEN_DEFAULT_WIDTH
+#define SCREEN_HEIGHT SCREEN_DEFAULT_HEIGHT
+#endif
 
 
 //#define COLOR_DESKTOP     0x00008080   

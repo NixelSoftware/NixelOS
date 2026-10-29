@@ -1,6 +1,5 @@
 #include "video_drivers.h"
 
-/* Preserve the VGA/VBE mode selected by the real-mode bootloader. */
 int vga_video_init(video_framebuffer_t* fb, uint32_t address,
                    uint32_t bpp, uint32_t pitch) {
     if (!address || (bpp != 24 && bpp != 32)) return 0;

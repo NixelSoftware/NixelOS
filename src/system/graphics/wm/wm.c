@@ -35,8 +35,8 @@ static uint8_t redraw_pending;
 static uint32_t scene_generation;
 /* One background and one retained image for the actively dragged window.
  * This keeps motion independent of legacy draw callbacks and other windows. */
-static uint32_t drag_background[SCREEN_WIDTH * SCREEN_HEIGHT];
-static uint32_t drag_pixels[SCREEN_WIDTH * WM_TASKBAR_Y];
+static uint32_t* drag_background;
+static uint32_t* drag_pixels;
 static struct {
     Window* window;
     uint32_t directory, generation;
@@ -47,7 +47,7 @@ static struct {
 #define USER_WINDOW_EVENT_CAPACITY 16u
 #define USER_WINDOW_TEXT_MAX 64u
 #define USER_WINDOW_MAX_SURFACE_PAGES \
-    ((SCREEN_WIDTH * WM_TASKBAR_Y * sizeof(uint32_t) + PAGE_SIZE - 1u) / PAGE_SIZE)
+    ((SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * sizeof(uint32_t) + PAGE_SIZE - 1u) / PAGE_SIZE)
 
 extern const uint8_t font_8x8[128][8];
 
@@ -274,6 +274,10 @@ static void wm_bring_to_front_index(int target_index) {
 }
 
 void wm_initialize(os_api_t* api, void (*invalidate_callback)(void)) {
+    uint32_t pages = (SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (!drag_background) drag_background = (uint32_t*)paging_alloc_contiguous(pages);
+    if (!drag_pixels) drag_pixels = (uint32_t*)paging_alloc_contiguous(pages);
+
     MUTEX_GUARD(kernel_mutex);
     wm_api = api;
     invalidate = invalidate_callback;
@@ -365,6 +369,7 @@ static void drag_restore(int32_t x, int32_t y, int32_t w, int32_t h) {
 }
 
 uint8_t wm_render_drag(void) {
+    if (!drag_background || !drag_pixels) return 0;
     MUTEX_GUARD(kernel_mutex);
     int index = -1;
     for (int i = 0; i < WM_MAX_WINDOWS; i++)
@@ -1249,6 +1254,33 @@ uint8_t wm_start_menu_is_open(void) {
     return start_menu_is_open();
 }
 
+static void handle_display_resize(void) {
+    if (!display_take_resize()) return;
+    dragging_window = 0;
+    resizing_terminal = 0;
+    drag_cache.valid = 0;
+    start_menu_close();
+    start_menu_open = 0;
+    mouse_x = mouse_x < SCREEN_WIDTH - 12 ? mouse_x : SCREEN_WIDTH - 12;
+    mouse_y = mouse_y < SCREEN_HEIGHT - 19 ? mouse_y : SCREEN_HEIGHT - 19;
+    wm_cursor_move(mouse_x, mouse_y, 0);
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (!windows[i]) continue;
+        uint32_t previous = window_context_enter(i);
+        Window* window = windows[i];
+        /* Keep title bars reachable without changing app-owned surface sizes. */
+        if (window->x + window->w > SCREEN_WIDTH) window->x = SCREEN_WIDTH - window->w;
+        if (window->y + window->h > WM_TASKBAR_Y) window->y = WM_TASKBAR_Y - window->h;
+        if (window->x < 0) window->x = 0;
+        if (window->y < 0) window->y = 0;
+        user_window_slot_t* slot = user_slot_for_window(window);
+        if (slot) user_window_enqueue_simple(slot, USER_WINDOW_EVENT_REDRAW);
+        window_context_leave(previous);
+    }
+    desktop_resize();
+    request_redraw();
+}
+
 void wm_poll(void) {
     startup_trace_poll(1);
     uint32_t clock_flags = task_irq_save();
@@ -1259,6 +1291,7 @@ void wm_poll(void) {
     clock_flags = task_irq_save();
     uint64_t acquired = scheduler_clock();
     task_irq_restore(clock_flags);
+    handle_display_resize();
     uint32_t keys = 0, mouse = 0;
 
     static uint8_t last_min = 0xFF;

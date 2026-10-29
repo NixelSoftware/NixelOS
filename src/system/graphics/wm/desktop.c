@@ -176,8 +176,8 @@ void desktop_draw(void) {
         debug_subsystem_print("\n");
     }
     if (icon_count > ICONS_PER_PAGE) {
-        desktop_api->graphics.draw_string(16, 548, "< Previous", COLOR_WHITE);
-        desktop_api->graphics.draw_string(660, 548, "Next >", COLOR_WHITE);
+        desktop_api->graphics.draw_string(16, WM_TASKBAR_Y - 20, "< Previous", COLOR_WHITE);
+        desktop_api->graphics.draw_string(SCREEN_WIDTH - 140, WM_TASKBAR_Y - 20, "Next >", COLOR_WHITE);
     }
 
 }
@@ -197,9 +197,9 @@ void desktop_trace_api(const char* label) {
 }
 
 uint8_t desktop_handle_click(int32_t mx, int32_t my, uint32_t current_time) {
-    if (my >= 540 && icon_count > ICONS_PER_PAGE) {
+    if (my >= WM_TASKBAR_Y - 28 && icon_count > ICONS_PER_PAGE) {
         if (mx < 130 && desktop_page > 0) desktop_page--;
-        if (mx > 650 && (desktop_page+1)*ICONS_PER_PAGE < icon_count) desktop_page++;
+        if (mx > SCREEN_WIDTH - 150 && (desktop_page+1)*ICONS_PER_PAGE < icon_count) desktop_page++;
         last_clicked_icon = -1;
         return 1;
     }
@@ -532,4 +532,12 @@ int desktop_picker_result(uint32_t token, uint32_t pid, const char* path) {
     picker_pid = -1;
     if (path[0]) copy_text(pending, path, sizeof(pending));
     request_redraw(); return 0;
+}
+
+void desktop_resize(void) {
+    overlay = 0;
+    drag = -1;
+    for (int i = 0; i < icon_count; i++) {
+        clamp_icon(i);
+    }
 }

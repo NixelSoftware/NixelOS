@@ -10,11 +10,11 @@ QEMU ?= qemu-system-i386
 # Customizable QEMU settings
 QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
-QEMU_MEMORY ?= 128M
+QEMU_MEMORY ?= 512M
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_FORWARD ?= ",hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000"
 QEMU_DISPLAY ?= sdl
-QEMU_VGA ?= std
+QEMU_VGA ?= virtio
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_AUDIO_DRIVER ?= sdl
 QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_DRIVER),id=audio0 -machine pcspk-audiodev=audio0
@@ -93,7 +93,7 @@ KERNEL_C := \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
-  src/kernel/drivers/display/vga.c src/kernel/drivers/display/qemu.c \
+  src/kernel/drivers/display/vga.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c \
   src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
   src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
@@ -121,6 +121,7 @@ KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 KERNEL_HEADERS := src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h \
                   src/kernel/mutex.h src/kernel/sched_policy.h src/kernel/sched_wide.h \
                   src/kernel/arch_fpu.h
+$(KERNEL_C:.c=.o): CFLAGS += -DNIXEL_KERNEL=1
 $(KERNEL_OBJ): $(KERNEL_HEADERS)
 
 .PHONY: FORCE_AUDIO_DEBUG_CONFIG
@@ -301,3 +302,6 @@ src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h sr
 
 $(KERNEL_C:.c=.o): src/kernel/hal/video.h
 src/kernel/hal/video.o src/kernel/drivers/display/vga.o src/kernel/drivers/display/qemu.o: src/kernel/drivers/display/video_drivers.h
+
+$(KERNEL_C:.c=.o): src/kernel/types.h src/kernel/drivers/display.h
+src/kernel/drivers/display/virtio_gpu.o: src/kernel/drivers/display/video_drivers.h

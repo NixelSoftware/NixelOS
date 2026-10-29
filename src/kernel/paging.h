@@ -22,6 +22,8 @@ uint8_t paging_is_enabled(void);
 
 /* Allocate and release 4 KiB physical frames from the reserved app pool. */
 uint32_t paging_frame_alloc(void);
+/* Identity-mapped contiguous RAM for kernel graphics and DMA buffers. */
+uint32_t paging_alloc_contiguous(uint32_t pages);
 void paging_frame_free(uint32_t physical_address);
 
 /* Create isolated app mappings at [APP_VIRTUAL_BASE, APP_VIRTUAL_LIMIT). */

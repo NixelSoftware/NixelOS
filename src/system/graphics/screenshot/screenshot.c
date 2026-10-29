@@ -1,4 +1,6 @@
 #include "screenshot.h"
+#include "../../../kernel/mutex.h"
+#include "../../../kernel/paging.h"
 #include "../../../kernel/fs.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../../kernel/drivers/serial.h"
@@ -24,12 +26,11 @@ typedef struct {
 } bmp_header_t;
 #pragma pack(pop)
 
-#define SCREENSHOT_SCRATCH_ADDR 0x00500000
-#define SCREENSHOT_MAX_SIZE     (3 * 1024 * 1024)
-
-static uint8_t screenshot_buffer[SCREENSHOT_MAX_SIZE];
+#define SCREENSHOT_MAX_SIZE (54u + SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * 3u)
+static uint8_t* screenshot_buffer;
 
 int screenshot_capture(void) {
+    MUTEX_GUARD(kernel_mutex);
     const char* filename = "SHOT.BMP";
 
     uint32_t w = SCREEN_WIDTH;
@@ -50,7 +51,9 @@ int screenshot_capture(void) {
         return 0;
     }
 
-    uint8_t* screenshot_buffer = (uint8_t*)SCREENSHOT_SCRATCH_ADDR;
+    if (!screenshot_buffer)
+        screenshot_buffer = (uint8_t*)paging_alloc_contiguous((SCREENSHOT_MAX_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE);
+    if (!screenshot_buffer) return 0;
 
     
     bmp_header_t* header = (bmp_header_t*)screenshot_buffer;

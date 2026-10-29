@@ -1,4 +1,5 @@
 #include "types.h"
+#include "mutex.h"
 #include "users.h"
 #include "task.h"
 #include "keyboard.h"
@@ -36,6 +37,17 @@ void login_screen_task(void* arg) {
     const char* error_msg = "";
 
     while (!authenticated) {
+        mutex_lock(&kernel_mutex);
+        if (display_take_resize()) {
+            win_x = (SCREEN_WIDTH - 460) / 2;
+            win_y = (SCREEN_HEIGHT - 320) / 2;
+            old_win_x = win_x; old_win_y = win_y;
+            mouse_x = mouse_x < SCREEN_WIDTH - 12 ? mouse_x : SCREEN_WIDTH - 12;
+            mouse_y = mouse_y < SCREEN_HEIGHT - 19 ? mouse_y : SCREEN_HEIGHT - 19;
+            wm_cursor_move(mouse_x, mouse_y, 0);
+            dragging = restore_old_window = 0;
+            redraw = 1;
+        }
         if (redraw) {
             wm_cursor_erase();
             if (restore_old_window) {
@@ -93,7 +105,8 @@ void login_screen_task(void* arg) {
         }
 
         os_input_event_t event;
-        if (input_poll_event(&event)) {
+        int available = input_poll_event(&event);
+        if (available) {
             if (event.type == OS_INPUT_MOUSE) {
                 mouse_x += event.mouse_dx;
                 mouse_y -= event.mouse_dy;
@@ -212,9 +225,9 @@ void login_screen_task(void* arg) {
                     redraw = 1;
                 }
             }
-        } else {
-            task_sleep_ms(10);
         }
+        mutex_unlock(&kernel_mutex);
+        if (!available) task_sleep_ms(10);
     }
 
     int wm_pid = task_create(desktop_service, 0, "wm");

@@ -168,6 +168,25 @@ uint32_t paging_frame_alloc(void) {
     return 0;
 }
 
+uint32_t paging_alloc_contiguous(uint32_t pages) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!pages || pages > pool_pages) return 0;
+    uint32_t run = 0;
+    for (uint32_t i = 0; i < FRAME_COUNT; i++) {
+        if (!frame_is_usable(i) || frame_is_used(i)) { run = 0; continue; }
+        if (++run != pages) continue;
+        uint32_t first = i + 1 - pages;
+        for (uint32_t j = first; j <= i; j++) frame_set_used(j, 1);
+        next_frame = (i + 1) % FRAME_COUNT;
+        uint32_t address = FRAME_POOL_BASE + first * PAGE_SIZE;
+        uint32_t* dest = (uint32_t*)address;
+        uint32_t count = pages * (PAGE_SIZE / 4u);
+        __asm__ volatile ("cld; rep stosl" : "+D"(dest), "+c"(count) : "a"(0) : "memory");
+        return address;
+    }
+    return 0;
+}
+
 void paging_frame_free(uint32_t physical_address) {
     MUTEX_GUARD(kernel_mutex);
     if (physical_address < FRAME_POOL_BASE || physical_address >= FRAME_POOL_LIMIT ||

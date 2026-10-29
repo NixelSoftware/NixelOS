@@ -2,10 +2,13 @@
 #include "../drivers/display/video_drivers.h"
 #include "../drivers/serial.h"
 
+int32_t screen_width = SCREEN_DEFAULT_WIDTH, screen_height = SCREEN_DEFAULT_HEIGHT;
 static video_framebuffer_t framebuffer;
+static int virtio_active;
 int video_init(uint32_t address, uint32_t bpp, uint32_t pitch) {
     framebuffer = (video_framebuffer_t){0};
-    if (!qemu_video_init(&framebuffer) &&
+    virtio_active = virtio_gpu_init(&framebuffer);
+    if (!virtio_active && !qemu_video_init(&framebuffer) &&
         !vga_video_init(&framebuffer, address, bpp, pitch)) {
         debug_print("[VIDEO] No supported framebuffer\n");
         return 0;
@@ -27,6 +30,7 @@ void video_write_span(int32_t x, int32_t y, const uint32_t* pixels, uint32_t cou
     }
     if (x >= SCREEN_WIDTH) return;
     if (count > SCREEN_WIDTH - (uint32_t)x) count = SCREEN_WIDTH - (uint32_t)x;
+    if (virtio_active && count) virtio_gpu_mark_dirty(x, y, count);
     uint8_t* dest = (uint8_t*)framebuffer.address + y * framebuffer.pitch +
                     x * (framebuffer.bpp / 8);
     if (framebuffer.bpp == 32) {
@@ -38,4 +42,11 @@ void video_write_span(int32_t x, int32_t y, const uint32_t* pixels, uint32_t cou
             *out++ = color; *out++ = color >> 8; *out++ = color >> 16;
         }
     }
+}
+
+int video_poll_resize(void) {
+    return virtio_active && virtio_gpu_poll_resize(&framebuffer);
+}
+void video_present(void) {
+    if (virtio_active) virtio_gpu_present();
 }

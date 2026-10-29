@@ -64,6 +64,7 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
         flip_y = 0;
     }
 
+    if (img_w > SCREEN_W) return; /* fixed input row scratch capacity */
     uint32_t row_stride = (bpp == 24) ? (((img_w * 3) + 3) & ~3) : (img_w * 4);
 
     if (current_mode == WALLPAPER_MODE_STRETCH) {
@@ -80,7 +81,7 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
                 last_fetched_src_y = file_row_y;
             }
 
-            uint32_t* dest_row = &wallpaper_pixels[y * SCREEN_W];
+
             for (int x = 0; x < SCREEN_W; x++) {
                 int src_x = (x * img_w) / SCREEN_W;
                 if (src_x >= img_w) src_x = img_w - 1;
@@ -97,7 +98,9 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
                     uint8_t r = row_scratch[src_x * 4 + 2];
                     color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
                 }
-                dest_row[x] = color;
+                uint32_t pixel = y * SCREEN_W + x;
+                uint32_t* page = (uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
+                page[pixel % (PAGE_SIZE / 4u)] = color;
             }
         }
     }
@@ -115,7 +118,7 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
                 last_fetched_src_y = file_row_y;
             }
 
-            uint32_t* dest_row = &wallpaper_pixels[y * SCREEN_W];
+
             for (int x = 0; x < SCREEN_W; x++) {
                 int src_x = x % img_w;
 
@@ -131,7 +134,9 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
                     uint8_t r = row_scratch[src_x * 4 + 2];
                     color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
                 }
-                dest_row[x] = color;
+                uint32_t pixel = y * SCREEN_W + x;
+                uint32_t* page = (uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
+                page[pixel % (PAGE_SIZE / 4u)] = color;
             }
         }
     }
@@ -141,20 +146,19 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
 }
 
 void desktop_wallpaper_draw(void) {
-    if (wallpaper_loaded && wallpaper_pixels) {
-        uint32_t* dest = display_get_backbuffer();
-        const uint32_t* src = wallpaper_pixels;
-        uint32_t count = SCREEN_W * SCREEN_H;
-
-        __asm__ volatile (
-            "cld\n\t"
-            "rep movsl"
-            : "+D"(dest), "+S"(src), "+c"(count)
-            :
-            : "memory"
-        );
-    } else {
+    if (!wallpaper_loaded || !wallpaper_pixels) {
         display_clear(COLOR_DESKTOP);
+        return;
+    }
+    uint32_t* dest = display_get_backbuffer();
+    for (int y = 0; y < SCREEN_HEIGHT; y++) {
+        int sy = current_mode == WALLPAPER_MODE_TILE ? y % SCREEN_H : y * SCREEN_H / SCREEN_HEIGHT;
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            int sx = current_mode == WALLPAPER_MODE_TILE ? x % SCREEN_W : x * SCREEN_W / SCREEN_WIDTH;
+            uint32_t pixel = sy * SCREEN_W + sx;
+            const uint32_t* source = (const uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
+            *dest++ = source[pixel % (PAGE_SIZE / 4u)];
+        }
     }
 }
 

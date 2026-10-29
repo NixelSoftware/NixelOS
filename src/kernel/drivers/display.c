@@ -4,8 +4,9 @@
 #include "serial.h"
 #include "../hal/video.h"
 
-static uint32_t* const backbuffer = (uint32_t*)0x00A00000;
-#define PRESENT_PAGES ((SCREEN_WIDTH * SCREEN_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE)
+static uint32_t* backbuffer = (uint32_t*)0x00A00000;
+static int resize_pending;
+#define PRESENT_PAGES ((SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE)
 static uint32_t present_pages[PRESENT_PAGES];
 static int async_display, damage_pending;
 static uint64_t damage_requested, last_present_log;
@@ -55,7 +56,7 @@ static uint32_t* snapshot_pixel(uint32_t pixel) {
 static int present_valid;
 static void snapshot_rows(int32_t x, int32_t y, int32_t right, int32_t bottom,
                           uint16_t* changed_left, uint16_t* changed_right) {
-    uint32_t row_pixels[SCREEN_WIDTH];
+    uint32_t row_pixels[SCREEN_MAX_WIDTH];
     for (int32_t row = y; row < bottom; row++) {
         uint32_t* dest = row_pixels + x;
         const uint32_t* source = backbuffer + row * SCREEN_WIDTH + x;
@@ -115,9 +116,19 @@ static uint32_t present_changed_rows(int32_t y, int32_t bottom,
 }
 static void present_worker(void* arg) {
     (void)arg;
-    uint16_t changed_left[SCREEN_HEIGHT], changed_right[SCREEN_HEIGHT];
+    uint16_t changed_left[SCREEN_MAX_HEIGHT], changed_right[SCREEN_MAX_HEIGHT];
     for (;;) {
         mutex_lock(&kernel_mutex);
+        if (video_poll_resize()) {
+            /* This worker is the only mode setter. No transfer or band snapshot
+             * can be in flight while geometry and strides change. */
+            damage_pending = 0;
+            present_valid = 0;
+            present_cursor = 0;
+            resize_pending = 1;
+            display_clear(COLOR_DESKTOP);
+            queue_damage(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        }
         if (!damage_pending) {
             mutex_unlock(&kernel_mutex);
             task_sleep_ms(1);
@@ -146,6 +157,7 @@ static void present_worker(void* arg) {
         }
         present_sample(&sample, 2);
         sample.copied_pixels = present_changed_rows(y, bottom, changed_left, changed_right);
+        video_present();
         present_valid = 1;
         present_sample(&sample, 3);
         debug_present_timing(requested, &sample, &last_present_log);
@@ -172,6 +184,9 @@ int display_start_async(void) {
 
 void display_init(uint32_t lfb_addr, uint32_t bpp, uint32_t pitch) {
     MUTEX_GUARD(kernel_mutex);
+    uint32_t buffer = paging_alloc_contiguous(PRESENT_PAGES);
+    if (!buffer) { debug_print("[VIDEO] Cannot allocate desktop buffer\n"); return; }
+    backbuffer = (uint32_t*)buffer;
     if (!video_init(lfb_addr, bpp, pitch)) return;
     display_clear(COLOR_DESKTOP);
     display_blit();
@@ -222,6 +237,7 @@ void display_blit_rect(int32_t x, int32_t y, int32_t w, int32_t h) {
 
     for (int row = 0; row < h; row++)
         video_write_span(x, y + row, backbuffer + (y + row) * SCREEN_WIDTH + x, w);
+    video_present();
 }
 
 void display_blit_cursor_region(int32_t bx, int32_t by, int32_t bw, int32_t bh,
@@ -271,6 +287,7 @@ void display_blit_cursor_region(int32_t bx, int32_t by, int32_t bw, int32_t bh,
             video_write_span(px, py, &color, 1);
         }
     }
+    video_present();
 }
 
 void display_blit(void) {
@@ -279,4 +296,11 @@ void display_blit(void) {
     if (can_queue()) { queue_damage(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT); return; }
 
     display_blit_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+int display_take_resize(void) {
+    MUTEX_GUARD(kernel_mutex);
+    int changed = resize_pending;
+    resize_pending = 0;
+    return changed;
 }

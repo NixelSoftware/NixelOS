@@ -3,8 +3,8 @@
 
 #include "../types.h"
 
-#define SCREEN_WIDTH   800
-#define SCREEN_HEIGHT  600
+/* Consume a geometry change from the presentation worker under kernel_mutex. */
+int display_take_resize(void);
 
 
 //#define COLOR_DESKTOP     0x00008080   

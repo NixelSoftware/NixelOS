@@ -5,7 +5,7 @@
 #include "../../user/window_api.h"
 
 #define WM_MAX_WINDOWS 16
-#define WM_TASKBAR_Y 568
+#define WM_TASKBAR_Y (SCREEN_HEIGHT - WM_TASKBAR_HEIGHT)
 #define WM_TASKBAR_HEIGHT 32
 
 void wm_initialize(os_api_t* api, void (*invalidate)(void));
