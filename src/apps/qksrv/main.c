@@ -87,12 +87,10 @@ static void handle_client(uint32_t client) {
         p--;
     }
 
-
     for (int i = 0; req_path[i] && p < (int)sizeof(full_path) - 1; i++) {
         full_path[p++] = req_path[i];
     }
     full_path[p] = '\0';
-
 
     char fs_lookup_path[256];
     int lp = 0;
@@ -107,37 +105,58 @@ static void handle_client(uint32_t client) {
 
     char target_path[256];
     int tp = 0;
-    while (fs_lookup_path[tp]) {
-        target_path[tp] = fs_lookup_path[tp];
-        tp++;
-    }
-    target_path[tp] = '\0';
 
-    char index_path[256];
-    int ip = 0;
-    while (fs_lookup_path[ip]) {
-        index_path[ip] = fs_lookup_path[ip];
-        ip++;
-    }
-    if (ip > 0 && index_path[ip - 1] != '/') {
-        index_path[ip++] = '/';
-    }
-    const char* idx = "index.html";
-    for (int k = 0; idx[k] && ip < (int)sizeof(index_path) - 1; k++) {
-        index_path[ip++] = idx[k];
-    }
-    index_path[ip] = '\0';
-
-    int32_t file_size = sys_fs_read(index_path, 0, 0);
+    int32_t file_size = sys_fs_read(fs_lookup_path, 0, 0);
     if (file_size >= 0) {
-        tp = 0;
-        while (index_path[tp]) {
-            target_path[tp] = index_path[tp];
+        while (fs_lookup_path[tp]) {
+            target_path[tp] = fs_lookup_path[tp];
             tp++;
         }
         target_path[tp] = '\0';
     } else {
-        file_size = sys_fs_read(fs_lookup_path, 0, 0);
+        char index_candidate[256];
+        int ip = 0;
+        while (fs_lookup_path[ip]) {
+            index_candidate[ip] = fs_lookup_path[ip];
+            ip++;
+        }
+        if (ip > 0 && index_candidate[ip - 1] != '/') {
+            index_candidate[ip++] = '/';
+        }
+
+        int base_ip = ip;
+        const char* idx1 = "index.html";
+        for (int k = 0; idx1[k] && ip < (int)sizeof(index_candidate) - 1; k++) {
+            index_candidate[ip++] = idx1[k];
+        }
+        index_candidate[ip] = '\0';
+
+        file_size = sys_fs_read(index_candidate, 0, 0);
+        if (file_size >= 0) {
+            tp = 0;
+            while (index_candidate[tp]) {
+                target_path[tp] = index_candidate[tp];
+                tp++;
+            }
+            target_path[tp] = '\0';
+        } else {
+            ip = base_ip;
+            const char* idx2 = "index.htm";
+            for (int k = 0; idx2[k] && ip < (int)sizeof(index_candidate) - 1; k++) {
+                index_candidate[ip++] = idx2[k];
+            }
+            index_candidate[ip] = '\0';
+
+            file_size = sys_fs_read(index_candidate, 0, 0);
+            if (file_size >= 0) {
+                tp = 0;
+                while (index_candidate[tp]) {
+                    target_path[tp] = index_candidate[tp];
+                    tp++;
+                }
+                target_path[tp] = '\0';
+            }
+        }
     }
 
     if (file_size >= 0) {
