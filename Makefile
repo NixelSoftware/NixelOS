@@ -93,7 +93,7 @@ KERNEL_C := \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
-  src/kernel/drivers/display/vga.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c \
+  src/kernel/drivers/display/vga.c src/kernel/drivers/display/intel_gma.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c \
   src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
   src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
@@ -313,3 +313,6 @@ src/kernel/hal/video.o: src/kernel/hal/video.h
 
 src/kernel/net/dhcp.o: src/kernel/net/dhcp.h src/kernel/net/udp.h src/kernel/net/ipv4.h
 src/kernel/net/ipv4.o src/kernel/hal/net.o: src/kernel/net/ipv4.h src/kernel/net/dhcp.h
+
+src/kernel/drivers/display/intel_gma.o: src/kernel/drivers/display/video_drivers.h src/kernel/hal/video.h src/kernel/drivers/pci.h
+src/system/graphics/settings/settings.o: src/kernel/hal/video.h

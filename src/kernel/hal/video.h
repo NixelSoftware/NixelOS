@@ -12,6 +12,7 @@ typedef struct {
 int video_init(uint32_t boot_address, uint32_t boot_bpp, uint32_t boot_pitch);
 const video_framebuffer_t* video_get_framebuffer(void);
 /* Queue changes for the presentation worker; geometry must not change mid-transfer. */
+int video_can_set_resolution(void);
 int video_request_resolution(uint32_t width, uint32_t height);
 int video_resolution_status(void); /* 0 idle, 1 pending, 2 applied, -1 failed */
 int video_poll_resize(void);

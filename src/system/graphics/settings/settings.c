@@ -113,7 +113,8 @@ static void draw(Window* win) {
         int state = video_resolution_status();
         text(20, 244, state == 1 ? "Applying resolution..." : state == -1 ?
              "This display could not apply the mode." : state == 2 ? "Resolution applied." :
-             "Requires QEMU VGA or virtio-gpu.", COLOR_TEXT_MUTED);
+             video_can_set_resolution() ? "Choose a mode and click Apply." :
+             "Firmware mode: resolution switching unavailable.", COLOR_TEXT_MUTED);
     } else if (tab == 1) {
         const char* name = 0; sys_net_get_device_info(0, 0, &name);
         text(20, 88, name ? name : "No network adapter", COLOR_TEXT_PRIMARY);
