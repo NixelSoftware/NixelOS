@@ -5,7 +5,7 @@
 
 int32_t screen_width = SCREEN_DEFAULT_WIDTH, screen_height = SCREEN_DEFAULT_HEIGHT;
 static video_framebuffer_t framebuffer;
-static int virtio_active, qemu_active;
+static int virtio_active, qemu_active, intel_active;
 static uint32_t requested_width, requested_height;
 static int resolution_status;
 int video_init(uint32_t address, uint32_t bpp, uint32_t pitch) {
@@ -13,8 +13,9 @@ int video_init(uint32_t address, uint32_t bpp, uint32_t pitch) {
     resolution_status = 0;
     virtio_active = virtio_gpu_init(&framebuffer);
     qemu_active = !virtio_active && qemu_video_init(&framebuffer);
-    if (!virtio_active && !qemu_active &&
-        !intel_gma_video_init(&framebuffer, address, bpp, pitch) &&
+    intel_active = !virtio_active && !qemu_active &&
+        intel_gma_video_init(&framebuffer, address, bpp, pitch);
+    if (!virtio_active && !qemu_active && !intel_active &&
         !vga_video_init(&framebuffer, address, bpp, pitch)) {
         debug_print("[VIDEO] No supported framebuffer\n");
         return 0;
@@ -50,7 +51,12 @@ void video_write_span(int32_t x, int32_t y, const uint32_t* pixels, uint32_t cou
     }
 }
 
-int video_can_set_resolution(void) { return virtio_active || qemu_active; }
+int video_can_set_resolution(void) {
+    return virtio_active || qemu_active || (intel_active && intel_gma_can_set_resolution());
+}
+int video_native_resolution(uint32_t* width, uint32_t* height) {
+    return width && height && intel_active && intel_gma_native_resolution(width,height);
+}
 int video_request_resolution(uint32_t width, uint32_t height) {
     MUTEX_GUARD(kernel_mutex);
     if (!video_can_set_resolution()) { resolution_status = -1; return 0; }
@@ -64,7 +70,8 @@ int video_resolution_status(void) { return resolution_status; }
 int video_poll_resize(void) {
     if (resolution_status == 1) {
         int ok = virtio_active ? virtio_gpu_set_resolution(&framebuffer, requested_width, requested_height) :
-            (qemu_active && qemu_video_set_resolution(&framebuffer, requested_width, requested_height));
+            qemu_active ? qemu_video_set_resolution(&framebuffer, requested_width, requested_height) :
+            (intel_active && intel_gma_set_resolution(&framebuffer, requested_width, requested_height));
         resolution_status = ok ? 2 : -1;
         return ok;
     }

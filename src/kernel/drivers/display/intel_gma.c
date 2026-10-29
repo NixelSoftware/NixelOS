@@ -1,12 +1,13 @@
 #include "video_drivers.h"
+#include "i915/i915.h"
+#include "../delay.h"
+#include "../../paging.h"
 #include "../pci.h"
 #include "../serial.h"
 
-/* Mobile 965 / GMA X3100 firmware scanout driver.
- * Intel Mobile 965 datasheet 316273, section 21.1 (PCI BARs), and
- * 965/G35 PRM vol. 1 (GGTT, display plane registers). See VIDEO_DRIVERS.md.
- * Keep firmware clocks, LVDS/panel fitter, GGTT and scanout programming intact.
- * Do not size BARs by disabling decode on an already scanning display. */
+/* PCI/firmware handoff glue for the Nixel i915 gen4 display port. The module
+ * in i915/ adapts the supplied upstream display routines to Nixel services. */
+static i915_display_t intel_display;
 #define GMA_MMIO_BYTES       0x00100000u
 #define GMA_APERTURE_MIN     0x08000000u /* Common lower window of 128/256/512 MiB apertures. */
 #define GMA_GTT_OFFSET       0x00080000u
@@ -27,6 +28,36 @@
 
 static uint32_t read_reg(uint32_t mmio, uint32_t offset) {
     return *(volatile uint32_t*)(unsigned long)(mmio + offset);
+}
+static uint32_t native_read(void* context, uint32_t offset) {
+    return read_reg((uint32_t)(unsigned long)context,offset);
+}
+static void native_write(void* context, uint32_t offset, uint32_t value) {
+    *(volatile uint32_t*)((unsigned long)context + offset) = value;
+}
+static void native_delay(void* context, uint32_t us) { (void)context; driver_delay_us(us); }
+static uint32_t native_allocate(void* context, uint32_t pages) {
+    (void)context; return paging_alloc_contiguous(pages);
+}
+static void native_release(void* context, uint32_t physical, uint32_t pages) {
+    (void)context;
+    for (uint32_t i = 0; i < pages; i++) paging_frame_free(physical + i * PAGE_SIZE);
+}
+static void native_flush(void* context) {
+    (void)context;
+    __asm__ volatile ("wbinvd" ::: "memory");
+}
+int intel_gma_can_set_resolution(void) { return i915_display_can_modeset(&intel_display); }
+int intel_gma_native_resolution(uint32_t* width, uint32_t* height) {
+    if (!intel_gma_can_set_resolution()) return 0;
+    *width = intel_display.panel_width; *height = intel_display.panel_height;
+    return *width <= SCREEN_MAX_WIDTH && *height <= SCREEN_MAX_HEIGHT;
+}
+int intel_gma_set_resolution(video_framebuffer_t* fb, uint32_t width, uint32_t height) {
+    if (!i915_display_set_mode(&intel_display,fb,width,height)) return 0;
+    screen_width = width; screen_height = height;
+    debug_print("[VIDEO] i915 LVDS source mode changed\n");
+    return 1;
 }
 static int supported(const pci_device_t* dev) {
     return dev && dev->vendor_id == 0x8086 &&
@@ -81,7 +112,12 @@ int intel_gma_video_init(video_framebuffer_t* fb, uint32_t address,
         uint32_t page = first;
         while (page <= last && (read_reg(registers, GMA_GTT_OFFSET + page * 4u) & 1u)) page++;
         if (page <= last) continue;
-        *fb = (video_framebuffer_t){address, 32, pitch, "Intel GMA X3100 (firmware mode)"};
+        uint32_t plane = plane_matches(registers,base,address,pitch,0) ? 0 : 1;
+        uint32_t control = read_reg(registers,GMA_PLANE_CONTROL + plane * GMA_SECOND);
+        i915_io_t io = {(void*)(unsigned long)registers,native_read,native_write,
+                        native_delay,native_allocate,native_release,native_flush};
+        i915_display_adopt(&intel_display,&io,base,plane,!!(control & GMA_PIPE_B));
+        *fb = (video_framebuffer_t){address, 32, pitch, "Nixel i915 / GMA X3100"};
         debug_print("[VIDEO] Mobile Intel 965 / GMA X3100: firmware scanout validated\n");
         return 1;
     }

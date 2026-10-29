@@ -20,9 +20,10 @@ static void set_message(const char* text) {
     message = text;
     message_expires = scheduler_clock() + 3000000000ull;
 }
-static const uint32_t widths[] = {640, 800, 1024, 1280, 1920};
-static const uint32_t heights[] = {480, 600, 768, 720, 1080};
-static const char* modes[] = {"640 x 480", "800 x 600", "1024 x 768", "1280 x 720", "1920 x 1080"};
+static uint32_t widths[] = {640, 800, 1024, 1280, 1920, 0};
+static uint32_t heights[] = {480, 600, 768, 720, 1080, 0};
+static int mode_count = 5;
+static const char* modes[] = {"640 x 480", "800 x 600", "1024 x 768", "1280 x 720", "1920 x 1080", "Panel native"};
 
 static void text(int x, int y, const char* s, uint32_t color) {
     draw_string(window.x + x, window.y + y, s, color);
@@ -169,8 +170,8 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     if (!(buttons & 1)) return;
     for (int i = 0; i < 3; i++) if (hit(x, y, 16 + i * 152, 36, 140)) tab = i;
     if (tab == 0) {
-        if (hit(x,y,20,188,40)) mode = (mode + 4) % 5;
-        if (hit(x,y,304,188,40)) mode = (mode + 1) % 5;
+        if (hit(x,y,20,188,40)) mode = (mode + mode_count - 1) % mode_count;
+        if (hit(x,y,304,188,40)) mode = (mode + 1) % mode_count;
         if (hit(x,y,356,188,104)) video_request_resolution(widths[mode], heights[mode]);
     } else if (tab == 1 && !busy) {
         for (int i = 0; i < 3; i++) if (hit(x,y,158,144 + i * 36,302)) {
@@ -204,7 +205,9 @@ void settings_open(int initial_tab) {
     if (!window.title) {
         window = (Window){40, 50, 480, 390, "Settings", 1, 1, draw, key, mouse};
     }
-    for (int i = 0; i < 5; i++) if (widths[i] == (uint32_t)SCREEN_WIDTH && heights[i] == (uint32_t)SCREEN_HEIGHT) mode = i;
+    mode_count = video_native_resolution(&widths[5], &heights[5]) ? 6 : 5;
+    if (mode >= mode_count) mode = 0;
+    for (int i = 0; i < mode_count; i++) if (widths[i] == (uint32_t)SCREEN_WIDTH && heights[i] == (uint32_t)SCREEN_HEIGHT) mode = i;
     if (!busy) load_manual();
     if (wm_register_window(&window) < 0) return;
     wm_bring_to_front(&window); request_redraw();

@@ -10,3 +10,4 @@ struct
 .audio-debug-config
 
 /src/include/os_version.h
+/documentation/linux-for-ref/i915/
