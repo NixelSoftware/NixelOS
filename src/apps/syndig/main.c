@@ -125,16 +125,21 @@ static void draw(void) {
  /* Repaint the moving lane only; avoid clearing the entire window at 30 Hz. */
  rect(TILE_LEFT,TILE_TOP,TILE_WIDTH,TILE_TARGET-TILE_TOP,BG);
  if(song_loaded){
-  for(uint32_t i=song_index;i<song.count;i++){
+  for(uint32_t i=0;i<song.count;i++){
    midi_event_t *e=&song.events[i];
    if(e->frame>played_frames+TILE_LOOKAHEAD)break;
-   if(e->type!=0x90||e->frame<played_frames)continue;
-   uint64_t ahead=e->frame-played_frames;
+   if(e->type!=0x90||e->end_frame<=played_frames)continue;
+   uint64_t start=e->frame>played_frames?e->frame-played_frames:0;
+   uint64_t end=e->end_frame-played_frames;
+   if(end>TILE_LOOKAHEAD)end=TILE_LOOKAHEAD;
+   int span=TILE_TARGET-TILE_TOP;
+   int bottom=TILE_TARGET-(int)(start*span/TILE_LOOKAHEAD);
+   int top=TILE_TARGET-(int)(end*span/TILE_LOOKAHEAD);
+   if(bottom-top<TILE_HEIGHT)top=bottom-TILE_HEIGHT;
+   if(top<TILE_TOP)top=TILE_TOP;
    int x=TILE_LEFT+e->note*TILE_WIDTH/128;
    int width=(e->note+1)*TILE_WIDTH/128-e->note*TILE_WIDTH/128;
-   /* The tile's bottom meets the indicator exactly at note-on. */
-   int y=TILE_TARGET-TILE_HEIGHT-(int)(ahead*(TILE_TARGET-TILE_HEIGHT-TILE_TOP)/TILE_LOOKAHEAD);
-   rect(x,y,width-1,TILE_HEIGHT,part_colors[e->channel]);
+   rect(x,top,width-1,bottom-top,part_colors[e->channel]);
   }
  }
  rect(TILE_LEFT,TILE_TARGET,TILE_WIDTH,18,DARK);

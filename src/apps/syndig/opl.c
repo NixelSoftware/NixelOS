@@ -49,7 +49,10 @@ void opl_note_on(uint8_t ch,uint8_t note,float velocity){
  /* Compact GM-family approximations: percussive envelopes for piano,
   * guitar and drums; sustained envelopes for organ, strings and winds. */
  int percussive=ch==9||family<2||family==3||family==4||family>=12;
- wr(0x20+op,percussive?0x01:0x21);wr(0x23+op,percussive?0x01:0x21);
+ /* EGT holds the sustain level until MIDI note-off. Melodic plucked
+  * patches still decay, but must not run all the way to silence. */
+ int sustain=ch!=9&&family!=1&&family<14;
+ wr(0x20+op,sustain?0x21:0x01);wr(0x23+op,sustain?0x21:0x01);
  wr(0x40+op,16+(family%4)*8);level(v);
  wr(0x60+op,0xF3);wr(0x63+op,percussive?0xF5:0xA2);
  wr(0x80+op,percussive?0x85:0x24);wr(0x83+op,percussive?0x85:0x24);

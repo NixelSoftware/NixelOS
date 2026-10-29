@@ -20,6 +20,37 @@ static void merge(midi_event_t *a,uint32_t l,uint32_t m,uint32_t r){
  while(i<left)a[k++]=scratch[i++];
 }
 static void sort(midi_event_t *a,uint32_t l,uint32_t r){if(r-l<2)return;uint32_t m=l+(r-l)/2;sort(a,l,m);sort(a,m,r);merge(a,l,m,r);}
+/* One sounding voice per channel/pitch, matching both synth backends. */
+static uint32_t sounding[16][128];
+static uint8_t down[16][128], pedal[16];
+static void finish_note(midi_song_t *song,int ch,int note,uint64_t frame){
+ uint32_t index=sounding[ch][note];
+ if(index){song->events[index-1].end_frame=frame;sounding[ch][note]=0;}
+}
+static void note_durations(midi_song_t *song){
+ for(int ch=0;ch<16;ch++){
+  pedal[ch]=0;
+  for(int n=0;n<128;n++){sounding[ch][n]=0;down[ch][n]=0;}
+ }
+ for(uint32_t i=0;i<song->count;i++){
+  midi_event_t *e=&song->events[i];int ch=e->channel,n=e->note;
+  e->end_frame=e->frame;
+  if(e->type==0x90){
+   finish_note(song,ch,n,e->frame);sounding[ch][n]=i+1;down[ch][n]=1;
+  }else if(e->type==0x80){
+   down[ch][n]=0;if(!pedal[ch]||ch==9)finish_note(song,ch,n,e->frame);
+  }else if(e->type==0xb0){
+   if(n==64)pedal[ch]=e->velocity>=64;
+   if(n==121)pedal[ch]=0;
+   for(int pitch=0;pitch<128;pitch++){
+    if(n==123)down[ch][pitch]=0;
+    if(n==120||((n==64||n==121||n==123)&&!down[ch][pitch]&&(!pedal[ch]||ch==9)))
+     finish_note(song,ch,pitch,e->frame);
+   }
+  }
+ }
+ for(int ch=0;ch<16;ch++)for(int n=0;n<128;n++)finish_note(song,ch,n,song->duration_frames);
+}
 int midi_file_load(const char *path,midi_song_t *song){
  song->count=0;song->duration_frames=0;
  int32_t sz=sys_fs_read(path,0,0);if(sz<14||sz>MIDI_FILE_CAPACITY)return -1;
@@ -57,9 +88,12 @@ int midi_file_load(const char *path,midi_song_t *song){
  for(uint32_t i=0;i<song->count;i++){
   midi_event_t *e=&song->events[i];uint32_t tick=e->tick,dt=tick-last_tick;
   uint64_t n=(uint64_t)dt*tempo+rem;us+=n/ppqn;rem=n%ppqn;
-  e->frame=us*44100u/1000000u;last_tick=tick;
+  uint64_t frame=us*44100u/1000000u;
+  if(frame>0xffffffffu)return -19;
+  e->frame=(uint32_t)frame;last_tick=tick;
   if(e->type==0xff){tempo=((uint32_t)e->channel<<16)|((uint32_t)e->note<<8)|e->velocity;if(!tempo)tempo=500000;}
   if(e->frame>song->duration_frames)song->duration_frames=e->frame;
  }
+ note_durations(song);
  return 0;
 }
