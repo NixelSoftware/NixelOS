@@ -730,7 +730,8 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     return;
                 }
                 text_pointer = text;
-            } else if (drawing.operation == USER_WINDOW_DRAW_PIXELS) {
+            } else if (drawing.operation == USER_WINDOW_DRAW_PIXELS ||
+                       drawing.operation == USER_WINDOW_DRAW_PIXELS_SCALED) {
                 if (drawing.width <= 0 || drawing.width > 640 ||
                     drawing.height <= 0 || drawing.height > 480 ||
                     drawing.data_length != (uint32_t)drawing.width * drawing.height * 4u ||

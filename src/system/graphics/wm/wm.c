@@ -30,6 +30,7 @@ static int32_t mouse_x = 400;
 static int32_t mouse_y = 300;
 static Window* dragging_window;
 static Window* resizing_terminal;
+static Window* resizing_user;
 static uint32_t dragging_directory;
 static uint8_t previous_left_button;
 static uint8_t start_menu_open;
@@ -67,6 +68,8 @@ typedef struct {
     uint8_t event_read;
     uint8_t event_write;
     uint8_t active;
+    uint8_t resizable, fullscreen;
+    int32_t restore_x, restore_y, restore_w, restore_h;
     uint8_t raw_keys;
     uint8_t keys_reset_pending;
 } user_window_slot_t;
@@ -176,12 +179,12 @@ static void user_surface_composite(user_window_slot_t* slot) {
     Window* window = &slot->window;
     /* The compositor already owns kernel_mutex. Copy page-sized row spans
      * directly, avoiding a mutex/IRQ transition for every individual pixel. */
-    int32_t left = window->x < 0 ? -window->x : 1;
-    int32_t right = window->w - 1;
+    int32_t left = window->x < 0 ? -window->x : (slot->fullscreen ? 0 : 1);
+    int32_t right = window->w - (slot->fullscreen ? 0 : 1);
     if (window->x + right > SCREEN_WIDTH) right = SCREEN_WIDTH - window->x;
     if (left >= right) return;
     uint32_t* buffer = display_get_backbuffer();
-    for (int32_t y = 18; y < window->h - 1; y++) {
+    for (int32_t y = slot->fullscreen ? 0 : 18; y < window->h - (slot->fullscreen ? 0 : 1); y++) {
         int32_t py = window->y + y;
         if (py < 0 || py >= SCREEN_HEIGHT) continue;
         int32_t x = left;
@@ -338,11 +341,15 @@ void wm_draw_native_frame(int32_t x, int32_t y, int32_t w, int32_t h,
 
 static void draw_window_frame(Window* window) {
     if (!window || !window->visible) return;
-    wm_draw_native_frame(window->x, window->y, window->w, window->h,
-                         window->title, window->focused);
     user_window_slot_t* user_slot = user_slot_for_window(window);
+    if (!user_slot || !user_slot->fullscreen)
+        wm_draw_native_frame(window->x, window->y, window->w, window->h,
+                             window->title, window->focused);
     if (user_slot) {
         user_surface_composite(user_slot);
+        if (user_slot->resizable && !user_slot->fullscreen)
+            for(int i=3;i<12;i+=3)
+                wm_api->graphics.fill_rect(window->x+window->w-i,window->y+window->h-3,i-1,1,COLOR_ACCENT);
     } else if (window->draw_content) {
         window->draw_content(window);
     }
@@ -501,6 +508,11 @@ static int volume_mouse(int x, int y, int left, int down) {
 
 void wm_draw_taskbar(uint8_t start_menu_open) {
     MUTEX_GUARD(kernel_mutex);
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        user_window_slot_t* slot = user_slot_for_window(windows[i]);
+        if (slot && slot->fullscreen && slot->window.visible && slot->window.focused)
+            return;
+    }
     if (!wm_api) return;
     const int y = WM_TASKBAR_Y;
 
@@ -683,6 +695,7 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
     if (window_index < 0 || slot_index < 0) return -1;
 
     user_window_slot_t* slot = &user_window_slots[slot_index];
+    slot->resizable = slot->fullscreen = slot->raw_keys = slot->keys_reset_pending = 0;
     slot->active = 1;
     slot->owner_directory = owner_directory;
     slot->handle = next_user_window_handle++;
@@ -745,25 +758,125 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
     return (int32_t)slot->handle;
 }
 
+/* Grow before changing geometry so allocation failure leaves the old window usable. */
+static int user_window_resize(user_window_slot_t* slot, int w, int h) {
+    if (w < 160 || h < 118 || w > SCREEN_WIDTH || h > SCREEN_HEIGHT)
+        return -1;
+    uint32_t pages = ((uint32_t)w * h * 4u + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (pages > USER_WINDOW_MAX_SURFACE_PAGES)
+        return -1;
+    uint32_t old_count = slot->surface_page_count;
+    while (slot->surface_page_count < pages) {
+        uint32_t frame = paging_frame_alloc();
+        if (!frame) {
+            while (slot->surface_page_count > old_count)
+                paging_frame_free(slot->surface_frames[--slot->surface_page_count]);
+            return -1;
+        }
+        slot->surface_frames[slot->surface_page_count++] = frame;
+    }
+    for (uint32_t i = 0; i < slot->visible_page_count; i++)
+        paging_frame_free(slot->visible_frames[i]);
+    slot->visible_page_count = 0;
+    slot->drawing_frame = 0;
+    slot->window.w = w;
+    slot->window.h = h;
+    user_surface_fill(slot, 0, 18, w, h - 18, 0);
+    user_window_enqueue_simple(slot, USER_WINDOW_EVENT_REDRAW);
+    request_redraw();
+    return 0;
+}
+
+static int user_window_fullscreen(user_window_slot_t* slot, int enabled) {
+    Window* w = &slot->window;
+    if (enabled == slot->fullscreen)
+        return 0;
+    int width = enabled ? SCREEN_WIDTH : slot->restore_w;
+    int height = enabled ? SCREEN_HEIGHT : slot->restore_h;
+    if (!enabled) {
+        if (width > SCREEN_WIDTH)
+            width = SCREEN_WIDTH;
+        if (height > WM_TASKBAR_Y)
+            height = WM_TASKBAR_Y;
+    }
+    int x = w->x, y = w->y, old_w = w->w, old_h = w->h;
+    if (user_window_resize(slot, width, height) < 0)
+        return -1;
+    if (enabled) {
+        slot->restore_x = x;
+        slot->restore_y = y;
+        slot->restore_w = old_w;
+        slot->restore_h = old_h;
+        w->x = w->y = 0;
+    } else {
+        w->x = slot->restore_x;
+        w->y = slot->restore_y;
+        if (w->x > SCREEN_WIDTH - w->w)
+            w->x = SCREEN_WIDTH - w->w;
+        if (w->y > WM_TASKBAR_Y - w->h)
+            w->y = WM_TASKBAR_Y - w->h;
+    }
+    slot->fullscreen = enabled;
+    return 0;
+}
+
 int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
-                            const user_window_draw_t* drawing,
-                            const char* text, const uint8_t* image_data) {
+                            const user_window_draw_t* drawing, const char* text,
+                            const uint8_t* image_data) {
     MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
-    if (!slot || !drawing || !wm_api) return -1;
+    if (!slot || !drawing || !wm_api)
+        return -1;
     Window* window = &slot->window;
 
+    if (drawing->operation == USER_WINDOW_RESIZABLE) {
+        slot->resizable = drawing->pressed != 0;
+        return 0;
+    }
+    if (drawing->operation == USER_WINDOW_FULLSCREEN)
+        return user_window_fullscreen(slot, drawing->pressed != 0);
+    if (drawing->operation == USER_WINDOW_DRAW_PIXELS_SCALED) {
+        if (!image_data || drawing->width <= 0 || drawing->width > 640 || drawing->height <= 0 ||
+            drawing->height > 480 ||
+            drawing->data_length != (uint32_t)drawing->width * drawing->height * 4u)
+            return -1;
+        int top = slot->fullscreen ? 0 : 18, border = slot->fullscreen ? 0 : 1;
+        int cw = window->w - 2 * border, ch = window->h - top - border;
+        int dw = cw, dh = cw * drawing->height / drawing->width;
+        if (dh > ch) {
+            dh = ch;
+            dw = ch * drawing->width / drawing->height;
+        }
+        if (dw <= 0 || dh <= 0)
+            return -1;
+        int ox = border + (cw - dw) / 2, oy = top + (ch - dh) / 2;
+        const uint32_t* pixels = (const uint32_t*)image_data;
+        /* The WM mutex serializes this scratch table; no per-pixel division. */
+        static uint16_t source_x[SCREEN_MAX_WIDTH];
+        for (int x = 0; x < dw; x++)
+            source_x[x] = x * drawing->width / dw;
+        for (int y = top; y < window->h - border; y++) {
+            int source_row =
+                (y >= oy && y < oy + dh) ? ((y - oy) * drawing->height / dh) * drawing->width : 0;
+            for (int x = border; x < window->w - border; x++) {
+                uint32_t color = 0;
+                if (x >= ox && x < ox + dw && y >= oy && y < oy + dh)
+                    color = pixels[source_row + source_x[x - ox]];
+                user_surface_set_pixel(slot, x, y, color & 0xffffffu);
+            }
+        }
+        return 0;
+    }
     if (drawing->operation == USER_WINDOW_RAW_KEYS) {
         slot->raw_keys = drawing->pressed != 0;
         return 0;
     }
     if (drawing->operation == USER_WINDOW_DRAW_PIXELS) {
-        if (!image_data || drawing->width <= 0 || drawing->height <= 0 ||
-            drawing->width > 640 || drawing->height > 480 ||
-            drawing->x < 0 || drawing->y < 18 ||
-            drawing->x > window->w - drawing->width ||
-            drawing->y > window->h - drawing->height ||
-            drawing->data_length != (uint32_t)drawing->width * drawing->height * 4u) return -1;
+        if (!image_data || drawing->width <= 0 || drawing->height <= 0 || drawing->width > 640 ||
+            drawing->height > 480 || drawing->x < 0 || drawing->y < 18 ||
+            drawing->x > window->w - drawing->width || drawing->y > window->h - drawing->height ||
+            drawing->data_length != (uint32_t)drawing->width * drawing->height * 4u)
+            return -1;
         const uint32_t* pixels = (const uint32_t*)image_data;
         for (int y = 0; y < drawing->height; y++)
             for (int x = 0; x < drawing->width; x++)
@@ -966,6 +1079,7 @@ static void user_window_remove_slot(user_window_slot_t* slot) {
         break;
     }
     uint32_t owner_directory = slot->owner_directory;
+    if (resizing_user == &slot->window) resizing_user = 0;
     user_surface_release(slot);
     slot->active = 0;
     slot->owner_directory = 0;
@@ -1055,6 +1169,15 @@ static void handle_mouse_event(const os_input_event_t* event) {
     previous_right = right;
     uint8_t left = event->mouse_buttons & 1;
     uint8_t click_down = left && !previous_left_button;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        user_window_slot_t* slot = user_slot_for_window(windows[i]);
+        if (slot && slot->fullscreen && slot->window.focused && slot->window.visible) {
+            if (wm_api->input.move_cursor)
+                wm_api->input.move_cursor(mouse_x, mouse_y, 1);
+            previous_left_button = left;
+            return;
+        }
+    }
     if (volume_mouse(mouse_x, mouse_y, left, click_down)) {
         if (wm_api->input.move_cursor) wm_api->input.move_cursor(mouse_x, mouse_y, 1);
         previous_left_button = left;
@@ -1081,6 +1204,21 @@ static void handle_mouse_event(const os_input_event_t* event) {
     }
 
     if (event->mouse_dx || event->mouse_dy) {
+        if (resizing_user && left) {
+            user_window_slot_t* slot = user_slot_for_window(resizing_user);
+            if (slot && slot->active && !slot->fullscreen) {
+                int w = mouse_x - slot->window.x + 1, h = mouse_y - slot->window.y + 1;
+                if (w < 160)
+                    w = 160;
+                if (h < 118)
+                    h = 118;
+                if (w > SCREEN_WIDTH - slot->window.x)
+                    w = SCREEN_WIDTH - slot->window.x;
+                if (h > WM_TASKBAR_Y - slot->window.y)
+                    h = WM_TASKBAR_Y - slot->window.y;
+                user_window_resize(slot, w, h);
+            }
+        }
         if (resizing_terminal && left) {
             int w = mouse_x - resizing_terminal->x + 1;
             int h = mouse_y - resizing_terminal->y + 1;
@@ -1122,6 +1260,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
             if (slot) user_window_enqueue_simple(slot, USER_WINDOW_EVENT_REDRAW);
         }
         resizing_terminal = 0;
+        resizing_user = 0;
         dragging_window = 0;
         dragging_directory = 0;
         previous_left_button = left;
@@ -1177,8 +1316,27 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     window_context_leave(previous);
                     continue;
                 }
-                                int close_x = window->x + window->w - 14;
-                int close_y = window->y + 11;                if (terminal_for_window(window) != 0 &&
+                user_window_slot_t* resize_slot = user_slot_for_window(window);
+                if (resize_slot && resize_slot->fullscreen && mouse_x >= window->x &&
+                    mouse_x < window->x + window->w && mouse_y >= window->y &&
+                    mouse_y < window->y + window->h) {
+                    window_context_leave(previous);
+                    handled = 1;
+                    break;
+                }
+                if (resize_slot && resize_slot->resizable && mouse_x >= window->x + window->w - 14 &&
+                    mouse_x < window->x + window->w && mouse_y >= window->y + window->h - 14 &&
+                    mouse_y < window->y + window->h) {
+                    resizing_user = window;
+                    window_context_leave(previous);
+                    wm_bring_to_front(window);
+                    request_redraw();
+                    handled = 1;
+                    break;
+                }
+                int close_x = window->x + window->w - 14;
+                int close_y = window->y + 11;
+                if (terminal_for_window(window) != 0 &&
                     mouse_x >= window->x + window->w - 12 &&
                     mouse_x <= window->x + window->w &&
                     mouse_y >= window->y + window->h - 12 &&
@@ -1196,6 +1354,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                         terminal_close(window);
                         dragging_window = 0; dragging_directory = 0;
                         resizing_terminal = 0;
+                        resizing_user = 0;
                         window_context_leave(previous);
                         request_redraw(); handled = 1; break;
                     }
@@ -1343,6 +1502,7 @@ static void handle_display_resize(void) {
     if (!display_take_resize()) return;
     dragging_window = 0;
     resizing_terminal = 0;
+    resizing_user = 0;
     drag_cache.valid = 0;
     start_menu_close();
     start_menu_open = 0;
@@ -1353,6 +1513,13 @@ static void handle_display_resize(void) {
         if (!windows[i]) continue;
         uint32_t previous = window_context_enter(i);
         Window* window = windows[i];
+        user_window_slot_t* fullscreen_slot = user_slot_for_window(window);
+        if (fullscreen_slot && fullscreen_slot->fullscreen) {
+            user_window_resize(fullscreen_slot, SCREEN_WIDTH, SCREEN_HEIGHT);
+            window->x = window->y = 0;
+            window_context_leave(previous);
+            continue;
+        }
         /* Keep title bars reachable without changing app-owned surface sizes. */
         if (window->x + window->w > SCREEN_WIDTH) window->x = SCREEN_WIDTH - window->w;
         if (window->y + window->h > WM_TASKBAR_Y) window->y = WM_TASKBAR_Y - window->h;

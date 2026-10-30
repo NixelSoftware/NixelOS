@@ -3,6 +3,7 @@
 #include "doomgeneric/doomgeneric.h"
 #include "doomgeneric/doomkeys.h"
 static uint32_t window;
+static int fullscreen;
 static unsigned char down[128];
 void DG_Init(void) {
     user_window_desc_t d = {80, 60, 320, 218, "Doom"};
@@ -16,10 +17,12 @@ void DG_Init(void) {
     draw.operation = USER_WINDOW_RAW_KEYS;
     draw.pressed = 1;
     sys_window_draw(window, &draw);
+    draw.operation = USER_WINDOW_RESIZABLE;
+    sys_window_draw(window, &draw);
 }
 void DG_DrawFrame(void) {
     user_window_draw_t d = {0};
-    d.operation = USER_WINDOW_DRAW_PIXELS;
+    d.operation = USER_WINDOW_DRAW_PIXELS_SCALED;
     d.y = 18;
     d.width = 320;
     d.height = 200;
@@ -129,6 +132,16 @@ release_keys:
         if (down[code] == p)
             continue;
         down[code] = p;
+        if (code == 87 || (code == 28 && down[56])) {
+            if (p) {
+                user_window_draw_t d = {0};
+                d.operation = USER_WINDOW_FULLSCREEN;
+                d.pressed = !fullscreen;
+                if (sys_window_draw(window, &d) == 0)
+                    fullscreen = !fullscreen;
+            }
+            continue;
+        }
         *key = ascii[code];
         *pressed = p;
         if (*key)

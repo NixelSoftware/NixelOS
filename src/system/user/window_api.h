@@ -31,6 +31,9 @@ typedef enum {
     USER_WINDOW_DRAW_BEGIN = 7, /* Preserve the visible frame until present. */
     USER_WINDOW_3D_SUPPORTED = 8, /* returns 1 for VirGL, 0 if unsupported */
     USER_WINDOW_DRAW_PIXELS = 10, /* packed 0x00RRGGBB pixels; width*height*4 bytes */
+    USER_WINDOW_RESIZABLE = 12, /* pressed enables bottom-right resize grip */
+    USER_WINDOW_FULLSCREEN = 13, /* pressed selects borderless fullscreen */
+    USER_WINDOW_DRAW_PIXELS_SCALED = 14, /* source dimensions; fit client, black bars */
     USER_WINDOW_RAW_KEYS = 11, /* pressed=1 enables scan-code make/break events */
     USER_WINDOW_DRAW_TRIANGLES = 9 /* data=triangle array; color=clear RGB.
                                     * returns 1 rendered, 0 unavailable, -1 error */
