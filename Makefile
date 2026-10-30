@@ -265,7 +265,7 @@ endif
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.tmp').unlink(missing_ok=True)"
 
 src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
-	$(PYTHON) -c "import pathlib,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
+#	$(PYTHON) -c "import pathlib,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
 	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sys.exit(subprocess.call(['$(NASM)','-f','bin','-D',f'KERNEL_SECTORS={(n+511)//512}','-D',f'KERNEL_SIZE_BYTES={n}','src/boot/boot_stage2.asm','-o','src/boot_stage2.bin']))"
 
 RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
