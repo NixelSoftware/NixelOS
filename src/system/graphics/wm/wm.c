@@ -779,19 +779,22 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
             ? (uint32_t)(drawing->width - 12) / 8u : 0;
         if (max_chars > USER_WINDOW_TEXT_MAX - 1u)
             max_chars = USER_WINDOW_TEXT_MAX - 1u;
-        uint32_t background = drawing->color;
-        uint32_t top_left = drawing->pressed ? COLOR_DARK_GRAY : COLOR_WHITE;
-        uint32_t bottom_right = drawing->pressed ? COLOR_WHITE : COLOR_DARK_GRAY;
+        uint32_t background = drawing->pressed ? COLOR_TASKBAR_ITEM_ACT : COLOR_SURFACE;
+        uint32_t border = drawing->pressed ? COLOR_ACCENT : COLOR_SURFACE_BORDER;
+        uint32_t text_color = drawing->pressed ? COLOR_ACCENT : COLOR_TEXT_PRIMARY;
         user_surface_fill(slot, drawing->x, drawing->y, drawing->width,
                           drawing->height, background);
-        user_surface_fill(slot, drawing->x, drawing->y, drawing->width, 1, top_left);
-        user_surface_fill(slot, drawing->x, drawing->y, 1, drawing->height, top_left);
+        user_surface_fill(slot, drawing->x, drawing->y, drawing->width, 1, border);
+        user_surface_fill(slot, drawing->x, drawing->y, 1, drawing->height, border);
         user_surface_fill(slot, drawing->x, drawing->y + drawing->height - 1,
-                          drawing->width, 1, bottom_right);
+                          drawing->width, 1, border);
         user_surface_fill(slot, drawing->x + drawing->width - 1, drawing->y,
-                          1, drawing->height, bottom_right);
-        user_surface_text(slot, drawing->x + 6, drawing->y + drawing->height / 2 - 4,
-                          text, COLOR_BLACK, max_chars);
+                          1, drawing->height, border);
+        uint32_t length = 0;
+        while (text && length < max_chars && text[length]) length++;
+        user_surface_text(slot, drawing->x + (drawing->width - (int32_t)length * 8) / 2,
+                          drawing->y + (drawing->height - 8) / 2,
+                          text, text_color, length);
         return 0;
     }
 

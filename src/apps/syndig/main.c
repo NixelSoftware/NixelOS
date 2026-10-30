@@ -1,6 +1,7 @@
 /* Native ring-3 frontend for upstream Syndig (GPL-3.0-or-later). */
 #include "../../kernel/types.h"
 #include "../../system/user/sys_api.h"
+#include "../../system/graphics/wm/theme.h"
 #include "upstream/buffer.h"
 #include "upstream/polyphony.h"
 #include "upstream/oscillator.h"
@@ -14,11 +15,6 @@ static void silence(void){stop_all_sound();if(opl_enabled)opl_stop_all();}
 
 #define W 600
 #define H 420
-#define BG 0x00C0C0C0
-#define WHITE 0x00FFFFFF
-#define BLACK 0x00000000
-#define DARK 0x00808080
-#define BLUE 0x000000AA
 #define AUDIO_FRAMES 1024
 #define VISUAL_FRAME_SAMPLES (44100u / 30u)
 #define TILE_TOP 331
@@ -28,10 +24,10 @@ static void silence(void){stop_all_sound();if(opl_enabled)opl_stop_all();}
 #define TILE_LEFT 16
 #define TILE_WIDTH (13*43)
 static const uint32_t part_colors[16]={
- 0x00255CC4,0x00C43C32,0x002C803E,0x008D3CB0,
- 0x00B86513,0x00007886,0x00B33379,0x00656D13,
- 0x00534BA8,0x00823F21,0x001E8266,0x00913D58,
- 0x004D6891,0x00806B26,0x00685077,0x003D7476
+ COLOR_ACCENT,COLOR_BTN_CLOSE,COLOR_BTN_MAX,0x00C6A0F6,
+ 0x00F5A97F,0x008BD5CA,0x00F5BDE6,COLOR_BTN_MIN,
+ 0x00B7BDF8,0x00EE99A0,0x0091D7E3,0x00EDB7D5,
+ 0x00A5C2F5,0x00D9DBA1,0x00D5B6E3,0x00A3D6CC
 };
 static uint32_t wh;
 static int close_requested, audio_ready;
@@ -74,11 +70,12 @@ static void rect(int x,int y,int w,int h,uint32_t color) {
  user_window_draw_t d={0};d.operation=USER_WINDOW_DRAW_FILL;d.x=x;d.y=y;d.width=w;d.height=h;d.color=color;
  sys_window_draw(wh,&d);
 }
-static void label(int x,int y,const char *s) {
- user_window_draw_t d={0};d.operation=USER_WINDOW_DRAW_TEXT;d.x=x;d.y=y;d.text=s;d.color=BLACK;sys_window_draw(wh,&d);
+static void colored_label(int x,int y,const char *s,uint32_t color) {
+ user_window_draw_t d={0};d.operation=USER_WINDOW_DRAW_TEXT;d.x=x;d.y=y;d.text=s;d.color=color;sys_window_draw(wh,&d);
 }
+static void label(int x,int y,const char *s){colored_label(x,y,s,COLOR_TEXT_PRIMARY);}
 static void button(int x,int y,int w,int h,const char *s) {
- user_window_draw_t d={0};d.operation=USER_WINDOW_DRAW_BUTTON;d.x=x;d.y=y;d.width=w;d.height=h;d.text=s;d.color=BG;sys_window_draw(wh,&d);
+ user_window_draw_t d={0};d.operation=USER_WINDOW_DRAW_BUTTON;d.x=x;d.y=y;d.width=w;d.height=h;d.text=s;d.color=COLOR_SURFACE;sys_window_draw(wh,&d);
 }
 static void number(int value,char *s) {
  char t[12];int i=0,j=0;if(!value){s[0]='0';s[1]=0;return;}
@@ -86,7 +83,7 @@ static void number(int value,char *s) {
  while(i)s[j++]=t[--i];s[j]=0;
 }
 static void control(int x,int y,const char *title,int value) {
- char s[12];label(x,y,title);rect(x,y+18,100,12,DARK);rect(x+2,y+20,value*96/127,8,BLUE);
+ char s[12];label(x,y,title);rect(x,y+18,100,12,COLOR_MODERN_BG);rect(x+2,y+20,value*96/127,8,COLOR_ACCENT);
  number(value,s);label(x+105,y+18,s);
 }
 static void draw(void) {
@@ -97,7 +94,7 @@ static void draw(void) {
  int full=ui_dirty;
  char s[12];
  if(full){
-  rect(0,18,W,H-18,BG);
+  rect(0,18,W,H-18,COLOR_SURFACE);
   /* Text syscalls accept 63 characters plus the terminator. */
   char caption[64];const char *title=song_loaded?song_name:"No MIDI file (run: syndig filename.mid)";
   int n=0;while(n<63 && title[n]){caption[n]=title[n];n++;}caption[n]=0;
@@ -120,10 +117,10 @@ static void draw(void) {
    number(ch+1,s);label(x+8,293,s);
   }
  }
- rect(160,171,72,8,BG);
+ rect(160,171,72,8,COLOR_SURFACE);
  number((int)(played_frames/44100u),s);label(160,171,s);
  /* Repaint the moving lane only; avoid clearing the entire window at 30 Hz. */
- rect(TILE_LEFT,TILE_TOP,TILE_WIDTH,TILE_TARGET-TILE_TOP,BG);
+ rect(TILE_LEFT,TILE_TOP,TILE_WIDTH,TILE_TARGET-TILE_TOP,COLOR_SURFACE);
  if(song_loaded){
   for(uint32_t i=0;i<song.count;i++){
    midi_event_t *e=&song.events[i];
@@ -142,7 +139,7 @@ static void draw(void) {
    rect(x,top,width-1,bottom-top,part_colors[e->channel]);
   }
  }
- rect(TILE_LEFT,TILE_TARGET,TILE_WIDTH,18,DARK);
+ rect(TILE_LEFT,TILE_TARGET,TILE_WIDTH,18,COLOR_MODERN_BG);
  for(int note=0;note<128;note++)if(held[note]){
   int x=TILE_LEFT+note*TILE_WIDTH/128;
   int width=(note+1)*TILE_WIDTH/128-note*TILE_WIDTH/128;
@@ -158,9 +155,10 @@ static void draw(void) {
   int x=16+i*43, note=60+i;
   if(full || previous_held[i]!=held[note] ||
      (previous_active==note)!=(active_note==note)){
-   rect(x,211,40,80,(note==active_note||held[note])?0x0088BBFF:WHITE);
-   rect(x,211,40,1,BLACK);rect(x,211,1,80,BLACK);rect(x+39,211,1,80,BLACK);
-   number(note,s);label(x+8,271,s);
+   rect(x,211,40,80,(note==active_note||held[note])?COLOR_ACCENT:COLOR_TASKBAR_ITEM_ACT);
+   rect(x,211,40,1,COLOR_SURFACE_BORDER);rect(x,211,1,80,COLOR_SURFACE_BORDER);rect(x+39,211,1,80,COLOR_SURFACE_BORDER);
+   number(note,s);colored_label(x+8,271,s,
+    (note==active_note||held[note])?COLOR_MODERN_BG:COLOR_TEXT_PRIMARY);
   }
   previous_held[i]=held[note];
  }
