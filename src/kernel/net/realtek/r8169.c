@@ -78,6 +78,7 @@
 #define Config5_ASPM_en    0x01
 
 /* ---- CPlusCmd ---------------------------------------------------------- */
+#define CPlusCmd_RxChkSum (1 << 5)
 #define CPlusCmd_PCIMulRW 0x0008
 #define CPlusCmd_MASK     0x2063
 
@@ -532,7 +533,7 @@ static void set_rx_mode(void) {
     write32(MAR0 + 4, 0xFFFFFFFFu);
     write32(MAR0, 0xFFFFFFFFu);
     write32(RxConfig, (read32(RxConfig) & ~RX_ACCEPT_MASK) |
-                      AcceptBroadcast | AcceptMulticast | AcceptMyPhys);
+                      AcceptBroadcast | AcceptMulticast | AcceptMyPhys | AcceptAllPhys);
 }
 
 static void init_rings(void) {
@@ -681,13 +682,13 @@ uint8_t r8169_init(void) {
     progress("Realtek: programming descriptors");
     init_rings();
     irq_mask_and_ack();
-    init_rxcfg();
 
     unlock_config();
-    write16(RxMaxSize, RX_BUFFER_SIZE + 1);
+    write16(RxMaxSize, 16383);
     {
         uint16_t cp = (uint16_t)(read16(CPlusCmd) & CPlusCmd_MASK);
         if (mac_version <= RTL_GIGA_MAC_VER_06) cp |= CPlusCmd_PCIMulRW;
+        cp |= CPlusCmd_RxChkSum;
         write16(CPlusCmd, cp);
     }
     write16(IntrMitigate, 0);
@@ -700,10 +701,13 @@ uint8_t r8169_init(void) {
 
     progress("Realtek: starting DMA");
     write8(ChipCmd, CmdTxEnb | CmdRxEnb);
+
+    /* Establish FIFO and burst geometry first, then apply accept filters */
     init_rxcfg();
+    set_rx_mode();
+
     write32(TxConfig, TX_DMA_BURST | TX_IFG |
                       (is_8168evl_up() ? TXCFG_AUTO_FIFO : 0));
-    set_rx_mode();
     irq_mask_and_ack();
 
     progress("Realtek: initializing PHY");
@@ -790,7 +794,8 @@ void r8169_poll(void) {
 
     /* Receive with a bounded budget so the desktop keeps running. */
     for (uint32_t budget = RX_POLL_BUDGET; budget; --budget) {
-        r8169_desc_t* desc = &rx_ring[rx_cur];
+        volatile r8169_desc_t* desc = &rx_ring[rx_cur];
+        __asm__ volatile ("" ::: "memory");
         uint32_t opts1 = desc->opts1;
         if (opts1 & DescOwn) break;
         __asm__ volatile ("" ::: "memory");
@@ -801,13 +806,13 @@ void r8169_poll(void) {
 
         uint8_t fragmented =
             (opts1 & (FirstFrag | LastFrag)) != (FirstFrag | LastFrag);
-        if ((opts1 & RxRES) || fragmented || packet_size < 64 ||
+        if ((opts1 & RxRES) || fragmented || packet_size < 60 ||
             packet_size > RX_BUFFER_SIZE) {
             ++diag.rx_errors;
             ++diag.rx_invalid;
             if (opts1 & RxCRC) ++diag.rx_errors;
         } else {
-            uint32_t length = packet_size - 4;   /* strip Ethernet FCS */
+            uint32_t length = packet_size >= 4 ? packet_size - 4 : packet_size;   /* strip Ethernet FCS */
             diag.last_rx_length = length;
             ++diag.rx_frames;
             if (rx_handler) rx_handler(rx_buffers[rx_cur], length);
