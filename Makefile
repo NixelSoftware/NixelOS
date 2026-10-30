@@ -97,6 +97,7 @@ KERNEL_C := \
   src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
   src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
+  src/kernel/net/realtek/r8169.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
@@ -298,8 +299,9 @@ src/kernel/net/broadcom/tg3.o src/kernel/net/phys/broadcom.o: src/kernel/net/phy
 $(KERNEL_C:.c=.o): src/kernel/hal/net.h src/kernel/hal/net_types.h
 src/kernel/net/amd/pcnet.o: src/kernel/net/amd/pcnet.h
 src/kernel/net/intel/e1000.o: src/kernel/net/intel/e1000.h
+src/kernel/net/realtek/r8169.o: src/kernel/net/realtek/r8169.h
 src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3.h
-src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h src/kernel/net/broadcom/tg3.h
+src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h src/kernel/net/broadcom/tg3.h src/kernel/net/realtek/r8169.h
 
 $(KERNEL_C:.c=.o): src/kernel/hal/video.h
 src/kernel/hal/video.o src/kernel/drivers/display/vga.o src/kernel/drivers/display/qemu.o: src/kernel/drivers/display/video_drivers.h

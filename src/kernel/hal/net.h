@@ -8,7 +8,8 @@
 /* Selected PCI function, stable until the next sys_net_init(). */
 const pci_device_t* sys_net_pci_device(void);
 
-// 0 = PCNet32, 1 = Intel E1000, 2 = Tigon3, 3 = BCM4401; ~0u = none
+// 0 = PCNet32, 1 = Intel E1000, 2 = Tigon3, 3 = BCM4401,
+// 4 = Realtek RTL8169/8168; ~0u = none
 extern uint32_t net_driver_type;
 
 void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out);

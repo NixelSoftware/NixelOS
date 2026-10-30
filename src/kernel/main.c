@@ -28,6 +28,7 @@
 #include "hal/net.h"
 #include "hal/net_types.h"
 #include "net/broadcom/b44.h"
+#include "net/realtek/r8169.h"
 #include "net/arp.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
@@ -275,9 +276,11 @@ static void network_boot_progress(const char* status) {
 
 static void kernel_init_network_device(void) {
     b44_set_init_progress(network_boot_progress);
+    r8169_set_init_progress(network_boot_progress);
     debug_print("[INIT] Net init...\n");
     uint8_t initialized = sys_net_init(0);
     b44_set_init_progress(0);
+    r8169_set_init_progress(0);
     debug_print("[INIT] Net init returned: ");
     debug_hex(initialized);
     debug_print("\n");

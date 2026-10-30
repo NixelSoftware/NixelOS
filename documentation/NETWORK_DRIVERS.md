@@ -11,6 +11,7 @@ src/kernel/
   net/amd/              PCnet drivers (including the older PCnet32 implementation)
   net/intel/            e1000 driver
   net/broadcom/         Tg3 and B44 drivers and register definitions
+  net/realtek/          RTL8169/8168/8111 driver
   net/phys/             Broadcom PHY support
   net/                  Ethernet, ARP, IPv4, UDP, TCP, DHCP, DNS, and ICMP
 ```
@@ -64,10 +65,37 @@ Keep this callback bounded and nonblocking. It runs from `net_poll()` and the bu
 | --- | --- |
 | AMD PCnet-PCI II, PCI ID `1022:2000` | Wired to `net/amd/pcnet.c`. Initializes descriptor rings, polls RX/TX, sends frames, and reports driver diagnostics. |
 | Intel e1000 family IDs listed in `hal/net.c` | Wired to `net/intel/e1000.c`. Uses RX/TX descriptor rings and polling, with limited diagnostics. The code checks link state in `e1000_is_ready()`. |
+| Realtek RTL8169/8168/8111/810x IDs listed in `hal/net.c` | Wired to `net/realtek/r8169.c`. Uses the legacy 16-byte descriptor format, MMIO, a polled TX/RX ring pair, PHYAR/OCP PHY access, and reports common diagnostics. |
 | AMD PCnet-FAST III, PCI ID `1022:2001` | Listed in PCI matching, but the active PCnet initializer searches only for `1022:2000`. Detection may select this device and then initialization can fail. This needs alignment before treating `2001` as supported. |
 | `net/amd/pcnet32.c` interface | Separate/older PCnet implementation. It is not the implementation selected by `hal/net.c`; the active PCnet path is `net/amd/pcnet.c`. |
 
 The e1000 match table currently lists `8086:100E`, `100F`, `1004`, `1000`, and `10D3`. This is a small explicit ID list, not generic support for every Intel adapter sold as an e1000. Both active paths are polled rather than interrupt driven. The kernel main loop calls the network poll function regularly.
+
+## Realtek RTL8169/8168 bring-up
+
+`net/realtek/r8169.c` is a register-level port of the Linux
+`r8169_main.c` behaviour for the single-queue MACs: RTL8169, RTL8110,
+RTL8168, RTL8101/8102/8105/8106, RTL8111 and RTL8411. The chip revision is
+decoded from the XID in `TxConfig` using the same mask/value table as Linux.
+The driver resets the MAC through `ChipCmd`, unlocks `Cfg9346`, disables
+wake/ASPM state, reads the MAC from `MAC0` (or ERI `0xe0`/`0xe4` on
+RTL8168evl and newer), and falls back to `MAC0` if the ERI copy is invalid.
+
+DMA uses the legacy 16-byte descriptor layout with 32-entry rings and 2 KiB
+buffers. RX and TX ownership is tracked with `DescOwn`/`RingEnd`; RX strips
+the Ethernet FCS and rejects error-summary, runt and fragmented descriptors
+before calling the common handler. The PHY is driven through `PHYAR` on
+classic parts, through the `0xd0` access-bit workaround on RTL8168dp, and
+through the OCP GPHY window on RTL8168g and newer. Initialization advertises
+10/100 (plus 1000BASE-T where the PHY supports it) and restarts
+auto-negotiation; link state is sampled from `BMSR` during polling.
+
+RTL8125/8126/8127 are deliberately rejected: they add RSS/multi-queue
+descriptor formats and firmware loading. QEMU has no RTL8169 device model in
+the tested installation, so this path has been compiled and linked but has
+not been exercised against emulated or physical hardware. The QEMU boot
+regression continues to use e1000.
+
 
 The adapter initialization argument to `sys_net_init(uint16_t io)` is currently ignored; the selector performs PCI discovery itself. The PCnet driver can also be initialized directly with an I/O base, but normal kernel startup uses automatic discovery.
 
