@@ -9,6 +9,7 @@ void sb16_opl_write(uint8_t reg, uint8_t value);
 int32_t sb16_init(uint32_t sample_rate);
 /* Returns bytes accepted, 0 when the playback queue is full, -1 on error. */
 int32_t sb16_write(const void* data, uint32_t length);
+int32_t sb16_pending_frames(void);
 int32_t sb16_status(void); /* 1 playing, 0 idle, -1 closed */
 void sb16_shutdown(void);
 void sb16_interrupt(void);

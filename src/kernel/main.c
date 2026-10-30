@@ -1,3 +1,4 @@
+#include "../system/services/audio/mixer.h"
 #include "../system/services/audio/system_sound.h"
 #include "types.h"
 #include "users.h"
@@ -357,7 +358,7 @@ static void network_service(void* arg) {
 }
 static void audio_task(void* arg) {
     (void)arg;
-    for (;;) { system_sound_poll(); audio_service(); task_sleep_ms(2);
+    for (;;) { system_sound_poll(); audio_mixer_service(); task_sleep_ms(2);
     }
 }
 static void usb_service(void* arg) {

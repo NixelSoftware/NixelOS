@@ -37,6 +37,7 @@ static const audio_driver_ops_t sb16_ops = {
     .write     = sb16_write,
     .status    = sb16_status,
     .drain     = sb16_drain,
+    .pending_frames = sb16_pending_frames,
     .service   = sb16_service,
     .shutdown  = sb16_shutdown,
     .interrupt = sb16_interrupt,
@@ -102,6 +103,12 @@ int32_t audio_status(void) {
     audio_trace("audio_status", 0, 0, "call", 0);
     if (!active_driver || !active_driver->status) return audio_result("audio_status", 0, 0, -1);
     return audio_result("audio_status", 0, 0, active_driver->status());
+}
+
+int32_t audio_pending_frames(void) {
+    MUTEX_GUARD(audio_mutex);
+    if (!pcm_active || !active_driver || !active_driver->pending_frames) return -1;
+    return active_driver->pending_frames();
 }
 
 int32_t audio_drain(void) {

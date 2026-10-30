@@ -218,6 +218,18 @@ int32_t sb16_write(const void* data, uint32_t length) {
     return (int32_t)length;
 }
 
+int32_t sb16_pending_frames(void) {
+    MUTEX_GUARD(audio_mutex);
+    sb16_service();
+    uint32_t flags = irq_save();
+    int32_t frames = 0;
+    if (!opened || playing < 0) frames = -1;
+    else for (uint32_t i=0; i<AUDIO_SLOTS; i++)
+        if (slot_length[i] != SLOT_FILLING) frames += slot_length[i] / 4u;
+    irq_restore(flags);
+    return frames;
+}
+
 int32_t sb16_status(void) {
     MUTEX_GUARD(audio_mutex);
     sb16_service();

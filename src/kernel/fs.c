@@ -340,12 +340,17 @@ void fs_init(void) {
 
     /* BIOS drive numbers are not IDE positions. Match the VBR read by the
      * bootloader instead, and refuse ambiguous copies rather than writing
-     * to a different disk. The image format places its volume at LBA 500. */
-    const uint32_t partition_offset = 500;
+     * to a different disk. The BIOS VBR supplies the volume's disk offset. */
     const volatile uint32_t* handoff = (const volatile uint32_t*)0x6000;
     const volatile uint8_t* boot_vbr = (const volatile uint8_t*)0x6004;
     if (*handoff != 0x5642584E) {
         debug_print("[FAT32] Boot volume handoff unavailable.\n");
+        return;
+    }
+    const uint32_t partition_offset =
+        ((const volatile fat32_bpb_t*)boot_vbr)->hidden_sectors;
+    if (!partition_offset || boot_vbr[510] != 0x55 || boot_vbr[511] != 0xAA) {
+        debug_print("[FAT32] Boot volume handoff has an invalid offset/signature.\n");
         return;
     }
     unsigned found = ATA_DRIVE_COUNT;

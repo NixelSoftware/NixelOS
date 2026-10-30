@@ -5,11 +5,13 @@ import struct
 import sys
 from pathlib import Path
 
-SECTOR_SIZE = 512
+from tools.disk_layout import (
+    SECTOR_SIZE, FILESYSTEM_LBA, KERNEL_LBA, STAGE2_LBA, STAGE2_SECTORS, validate_kernel,
+)
 TOTAL_SIZE_MB = 50
 TOTAL_SECTORS = (TOTAL_SIZE_MB * 1024 * 1024) // SECTOR_SIZE
 
-FS_BASE_LBA = 500
+FS_BASE_LBA = FILESYSTEM_LBA
 PARTITION_SECTORS = TOTAL_SECTORS - FS_BASE_LBA
 
 SECTORS_PER_CLUSTER = 1
@@ -40,20 +42,26 @@ def main():
     boot_bin = Path("src/boot.bin")
     if boot_bin.exists():
         bb = boot_bin.read_bytes()
+        if len(bb) != SECTOR_SIZE:
+            raise ValueError("Boot sector must be exactly 512 bytes")
         disk[0:len(bb)] = bb
         print(f"  + Injected boot.bin ({len(bb)} bytes at LBA 0)")
 
     stage2_bin = Path("src/boot_stage2.bin")
     if stage2_bin.exists():
         s2 = stage2_bin.read_bytes()
-        disk[1 * SECTOR_SIZE : 1 * SECTOR_SIZE + len(s2)] = s2
+        if len(s2) != STAGE2_SECTORS * SECTOR_SIZE:
+            raise ValueError("Stage 2 must fit its reserved four sectors exactly")
+        disk[STAGE2_LBA * SECTOR_SIZE : STAGE2_LBA * SECTOR_SIZE + len(s2)] = s2
         print(f"  + Injected boot_stage2.bin ({len(s2)} bytes at LBA 1)")
 
     kernel_bin = Path("src/kernel/kernel.bin")
+    kb = b""
     if kernel_bin.exists():
         kb = kernel_bin.read_bytes()
-        disk[5 * SECTOR_SIZE : 5 * SECTOR_SIZE + len(kb)] = kb
-        print(f"  + Injected kernel.bin ({len(kb)} bytes at LBA 5)")
+        validate_kernel(len(kb))
+        disk[KERNEL_LBA * SECTOR_SIZE : KERNEL_LBA * SECTOR_SIZE + len(kb)] = kb
+        print(f"  + Injected kernel.bin ({len(kb)} bytes at LBA {KERNEL_LBA})")
 
     data_sectors_approx = PARTITION_SECTORS - RESERVED_SECTOR_COUNT
     sectors_per_fat = math.ceil((data_sectors_approx * 4) / (SECTOR_SIZE * SECTORS_PER_CLUSTER))
@@ -190,6 +198,9 @@ def main():
     root_dir_offset = root_dir_lba * SECTOR_SIZE
     disk[root_dir_offset : root_dir_offset + len(root_dir_entries)] = root_dir_entries
 
+    kernel_offset = KERNEL_LBA * SECTOR_SIZE
+    if kb and disk[kernel_offset:kernel_offset + len(kb)] != kb:
+        raise ValueError("Disk layout overwrote kernel bytes while creating the filesystem")
     with open(OUTPUT_IMAGE, "wb") as f:
         f.write(disk)
     print(f"[SUCCESS] Wrote full bootable FAT32 disk to {OUTPUT_IMAGE}")

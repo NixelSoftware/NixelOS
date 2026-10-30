@@ -74,6 +74,12 @@ void pc_speaker_tick(void) {
     outb(0x61, gate | (audible && on ? 3u : 0u));
 }
 static int32_t status(void) { return !opened ? -1 : head != tail; }
+static int32_t pending_frames(void) {
+    uint32_t flags = task_irq_save();
+    int32_t result = opened ? (int32_t)(head - tail) : -1;
+    task_irq_restore(flags);
+    return result;
+}
 static int32_t drain(void) { if (!opened) return -1; draining = 1; return 0; }
 static void shutdown(void) {
     uint32_t flags = task_irq_save();
@@ -83,6 +89,6 @@ static void shutdown(void) {
 static void set_volume(uint32_t value) { volume = value; }
 const audio_driver_ops_t pc_speaker_ops = {
     .name = "PC speaker (mono)", .init = init, .write = write,
-    .status = status, .drain = drain, .shutdown = shutdown,
+    .status = status, .pending_frames = pending_frames, .drain = drain, .shutdown = shutdown,
     .set_volume = set_volume
 };

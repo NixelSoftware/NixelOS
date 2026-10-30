@@ -183,7 +183,7 @@ static int acquire_audio(void){
  audio_ready=opl_enabled || sys_audio_init(44100)>=0;
  audio_acquired=audio_ready;
  (void)sys_audio_device_name(audio_device,sizeof(audio_device));
- playback_error=audio_ready?0:"Selected audio device unavailable or busy";
+ playback_error=audio_ready?0:"Audio output unavailable";
  pcm_pending=0;ui_dirty=1;
  return audio_ready;
 }
@@ -257,7 +257,7 @@ void user_main(const char *args){
  audio_ready=opl_enabled || sys_audio_init(44100)>=0;
  audio_acquired=audio_ready;
  (void)sys_audio_device_name(audio_device,sizeof(audio_device));
- if(!audio_ready)playback_error="Selected audio device unavailable or busy";
+ if(!audio_ready)playback_error="Audio output unavailable";
  uint32_t opl_tick=sys_get_ticks();
  draw();
  while(!close_requested){

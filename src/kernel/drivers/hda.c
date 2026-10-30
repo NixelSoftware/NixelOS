@@ -1,4 +1,4 @@
-/* Intel HD Audio: ICH8 (8086:284b), polling, analog stereo PCM.
+/* Intel HD Audio: ICH6/ICH8 (8086:2668, 8086:284b), polling, analog stereo PCM.
  * Register/verb definitions: Intel High Definition Audio Specification 1.0a.
  * Kernel BSS and MMIO use the kernel's supervisor identity mapping.
  */
@@ -120,7 +120,8 @@ int32_t hda_probe(void) {
         const pci_device_t* dev=pci_device_at(index);
         uint32_t b=dev->bus,s=dev->slot,f=dev->function;
         pci=0x80000000u|(b<<16)|(s<<11)|(f<<8);
-        if(cfg(0)!=0x284b8086u) continue;
+        uint32_t identity=cfg(0);
+        if(identity!=0x284b8086u && identity!=0x26688086u) continue;
         if((cfg(8)>>8)!=0x040300) continue;
         uint32_t bar=cfg(0x10);
         if(!bar || (bar&1) || ((bar&6)!=0 && (bar&6)!=4) || ((bar&6)==4 && cfg(0x14))) return -1;
@@ -150,7 +151,7 @@ int32_t hda_probe(void) {
         w32(0x70,0); w32(0x74,0);
         for(codec=0;codec<15;codec++) if(present&(1u<<codec)) {
             failed=0;
-            if(find_output()==0) { ready=1; debug_audio_print("[AUDIO] Intel ICH8 HD Audio analog output ready\n"); return 0; }
+            if(find_output()==0) { ready=1; debug_audio_print("[AUDIO] Intel HD Audio (ICH6/ICH8) analog output ready\n"); return 0; }
         }
         return -1;
     }
@@ -283,9 +284,13 @@ static int32_t write_pcm(const void* data,uint32_t length) {
     return failed?-1:(int32_t)length;
 }
 static int32_t status(void) { service(); return !opened || failed ? -1 : queued!=0; }
+static int32_t pending_frames(void) {
+    service();
+    return !opened || failed ? -1 : (int32_t)(queued * (BLOCK / 4u));
+}
 static int32_t drain(void) { if(!opened || failed) return -1; draining=1; service(); return failed?-1:0; }
 static void volume(uint32_t v) { vol=v>100?100:v; }
 const audio_driver_ops_t hda_ops={
-    .name="Intel ICH8 HD Audio", .init=init, .write=write_pcm, .status=status,
+    .name="Intel HD Audio (ICH6/ICH8)", .init=init, .write=write_pcm, .status=status, .pending_frames=pending_frames,
     .drain=drain, .service=service, .shutdown=shutdown, .set_volume=volume
 };

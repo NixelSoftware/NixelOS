@@ -1,4 +1,5 @@
 #include "system_sound.h"
+#include "mixer.h"
 #include "../../../kernel/fs.h"
 #include "../../../kernel/hal/audio.h"
 #include "../../../kernel/paging.h"
@@ -33,7 +34,7 @@ static int tag(const uint8_t* p, const char* s) {
 }
 static void stop(void) {
     startup_log(startup_stage);
-    if (owns_audio) audio_shutdown();
+    if (owns_audio) audio_mixer_close(0);
     owns_audio = 0;
     while (startup_frame_count)
         paging_frame_free(startup_frames[--startup_frame_count]);
@@ -122,13 +123,10 @@ void system_sound_start(void) {
         pos += length + (length & 1u);
     }
     if (!rate || !remaining || (remaining % frame_size)) { stop(); return; }
-    startup_stage = "HAL initialization failed at source/44100/48000 Hz";
+    startup_stage = "mixer stream initialization failed";
     source_rate = output_rate = rate;
-    if (audio_init(output_rate) < 0) {
-        if (rate != 44100u && audio_init(44100u) == 0) output_rate = 44100u;
-        else if (audio_init(48000u) == 0) output_rate = 48000u;
-        else { stop(); return; }
-    }
+    user_audio_format_t format = {rate, 2, USER_AUDIO_S16_LE};
+    if (audio_mixer_open(0, &format) < 0) { stop(); return; }
     owns_audio = 1;
     source_frames = remaining / frame_size;
     source_index = fraction = pending = pending_offset = 0;
@@ -156,15 +154,15 @@ static int32_t startup_interpolate(int32_t a, int32_t b) {
 void system_sound_poll(void) {
     MUTEX_GUARD(startup_mutex);
     if (!active) return;
-    if (audio_status() < 0) {
+    if (audio_mixer_status(0) < 0) {
         startup_stage = "audio device reported a playback error"; stop(); return;
     }
     if ((uint32_t)(frame_timer - last_progress) > 300u) {
         startup_stage = "audio queue/drain timed out after 3 seconds"; stop(); return;
     }
     if (source_index >= source_frames && !pending) {
-        if (audio_drain() < 0) { startup_stage = "audio drain failed"; stop(); }
-        else if (audio_status() == 0) { startup_stage = "playback completed"; stop(); }
+        if (audio_mixer_drain(0) < 0) { startup_stage = "audio drain failed"; stop(); }
+        else if (audio_mixer_status(0) == 0) { startup_stage = "playback completed"; stop(); }
         return;
     }
     if (!pending) {
@@ -190,7 +188,7 @@ void system_sound_poll(void) {
         pending = frames * 4;
         pending_offset = 0;
     }
-    int32_t written = audio_write(buffer + pending_offset, pending - pending_offset);
+    int32_t written = audio_mixer_write(0, buffer + pending_offset, pending - pending_offset);
     if (written == 0) return;
     if (written < 0 || (uint32_t)written > pending - pending_offset || (written & 3)) {
         startup_stage = "audio device rejected startup PCM";

@@ -43,8 +43,8 @@ from the kernel's global data and display buffers.
 | 26 | `sys_dns_start` | EBX = hostname | resolver handle, or `-1` if another lookup is active |
 | 27 | `sys_dns_poll` | EBX = resolver handle, ECX = writable IPv4 output | `0` pending, `1` resolved, `2` failed |
 | 28 | `sys_memory_info` | EBX = writable `user_memory_info_t*` | `0` success, `-1` invalid output buffer |
-| 29 | `sys_audio_init` | EBX = sample rate | `0` opened, `-1` unavailable or busy |
-| 30 | `sys_audio_write` | EBX = readable signed 16-bit stereo PCM, ECX = bytes (4..16384, multiple of 4) | bytes accepted, `0` queue full, `-1` invalid/closed/draining |
+| 29 | `sys_audio_init` | EBX = sample rate | `0` caller stream opened, `-1` invalid format, stream limit, or output unavailable |
+| 30 | `sys_audio_write` | EBX = readable PCM, ECX = bytes (1..16384, whole source frames) | bytes accepted, `0` queue full, `-1` invalid/closed/draining |
 | 31 | `sys_audio_status` | none | `1` queued/playing, `0` drained, `-1` unavailable |
 | 32 | `sys_audio_shutdown` | none | closes the caller's audio stream |
 | 33 | `sys_fs_read_at` | as read, with byte offset in ESI | bytes read, or `-1` |
@@ -57,10 +57,9 @@ to a shell worker so filesystem waits leave input processing available.
 Audio ownership belongs to the calling address space. Retry a full queue after
 `sys_yield`. Once the final PCM block is accepted, call `sys_audio_drain` and
 poll `sys_audio_status` until it returns zero before shutting down. Drain marks
-the end of the stream, rejects further writes, and lets DMA stop at the exact
-last block. Native rates up to 44.1 kHz are recommended for SB16 compatibility.
-The `sound` app converts higher-rate WAV sources (up to 48 kHz) to 44.1 kHz with
-streaming linear interpolation and keeps its output queue filled with full blocks.
+the end of the caller's stream and rejects further writes. Other streams keep
+playing; the shared device stays open until its final client closes. The kernel
+mixer chooses the device rate, so application source rates need not match the codec.
 
 
 `user_memory_info_t` is defined in `src/system/user/memory_api.h` as four
@@ -139,3 +138,23 @@ key events. Raw clients must release held keys on `USER_WINDOW_EVENT_KEYS_RESET`
 launching the port.
 The kernel switches from the loader's temporary stack to a BSS-owned boot stack
 before entering C, so switching app address spaces preserves the init task's stack.
+
+Audio passes through the shared kernel mixer before reaching the selected HAL device.
+Each address space owns one stream; startup sounds use a separate system stream.
+Existing `sys_audio_init(rate)` clients submit signed 16-bit stereo at their source
+rate. `sys_audio_configure(&format)` (syscall 50, EBX = `user_audio_format_t*`)
+also accepts mono/stereo U8, S16LE, S24LE and S32LE at 4000–192000 Hz. Compressed
+formats are decoded by the application first. The mixer converts to stereo S16,
+resamples with persistent linear interpolation, adds streams with saturation,
+and negotiates a rate supported by the output codec (48 kHz preferred).
+
+Writes copy into bounded per-stream queues and may accept a partial number of
+whole source frames; zero means retry after yielding. Drain seals only the calling
+stream. Status remains busy until that stream's accepted samples have reached the
+hardware playback boundary, even when another stream continues playing. Close or
+process exit releases only the owner's stream. Device selection through Settings
+or the volume panel reopens the shared sink and preserves queued source samples;
+a brief gap and loss of already submitted device buffers can occur during switching.
+Hardware OPL syscalls return unavailable so synthesizers use their software PCM path.
+
+Run `sh src/system/services/audio/tests/run_mixer_tests.sh` for mixer regressions.

@@ -1,6 +1,6 @@
+#include "../system/services/audio/mixer.h"
 #include "../system/services/audio/system_sound.h"
 #include "hal/audio.h"
-static unsigned int audio_owner;
 #include "syscall.h"
 #include "task.h"
 #include "mutex.h"
@@ -164,7 +164,7 @@ static uint8_t ping_identifier_in_use(uint16_t identifier) {
 
 void syscall_forget_address_space(uint32_t directory_address) {
     if (!directory_address) return;
-    if (audio_owner == directory_address) { audio_shutdown(); audio_owner = 0; }
+    audio_mixer_close(directory_address);
     for (uint32_t i = 0; i < USER_PING_REQUEST_MAX; i++) {
         if (user_ping_requests[i].owner_directory == directory_address)
             user_ping_requests[i].active = 0;
@@ -369,34 +369,36 @@ static void syscall_dispatch_impl(registers_t* regs) {
             return;
         }
         case SYS_AUDIO_OPL:
-            if (regs->ebx == 256) {
-                regs->eax = (uint32_t)(audio_owner ? -1 : audio_opl_init());
-                if ((int32_t)regs->eax == 0) audio_owner = paging_current_directory();
-            } else {
-                regs->eax = (uint32_t)(audio_owner == paging_current_directory()
-                    ? audio_opl_write(regs->ebx, regs->ecx) : -1);
+            /* Hardware FM bypasses mixing; clients use their software PCM synth. */
+            regs->eax = (uint32_t)-1;
+            return;
+        case SYS_AUDIO_CONFIGURE: {
+            if (!user_readable(regs->ebx, sizeof(user_audio_format_t))) {
+                regs->eax = (uint32_t)-1; return;
             }
+            user_audio_format_t format = *(const user_audio_format_t*)regs->ebx;
+            regs->eax = audio_mixer_open(paging_current_directory(), &format);
             return;
-        case SYS_AUDIO_INIT:
-            regs->eax = (uint32_t)(audio_owner ? -1 : audio_init(regs->ebx));
-            if ((int32_t)regs->eax == 0) audio_owner = paging_current_directory();
+        }
+        case SYS_AUDIO_INIT: {
+            user_audio_format_t format = {regs->ebx, 2, USER_AUDIO_S16_LE};
+            regs->eax = audio_mixer_open(paging_current_directory(), &format);
             return;
+        }
         case SYS_AUDIO_WRITE:
-            regs->eax = (uint32_t)((audio_owner != paging_current_directory() ||
-                regs->ecx > AUDIO_BUFFER_CHUNK_SIZE || !user_readable(regs->ebx, regs->ecx))
-                ? -1 : audio_write((const void*)regs->ebx, regs->ecx));
+            regs->eax = (uint32_t)((!regs->ecx || regs->ecx > AUDIO_BUFFER_CHUNK_SIZE ||
+                !user_readable(regs->ebx, regs->ecx)) ? -1 :
+                audio_mixer_write(paging_current_directory(), (const void*)regs->ebx, regs->ecx));
             return;
         case SYS_AUDIO_DRAIN:
-            regs->eax = (uint32_t)(audio_owner == paging_current_directory() ? audio_drain() : -1);
+            regs->eax = audio_mixer_drain(paging_current_directory());
             return;
         case SYS_AUDIO_STATUS:
-            regs->eax = (uint32_t)(audio_owner == paging_current_directory() ? audio_status() : -1);
+            regs->eax = audio_mixer_status(paging_current_directory());
             return;
         case SYS_AUDIO_SHUTDOWN:
-            regs->eax = (uint32_t)-1;
-            if (audio_owner == paging_current_directory()) {
-                audio_shutdown(); audio_owner = 0; regs->eax = 0;
-            }
+            audio_mixer_close(paging_current_directory());
+            regs->eax = 0;
             return;
         case SYS_FS_READ_AT:
         case SYS_FS_READ: {
@@ -988,12 +990,11 @@ void syscall_dispatch(registers_t* regs) {
             syscall_dispatch_impl(regs);
             return;
         case SYS_AUDIO_OPL:
-        case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN: {
+        case SYS_AUDIO_CONFIGURE: case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN: {
             uint32_t call = regs->eax;
             syscall_dispatch_impl(regs);
             if ((int32_t)regs->eax < 0) {
                 debug_audio_print("[AUDIO] syscall failed: number=");debug_audio_hex(call);
-                debug_audio_print(" owner=");debug_audio_hex(audio_owner);
                 debug_audio_print(" caller=");debug_audio_hex(paging_current_directory());debug_audio_print("\n");
             }
             return;

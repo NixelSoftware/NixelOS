@@ -215,7 +215,7 @@ static void play_file(const char* path, int process_only) {
         else if (sys_audio_init(48000u) == 0)
             playback_rate = 48000u;
         else {
-            print("Selected device busy or no supported PCM output rate."); return;
+            print("Audio output unavailable or stream limit reached."); return;
         }
     }
     (void)sys_audio_device_name(audio_device, sizeof(audio_device));

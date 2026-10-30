@@ -89,7 +89,7 @@ KERNEL_C := \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
-  src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/loader/app_loader.c \
+  src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/services/audio/mixer.c src/system/loader/app_loader.c \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
@@ -269,15 +269,14 @@ ifeq ($(STARTUP_TRACE),1)
 endif
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.tmp').unlink(missing_ok=True)"
 
-src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
-#	$(PYTHON) -c "import pathlib,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sectors=(n+511)//512; print(f'Kernel image: {n} bytes ({sectors} sectors)'); sys.exit('Kernel image exceeds the 495-sector boot limit' if not 0 < sectors <= 495 else 0)"
-	$(PYTHON) -c "import pathlib,subprocess,sys; n=pathlib.Path('src/kernel/kernel.bin').stat().st_size; sys.exit(subprocess.call(['$(NASM)','-f','bin','-D',f'KERNEL_SECTORS={(n+511)//512}','-D',f'KERNEL_SIZE_BYTES={n}','src/boot/boot_stage2.asm','-o','src/boot_stage2.bin']))"
+src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin tools/build_boot_stage2.py tools/disk_layout.py
+	$(PYTHON) tools/build_boot_stage2.py --nasm "$(NASM)"
 
 RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
 
 DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
 
-os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
+os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py tools/disk_layout.py
 	$(PYTHON) mkfat32.py os.img.new
 	$(PYTHON) -c "from pathlib import Path; p=Path('os.img.new'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d); p.replace('os.img')"
 	$(MAKE) clean-build
@@ -351,3 +350,15 @@ doom.bin: Makefile $(DOOM_OBJ)
 .PHONY: doom-data
 doom-data:
 	$(PYTHON) tools/fetch_doom_shareware.py
+
+src/system/services/audio/mixer.o src/system/services/audio/system_sound.o src/kernel/main.o src/kernel/syscall.o src/system/graphics/wm/wm.o src/system/graphics/settings/settings.o: src/system/services/audio/mixer.h src/system/user/audio_api.h
+src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/pc_speaker.o src/system/services/audio/mixer.o: src/kernel/hal/audio.h
+
+.PHONY: test-audio
+test-audio:
+	sh src/system/services/audio/tests/run_mixer_tests.sh
+	sh src/apps/doom/tests/run_audio_tests.sh
+
+.PHONY: test-boot-layout
+test-boot-layout:
+	$(PYTHON) tools/tests/test_disk_layout.py

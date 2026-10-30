@@ -1,10 +1,17 @@
 [org 0x7E00]
 [bits 16]
 
+%ifndef FILESYSTEM_LBA
+%error "Build stage 2 through tools/build_boot_stage2.py (disk layout required)"
+%endif
+%if KERNEL_SIZE_BYTES > MAX_KERNEL_BYTES
+%error "Kernel exceeds reserved disk or BIOS staging space"
+%endif
+
 stage2_entry:
     mov [boot_drive], dl
     ; Snapshot the boot volume through BIOS DL before leaving real mode.
-    ; Kernel handoff: magic at 0x6000, FAT32 VBR at 0x6004 (LBA 500).
+    ; Kernel handoff: magic at 0x6000, FAT32 VBR at 0x6004 (FILESYSTEM_LBA).
     mov dword [0x6000], 0
     mov si, dap_volume
     mov ah, 0x42
@@ -16,8 +23,9 @@ stage2_entry:
     mov es, ax
     mov bx, 0x6004
     mov ax, 0x0201
-    mov cx, 60
-    mov dh, 7
+    mov ch, (FILESYSTEM_LBA / (63 * 16)) & 255
+    mov cl, ((FILESYSTEM_LBA % 63) + 1) | (((FILESYSTEM_LBA / (63 * 16)) >> 2) & 0xC0)
+    mov dh, (FILESYSTEM_LBA / 63) % 16
     mov dl, [boot_drive]
     int 0x13
     jc .volume_done
@@ -42,7 +50,7 @@ stage2_entry:
 .a20_ok:
     mov si, msg_a20
     call print_string
-    mov dword [k_lba], 5
+    mov dword [k_lba], KERNEL_LBA
     mov word [k_seg], 0x1000
     mov word [kernel_sectors_remaining], KERNEL_SECTORS
 
@@ -273,7 +281,7 @@ dap_volume:
     db 0x10, 0
     dw 1
     dw 0x6004, 0
-    dq 500
+    dq FILESYSTEM_LBA
 
 dap_chunk:
     db 0x10
@@ -283,7 +291,7 @@ dap_chunk:
 k_seg:
     dw 0x1000
 k_lba:
-    dq 5
+    dq KERNEL_LBA
 chunk_sectors:
     dw 0
 kernel_sectors_remaining:

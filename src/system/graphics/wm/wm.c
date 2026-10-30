@@ -1,3 +1,4 @@
+#include "../../services/audio/mixer.h"
 #include "../settings/settings.h"
 #include "../../../kernel/hal/audio.h"
 #include "../../../kernel/hal/video.h"
@@ -474,7 +475,7 @@ static void volume_draw(void) {
         wm_api->graphics.draw_button(x + 12, y + 64 + i * 26, 240, 24,
             audio_device_name(i), audio_device_selected() == i);
     wm_api->graphics.draw_string(x + 12, y + 146,
-        volume_busy ? "Stop playback to switch" : "Output device", COLOR_BLACK);
+        volume_busy ? "Output unavailable" : "Output device", COLOR_BLACK);
 }
 static int volume_mouse(int x, int y, int left, int down) {
     if (!left) volume_drag = 0;
@@ -497,7 +498,7 @@ static int volume_mouse(int x, int y, int left, int down) {
         }
         for (uint32_t i = 0; i < audio_device_count(); i++)
             if (y >= VOLUME_Y + 64 + (int)i * 26 && y < VOLUME_Y + 88 + (int)i * 26)
-                volume_busy = audio_device_select(i) < 0;
+                volume_busy = audio_mixer_device_select(i) < 0;
     }
     if (volume_drag && left) {
         int value = (x - VOLUME_X - 16) / 2;

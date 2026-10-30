@@ -1,3 +1,4 @@
+#include "../../services/audio/mixer.h"
 #include "settings.h"
 #include "../wm/wm.h"
 #include "../wm/theme.h"
@@ -188,7 +189,7 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     } else if (tab == 2) {
         uint32_t volume = audio_get_volume(), count = audio_device_count();
         if (hit(x,y,20,152,220) && count) {
-            set_message(audio_device_select((audio_device_selected() + 1) % count) < 0 ?
+            set_message(audio_mixer_device_select((audio_device_selected() + 1) % count) < 0 ?
                 "Could not select output device." : "Output device changed.");
         }
         if (hit(x,y,20,244,64)) audio_set_volume(volume > 10 ? volume - 10 : 0);

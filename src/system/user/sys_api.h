@@ -6,6 +6,7 @@
 #include "../../kernel/hal/net_types.h"
 #include "window_api.h"
 #include "memory_api.h"
+#include "audio_api.h"
 
 /* i386 ABI: call number in EAX, arguments in EBX/ECX/EDX, result in EAX. */
 enum {
@@ -37,17 +38,17 @@ enum {
     SYS_DNS_START = 26,      /* EBX: hostname; returns resolver handle */
     SYS_DNS_POLL = 27,       /* EBX: resolver handle, ECX: writable IPv4 output */
     SYS_MEMORY_INFO = 28, /* EBX: writable user_memory_info_t */
-    SYS_AUDIO_INIT = 29, /* EBX: sample rate, signed 16-bit stereo PCM */
-    SYS_AUDIO_WRITE = 30, /* EBX: PCM data, ECX: bytes (4..16384, multiple of 4); 0 queue full, positive bytes accepted */
+    SYS_AUDIO_INIT = 29, /* EBX: source rate; open caller mixed signed 16-bit stereo stream */
+    SYS_AUDIO_WRITE = 30, /* EBX: PCM, ECX: bytes (1..16384, whole source frames); 0 queue full, positive accepted */
     SYS_AUDIO_STATUS = 31, /* 1 playing, 0 idle, -1 unavailable */
-    SYS_AUDIO_SHUTDOWN = 32, /* requests a kernel managed shutdown */
+    SYS_AUDIO_SHUTDOWN = 32, /* closes only the caller audio stream */
     SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
     SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
     SYS_REBOOT = 35, /* requests a kernel managed reboot */
     SYS_DETACH = 36, /* reparent current process to PID 0; releases terminal wait */
     SYS_SERIAL_LOG_READ = 44, /* EBX: output, ECX: capacity (1..256), EDX: cursor */
     SYS_AUDIO_DEVICE_NAME = 43, /* EBX: output string, ECX: capacity (1..64); selected HAL device */
-    SYS_AUDIO_OPL = 42, /* EBX=256: probe/acquire HAL OPL; otherwise EBX=register, ECX=value */
+    SYS_AUDIO_OPL = 42, /* legacy hardware OPL returns -1; synthesize PCM into the shared mixer */
     SYS_GETPID = 37,
     SYS_GETPPID = 38,
     SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FAT attributes */
@@ -57,6 +58,7 @@ enum {
     SYS_TCP_ACCEPT = 46, /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
     SYS_TCP_REMOTE_IP = 47, /* EBX: socket handle; returns uint32_t IPv4 address */
     SYS_RTC_TIME = 48, /* EBX: writable user_rtc_time_t* */
+    SYS_AUDIO_CONFIGURE = 50, /* EBX: user_audio_format_t; open caller-owned mixed PCM stream */
     SYS_PCI_DEVICE_INFO = 49 /* EBX: index, ECX: writable user_pci_device_t* */
 };
 
@@ -115,6 +117,12 @@ static inline int32_t sys_audio_opl(uint32_t reg, uint32_t value) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result)
         : "0"(SYS_AUDIO_OPL), "b"(reg), "c"(value) : "edx", "memory", "cc");
+    return result;
+}
+static inline int32_t sys_audio_configure(const user_audio_format_t* format) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_AUDIO_CONFIGURE), "b"(format) : "ecx", "edx", "memory", "cc");
     return result;
 }
 static inline int32_t sys_audio_init(uint32_t rate) {

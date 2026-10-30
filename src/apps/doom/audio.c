@@ -5,7 +5,7 @@
 #include "doomgeneric/w_wad.h"
 #include "doomgeneric/z_zone.h"
 #define CHANNELS 16
-#define RATE 11025
+#define MIX_FRAMES 1024u /* Bounded source blocks; the kernel mixer handles device DMA sizing. */
 static struct {
     const unsigned char *data;
     unsigned length, step;
@@ -14,15 +14,27 @@ static struct {
 } voices[CHANNELS];
 int use_libsamplerate;
 float libsamplerate_scale = 1.0f;
-static int16_t pcm[2048 * 2];
+static int16_t pcm[MIX_FRAMES * 2];
+static uint32_t output_rate;
+static unsigned owed_frames, pending_offset, pending_bytes;
+static boolean audio_ready;
 static uint32_t last_tick;
 static unsigned fractional;
 static boolean init(boolean prefix) {
     (void)prefix;
-    if (sys_audio_init(RATE) < 0)
-        return false;
-    last_tick = sys_get_ticks();
-    return true;
+    static const uint32_t rates[] = {11025, 44100, 48000};
+    audio_ready = false;
+    for (unsigned i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
+        if (sys_audio_init(rates[i]) == 0) {
+            output_rate = rates[i];
+            fractional = owed_frames = pending_offset = pending_bytes = 0;
+            last_tick = sys_get_ticks();
+            audio_ready = true;
+            return true;
+        }
+    }
+    puts("Doom: sound effects unavailable (audio output or stream unavailable).");
+    return false;
 }
 static void stop(int c) {
     if (c < 0 || c >= CHANNELS)
@@ -39,7 +51,9 @@ static void stop(int c) {
 static void shutdown(void) {
     for (int i = 0; i < CHANNELS; i++)
         stop(i);
-    sys_audio_drain();
+    if (audio_ready)
+        sys_audio_shutdown();
+    audio_ready = false;
 }
 static int lumpnum(sfxinfo_t *s) {
     char name[9];
@@ -53,7 +67,7 @@ static void params(int c, int volume, int separation) {
     voices[c].separation = separation;
 }
 static int start(sfxinfo_t *s, int c, int volume, int separation) {
-    if (c < 0 || c >= CHANNELS)
+    if (!audio_ready || c < 0 || c >= CHANNELS)
         return -1;
     stop(c);
     int lump = s->lumpnum;
@@ -69,7 +83,7 @@ static int start(sfxinfo_t *s, int c, int volume, int separation) {
     voices[c].data = d + 24;
     voices[c].length = size - 32;
     voices[c].position = 0;
-    voices[c].step = (rate << 16) / RATE;
+    voices[c].step = (rate << 16) / output_rate;
     voices[c].lump = lump;
     params(c, volume, separation);
     return c;
@@ -79,19 +93,8 @@ static void cache(sfxinfo_t *s, int n) {
     (void)s;
     (void)n;
 }
-static void update(void) {
-    uint32_t now = sys_get_ticks(), elapsed = now - last_tick;
-    if (!elapsed)
-        return;
-    last_tick = now;
-    if (elapsed > 10)
-        elapsed = 10;
-    fractional += elapsed * RATE;
-    unsigned frames = fractional / 100;
-    fractional %= 100;
-    if (frames > 2048)
-        frames = 2048;
-    for (unsigned n = 0; n < frames; n++) {
+static void mix_block(void) {
+    for (unsigned n = 0; n < MIX_FRAMES; n++) {
         int l = 0, r = 0;
         for (int c = 0; c < CHANNELS; c++)
             if (voices[c].data) {
@@ -117,7 +120,43 @@ static void update(void) {
         pcm[n * 2] = l;
         pcm[n * 2 + 1] = r;
     }
-    sys_audio_write(pcm, frames * 4);
+}
+static void update(void) {
+    if (!audio_ready)
+        return;
+    uint32_t now = sys_get_ticks(), elapsed = now - last_tick;
+    last_tick = now;
+    if (elapsed > 10)
+        elapsed = 10;
+    fractional += elapsed * output_rate;
+    owed_frames += fractional / 100;
+    fractional %= 100;
+    /* Bound latency after a long stall without discarding a partially sent block. */
+    if (owed_frames > output_rate / 4)
+        owed_frames = output_rate / 4;
+    for (;;) {
+        if (pending_offset < pending_bytes) {
+            int accepted = sys_audio_write((const uint8_t *)pcm + pending_offset,
+                                           pending_bytes - pending_offset);
+            if (accepted < 0 || (unsigned)accepted > pending_bytes - pending_offset ||
+                (accepted & 3)) {
+                puts("Doom: audio device stopped accepting PCM.");
+                sys_audio_shutdown();
+                audio_ready = false;
+                return;
+            }
+            if (!accepted)
+                return; /* Queue full; retry these same samples next tick. */
+            pending_offset += accepted;
+            continue;
+        }
+        if (owed_frames < MIX_FRAMES)
+            return;
+        mix_block();
+        owed_frames -= MIX_FRAMES;
+        pending_offset = 0;
+        pending_bytes = sizeof(pcm);
+    }
 }
 static snddevice_t devices[] = {SNDDEVICE_SB};
 sound_module_t DG_sound_module = {devices, 1,     init, shutdown, lumpnum, update,
