@@ -187,6 +187,7 @@ SYNDIG_C := \
 SYNDIG_OBJ := $(SYNDIG_DIR)/entry.o $(SYNDIG_C:.c=.o)
 SYNDIG_HEADERS := $(wildcard $(SYNDIG_DIR)/*.h $(SYNDIG_DIR)/compat/*.h $(SYNDIG_DIR)/upstream/*.h)
 $(SYNDIG_C:.c=.o): $(SYNDIG_HEADERS)
+$(SYNDIG_DIR)/main.o: src/system/graphics/wm/theme.h
 
 syndig.bin: Makefile $(SYNDIG_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(SYNDIG_DIR)/syndig.tmp
