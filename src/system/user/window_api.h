@@ -30,6 +30,8 @@ typedef enum {
     USER_WINDOW_DRAW_IMAGE_CLIPPED = 6, /* color=(clip_top<<16)|clip_bottom, window-relative */
     USER_WINDOW_DRAW_BEGIN = 7, /* Preserve the visible frame until present. */
     USER_WINDOW_3D_SUPPORTED = 8, /* returns 1 for VirGL, 0 if unsupported */
+    USER_WINDOW_DRAW_PIXELS = 10, /* packed 0x00RRGGBB pixels; width*height*4 bytes */
+    USER_WINDOW_RAW_KEYS = 11, /* pressed=1 enables scan-code make/break events */
     USER_WINDOW_DRAW_TRIANGLES = 9 /* data=triangle array; color=clear RGB.
                                     * returns 1 rendered, 0 unavailable, -1 error */
 } user_window_draw_op_t;
@@ -49,6 +51,8 @@ typedef enum {
     USER_WINDOW_EVENT_KEY = 1,
     USER_WINDOW_EVENT_MOUSE = 2,
     USER_WINDOW_EVENT_CLOSE = 3,
+    USER_WINDOW_EVENT_KEYS_RESET = 6, /* focus lost or input queue overflow */
+    USER_WINDOW_EVENT_SCANCODE = 5, /* key=PS/2 byte, including E0 and releases */
     USER_WINDOW_EVENT_REDRAW = 4
 } user_window_event_type_t;
 

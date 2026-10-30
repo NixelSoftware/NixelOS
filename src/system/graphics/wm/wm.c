@@ -67,6 +67,8 @@ typedef struct {
     uint8_t event_read;
     uint8_t event_write;
     uint8_t active;
+    uint8_t raw_keys;
+    uint8_t keys_reset_pending;
 } user_window_slot_t;
 
 static user_window_slot_t user_window_slots[WM_MAX_WINDOWS];
@@ -93,6 +95,7 @@ static void user_window_enqueue(user_window_slot_t* slot,
                                 const user_window_event_t* event) {
     if (!slot || !event) return;
     uint8_t next = (uint8_t)((slot->event_write + 1u) % USER_WINDOW_EVENT_CAPACITY);
+    if (next == slot->event_read && slot->raw_keys) slot->keys_reset_pending = 1;
     if (next == slot->event_read)
         slot->event_read = (uint8_t)((slot->event_read + 1u) % USER_WINDOW_EVENT_CAPACITY);
     slot->events[slot->event_write] = *event;
@@ -260,6 +263,9 @@ static void wm_bring_to_front_index(int target_index) {
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (!windows[i]) continue;
         uint32_t previous = window_context_enter(i);
+        user_window_slot_t* slot = user_slot_for_window(windows[i]);
+        if (i != target_index && windows[i]->focused && slot && slot->raw_keys)
+            slot->keys_reset_pending = 1;
         windows[i]->focused = (i == target_index);
         window_context_leave(previous);
     }
@@ -643,6 +649,8 @@ int wm_register_window(Window* window) {
             for (int j = 0; j < WM_MAX_WINDOWS; j++) {
                 if (j == i || !windows[j]) continue;
                 previous = window_context_enter(j);
+                user_window_slot_t* old_slot = user_slot_for_window(windows[j]);
+                if (old_slot && old_slot->raw_keys) old_slot->keys_reset_pending = 1;
                 windows[j]->focused = 0;
                 window_context_leave(previous);
             }
@@ -725,6 +733,8 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (i == window_index || !windows[i]) continue;
         uint32_t previous = window_context_enter(i);
+        user_window_slot_t* old_slot = user_slot_for_window(windows[i]);
+        if (old_slot && old_slot->raw_keys) old_slot->keys_reset_pending = 1;
         windows[i]->focused = 0;
         window_context_leave(previous);
     }
@@ -743,6 +753,24 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
     if (!slot || !drawing || !wm_api) return -1;
     Window* window = &slot->window;
 
+    if (drawing->operation == USER_WINDOW_RAW_KEYS) {
+        slot->raw_keys = drawing->pressed != 0;
+        return 0;
+    }
+    if (drawing->operation == USER_WINDOW_DRAW_PIXELS) {
+        if (!image_data || drawing->width <= 0 || drawing->height <= 0 ||
+            drawing->width > 640 || drawing->height > 480 ||
+            drawing->x < 0 || drawing->y < 18 ||
+            drawing->x > window->w - drawing->width ||
+            drawing->y > window->h - drawing->height ||
+            drawing->data_length != (uint32_t)drawing->width * drawing->height * 4u) return -1;
+        const uint32_t* pixels = (const uint32_t*)image_data;
+        for (int y = 0; y < drawing->height; y++)
+            for (int x = 0; x < drawing->width; x++)
+                user_surface_set_pixel(slot, drawing->x+x, drawing->y+y,
+                    pixels[y*drawing->width+x] & 0xffffffu);
+        return 0;
+    }
     if (drawing->operation == USER_WINDOW_3D_SUPPORTED)
         return video_3d_available();
     if (drawing->operation == USER_WINDOW_DRAW_TRIANGLES) {
@@ -900,6 +928,13 @@ int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
     MUTEX_GUARD(kernel_mutex);
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !event) return -1;
+    if (slot->keys_reset_pending) {
+        slot->keys_reset_pending = 0;
+        slot->event_read = slot->event_write;
+        *event = (user_window_event_t){0};
+        event->type = USER_WINDOW_EVENT_KEYS_RESET;
+        return 1;
+    }
     if (slot->event_read == slot->event_write) {
         event->type = USER_WINDOW_EVENT_NONE;
         return 0;
@@ -1256,6 +1291,22 @@ static void handle_key_event(const os_input_event_t* event) {
     char key = (scancode == 0x3C || scancode == 0x3D || scancode == 0x48 ||
                 scancode == 0x50 || scancode == 0x47 || scancode == 0x4F ||
                 scancode == 0x49 || scancode == 0x51 || scancode == 0x3F || scancode == 0x01) ? (char)scancode : translated;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        Window* w = windows[i];
+        if (!w) continue;
+        uint32_t previous = window_context_enter(i);
+        if (!w->visible || !w->focused) { window_context_leave(previous); continue; }
+        user_window_slot_t* slot = user_slot_for_window(w);
+        if (slot && slot->raw_keys) {
+            user_window_event_t queued = {0};
+            queued.type = USER_WINDOW_EVENT_SCANCODE;
+            queued.key = scancode;
+            user_window_enqueue(slot, &queued);
+            window_context_leave(previous);
+            return;
+        }
+        window_context_leave(previous);
+    }
     if (!key) return;
     if (desktop_key(key)) { request_redraw(); return; }
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {

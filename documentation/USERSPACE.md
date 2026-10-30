@@ -10,7 +10,7 @@ The first system-call ABI lives in `src/system/user/sys_api.h`. Calls use
 result in EAX:
 
 User executables are linked and loaded at `0x00C00000` and receive a private
-mapping through `0x00E00000`. This keeps their writable image and data away
+mapping through `0x01000000`. This keeps their writable image and data away
 from the kernel's global data and display buffers.
 
 | Number | Call | Arguments | Result |
@@ -130,3 +130,12 @@ launch it from the shell to exercise write, tick, and exit calls.
 Timer interrupts can switch between concurrent user applications and kernel
 workers. Legacy ring-0 applications still use the privileged `os_api_t`
 callback interface; ring-3 apps use validated kernel services.
+
+Doom uses the expanded 4 MiB app slot with a 2 MiB zone. Window clients may submit
+bounded packed RGB frames with `USER_WINDOW_DRAW_PIXELS` and opt into raw PS/2
+make/break events with `USER_WINDOW_RAW_KEYS`. Existing clients keep translated
+key events. Raw clients must release held keys on `USER_WINDOW_EVENT_KEYS_RESET`
+(focus changes or queue overflow). See `src/apps/doom/README.md` for building and
+launching the port.
+The kernel switches from the loader's temporary stack to a BSS-owned boot stack
+before entering C, so switching app address spaces preserves the init task's stack.

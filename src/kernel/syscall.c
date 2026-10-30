@@ -730,6 +730,15 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     return;
                 }
                 text_pointer = text;
+            } else if (drawing.operation == USER_WINDOW_DRAW_PIXELS) {
+                if (drawing.width <= 0 || drawing.width > 640 ||
+                    drawing.height <= 0 || drawing.height > 480 ||
+                    drawing.data_length != (uint32_t)drawing.width * drawing.height * 4u ||
+                    !user_readable((uint32_t)drawing.data, drawing.data_length)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                image_pointer = drawing.data;
             } else if (drawing.operation == USER_WINDOW_DRAW_TRIANGLES) {
                 uint32_t source = (uint32_t)drawing.data;
                 if (!drawing.data_length || drawing.data_length > sizeof(triangles) ||

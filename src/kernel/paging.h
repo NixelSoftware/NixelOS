@@ -9,7 +9,7 @@ void paging_memory_info(user_memory_info_t* out);
 /* Physical frames are discovered from the bootloader BIOS memory map. */
 #define PAGE_SIZE 4096u
 #define APP_VIRTUAL_BASE 0x00C00000u
-#define APP_VIRTUAL_LIMIT 0x00E00000u
+#define APP_VIRTUAL_LIMIT 0x01000000u
 
 typedef struct {
     uint32_t* directory;

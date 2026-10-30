@@ -30,10 +30,17 @@ int key_right = KEY_RIGHTARROW;
 int key_left = KEY_LEFTARROW;
 int key_up = KEY_UPARROW;
 int key_down = KEY_DOWNARROW; 
+#ifdef NIXEL_DOOM
+int key_strafeleft = 'a';
+int key_straferight = 'd';
+int key_fire = KEY_RCTRL;
+int key_use = ' ';
+#else
 int key_strafeleft = KEY_STRAFE_L;
 int key_straferight = KEY_STRAFE_R;
 int key_fire = KEY_FIRE;
 int key_use = KEY_USE;
+#endif
 int key_strafe = KEY_RALT;
 int key_speed = KEY_RSHIFT; 
 

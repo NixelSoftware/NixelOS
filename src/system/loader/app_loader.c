@@ -10,7 +10,7 @@
 #include "../graphics/wm/wm.h"
 
 #define APP_LOAD_LIMIT   1048576u
-#define APP_BSS_LIMIT    0x00DF0000u
+#define APP_BSS_LIMIT    0x00FF0000u
 #define APP_ARGUMENT_MAX 256u
 #define APP_INSTANCE_MAX 8
 #define APP_MAPPED_PAGES ((APP_BSS_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE)

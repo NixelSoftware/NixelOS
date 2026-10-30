@@ -257,9 +257,10 @@ void I_Quit (void)
         entry = entry->next;
     }
 
-#if ORIGCODE
+#ifdef NIXEL_DOOM
+    exit(0);
+#elif ORIGCODE
     SDL_Quit();
-
     exit(0);
 #endif
 }

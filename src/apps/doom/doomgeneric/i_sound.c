@@ -18,7 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if defined(FEATURE_SOUND) && !defined(__DJGPP__)
+#if defined(FEATURE_SOUND) && !defined(__DJGPP__) && !defined(NIXEL_DOOM)
 #include <SDL_mixer.h>
 #endif
 
@@ -130,7 +130,7 @@ static void InitSfxModule(boolean use_sfx_prefix)
 
 static void InitMusicModule(void)
 {
-#ifdef FEATURE_SOUND
+#if defined(FEATURE_SOUND) && !defined(NIXEL_DOOM)
     music_module = &DG_music_module;
 #endif /* FEATURE_SOUND */
 }

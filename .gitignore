@@ -11,3 +11,7 @@ struct
 
 /src/include/os_version.h
 /documentation/linux-for-ref/i915/
+
+# Local Doom game data
+/*.wad
+/*.WAD

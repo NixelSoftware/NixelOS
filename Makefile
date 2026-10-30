@@ -134,7 +134,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
                  lspci demo3d
-APPS := $(STANDARD_APPS) syndig qksrv qkftp
+APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
 .PHONY: all run clean clean-build FORCE_VERSION test-virgl
@@ -275,7 +275,9 @@ src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin
 
 RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
 
-os.img: $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
+DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
+
+os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py
 	$(PYTHON) mkfat32.py os.img.new
 	$(PYTHON) -c "from pathlib import Path; p=Path('os.img.new'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d); p.replace('os.img')"
 	$(MAKE) clean-build
@@ -284,7 +286,7 @@ run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) -drive file=os.img,format=raw,index=0,media=disk -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) syndig browser fastfetch'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
@@ -325,3 +327,27 @@ src/kernel/drivers/display/intel_gma.o: src/kernel/drivers/display/video_drivers
 src/system/graphics/settings/settings.o: src/kernel/hal/video.h
 
 src/kernel/drivers/display/intel_gma.o src/kernel/drivers/display/i915/i915.o: src/kernel/drivers/display/i915/i915.h src/kernel/drivers/display/i915/i915_regs.h
+
+DOOM_DIR := src/apps/doom
+DOOM_ENGINE := \
+    dummy am_map doomdef doomstat dstrings d_event d_items d_iwad \
+    d_loop d_main d_mode d_net f_finale f_wipe g_game hu_lib \
+    hu_stuff info i_cdmus i_endoom i_joystick i_scale i_sound i_system \
+    i_timer memio m_argv m_bbox m_cheat m_config m_controls m_fixed \
+    m_menu m_misc m_random p_ceilng p_doors p_enemy p_floor p_inter \
+    p_lights p_map p_maputl p_mobj p_plats p_pspr p_saveg p_setup \
+    p_sight p_spec p_switch p_telept p_tick p_user r_bsp r_data \
+    r_draw r_main r_plane r_segs r_sky r_things sha1 sounds \
+    statdump st_lib st_stuff s_sound tables v_video wi_stuff w_checksum \
+    w_file w_main w_wad z_zone w_file_stdc i_input i_video doomgeneric
+DOOM_OBJ := $(DOOM_DIR)/entry.o $(DOOM_DIR)/platform.o $(DOOM_DIR)/audio.o \
+            $(DOOM_DIR)/compat/libc.o $(addprefix $(DOOM_DIR)/doomgeneric/,$(addsuffix .o,$(DOOM_ENGINE)))
+$(DOOM_OBJ): CFLAGS += -Isrc/apps/doom/compat -DNIXEL_DOOM -DFEATURE_SOUND -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -fno-builtin -fno-stack-protector
+$(DOOM_OBJ): $(wildcard src/apps/doom/compat/*.h src/apps/doom/compat/sys/*.h src/apps/doom/doomgeneric/*.h)
+doom.bin: Makefile $(DOOM_OBJ)
+	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(DOOM_DIR)/doom.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss $(DOOM_DIR)/doom.tmp $@
+
+.PHONY: doom-data
+doom-data:
+	$(PYTHON) tools/fetch_doom_shareware.py
