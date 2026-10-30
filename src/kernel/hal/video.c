@@ -8,6 +8,9 @@ static video_framebuffer_t framebuffer;
 static int virtio_active, qemu_active, intel_active;
 static uint32_t requested_width, requested_height;
 static int resolution_status;
+/* Presentation transfers run outside kernel_mutex. Serialize the control queue
+ * with 3D submissions without requiring the worker to reacquire kernel_mutex. */
+static mutex_t command_mutex;
 int video_init(uint32_t address, uint32_t bpp, uint32_t pitch) {
     framebuffer = (video_framebuffer_t){0};
     resolution_status = 0;
@@ -68,6 +71,7 @@ int video_request_resolution(uint32_t width, uint32_t height) {
 }
 int video_resolution_status(void) { return resolution_status; }
 int video_poll_resize(void) {
+    MUTEX_GUARD(command_mutex);
     if (resolution_status == 1) {
         int ok = virtio_active ? virtio_gpu_set_resolution(&framebuffer, requested_width, requested_height) :
             qemu_active ? qemu_video_set_resolution(&framebuffer, requested_width, requested_height) :
@@ -78,5 +82,16 @@ int video_poll_resize(void) {
     return virtio_active && virtio_gpu_poll_resize(&framebuffer);
 }
 void video_present(void) {
+    MUTEX_GUARD(command_mutex);
     if (virtio_active) virtio_gpu_present();
+}
+int video_3d_available(void) {
+    MUTEX_GUARD(command_mutex);
+    return virtio_active && virgl_available();
+}
+const uint32_t* video_3d_render(const user_3d_triangle_t* triangles, uint32_t count,
+    uint32_t width, uint32_t height, uint32_t clear_color, uint32_t* stride) {
+    MUTEX_GUARD(command_mutex);
+    if (!virtio_active) return 0;
+    return virgl_render(triangles, count, width, height, clear_color, stride);
 }

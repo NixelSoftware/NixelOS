@@ -93,7 +93,7 @@ KERNEL_C := \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
-  src/kernel/drivers/display/vga.c src/kernel/drivers/display/intel_gma.c src/kernel/drivers/display/i915/i915.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c \
+  src/kernel/drivers/display/vga.c src/kernel/drivers/display/intel_gma.c src/kernel/drivers/display/i915/i915.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c src/kernel/drivers/display/virgl.c \
   src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
   src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
@@ -133,11 +133,14 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
-                 lspci
+                 lspci demo3d
 APPS := $(STANDARD_APPS) syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
-.PHONY: all run clean clean-build FORCE_VERSION
+.PHONY: all run clean clean-build FORCE_VERSION test-virgl
+
+test-virgl:
+	sh src/kernel/drivers/display/tests/run_virgl_tests.sh
 
 src/include/os_version.h: FORCE_VERSION VERSION tools/generate_version.py
 	$(PYTHON) tools/generate_version.py

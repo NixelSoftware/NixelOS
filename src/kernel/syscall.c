@@ -701,6 +701,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
         }
         case SYS_WINDOW_DRAW: {
             user_window_draw_t drawing;
+            user_3d_triangle_t triangles[USER_3D_MAX_TRIANGLES];
             char text[64];
             const char* text_pointer = 0;
             const uint8_t* image_pointer = 0;
@@ -729,6 +730,19 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     return;
                 }
                 text_pointer = text;
+            } else if (drawing.operation == USER_WINDOW_DRAW_TRIANGLES) {
+                uint32_t source = (uint32_t)drawing.data;
+                if (!drawing.data_length || drawing.data_length > sizeof(triangles) ||
+                    drawing.data_length % sizeof(triangles[0]) ||
+                    !user_readable(source, drawing.data_length)) {
+                    regs->eax = (uint32_t)-1;
+                    return;
+                }
+                /* Snapshot user memory before entering the GPU/WM critical section. */
+                const uint8_t* input = (const uint8_t*)source;
+                uint8_t* output = (uint8_t*)triangles;
+                for (uint32_t i = 0; i < drawing.data_length; i++) output[i] = input[i];
+                image_pointer = (const uint8_t*)triangles;
             } else if (drawing.operation == USER_WINDOW_DRAW_IMAGE || drawing.operation == USER_WINDOW_DRAW_IMAGE_CLIPPED) {
                 uint32_t image_address = (uint32_t)drawing.data;
                 if (!drawing.data_length || drawing.data_length > SYS_WINDOW_IMAGE_MAX ||

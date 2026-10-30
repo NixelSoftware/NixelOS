@@ -1,6 +1,7 @@
 #ifndef NIXEL_HAL_VIDEO_H
 #define NIXEL_HAL_VIDEO_H
 #include "../types.h"
+#include "../../system/user/window_api.h"
 
 /* Drivers publish a packed BGR framebuffer; the renderer supplies XRGB pixels.
  * Geometry is published through SCREEN_WIDTH/SCREEN_HEIGHT under kernel_mutex. */
@@ -20,4 +21,8 @@ int video_poll_resize(void);
 void video_present(void);
 /* Caller serializes presentation; spans are clipped to the visible row. */
 void video_write_span(int32_t x, int32_t y, const uint32_t* pixels, uint32_t count);
+int video_3d_available(void);
+/* Caller holds kernel_mutex. Output is owned by the renderer until next call. */
+const uint32_t* video_3d_render(const user_3d_triangle_t* triangles, uint32_t count,
+    uint32_t width, uint32_t height, uint32_t clear_color, uint32_t* stride);
 #endif

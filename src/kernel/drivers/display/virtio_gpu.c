@@ -4,10 +4,10 @@
 #include "../serial.h"
 #include "../../paging.h"
 
-/* Modern virtio PCI transport, split control queue, unaccelerated 2D scanout.
+/* Modern virtio PCI transport, split control queue, 2D scanout + optional VirGL.
  * Wire layouts: virtio 1.2 sections 4.1 and 5.7. All DMA addresses are physical
- * addresses in the kernel's identity map. Only the display worker submits once
- * asynchronous presentation starts; resize and scene changes hold kernel_mutex.
+ * addresses in the kernel's identity map. The video HAL serializes display,
+ * resize, and 3D commands with its control-queue mutex.
  */
 #define QUEUE_SIZE 8u
 #define BUFFER_PAGES ((SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE)
@@ -42,10 +42,11 @@ static uint32_t* backing;
 static uint32_t resource;
 static uint16_t consumed;
 static int active, dirty;
+static int virgl_feature, recover_2d_pending;
 static uint32_t dirty_x, dirty_y, dirty_right, dirty_bottom;
 static const pci_device_t* gpu_device;
 
-static void barrier(void) { __asm__ volatile ("lock; addl $0, 0(%%esp)" : : : "memory", "cc"); }
+static void barrier(void) { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
 static uint16_t read16(unsigned offset) { return *(volatile uint16_t*)(common + offset); }
 static uint32_t read32(unsigned offset) { return *(volatile uint32_t*)(common + offset); }
 static void write16(unsigned offset, uint16_t value) { *(volatile uint16_t*)(common + offset) = value; }
@@ -66,17 +67,19 @@ static void command_init(uint32_t type) {
     header->type = type;
     header->flags = 1; /* fence: response signals completion, including transfers */
 }
-static int submit(uint32_t size, uint32_t expected) {
+static int exchange(const void* packet, uint32_t size, uint32_t expected, int fatal) {
     if (!active) return 0;
     response.header.type = 0;
-    queue.desc[0] = (descriptor_t){(uint32_t)request, size, 1, 1};
+    queue.desc[0] = (descriptor_t){(uint32_t)packet, size, 1, 1};
     queue.desc[1] = (descriptor_t){(uint32_t)&response, sizeof(response), 2, 0};
     queue.avail_ring[queue.avail_index % QUEUE_SIZE] = 0;
     barrier();
     queue.avail_index++;
     barrier();
     *notify = 0;
-    for (unsigned wait = 0; wait < 10000; wait++) {
+    /* Shader compilation/fenced GPU completion can exceed a 2D transfer time. */
+    unsigned limit = fatal ? 10000u : 200000u;
+    for (unsigned wait = 0; wait < limit; wait++) {
         if (queue.used_index != consumed) {
             barrier();
             unsigned index = consumed % QUEUE_SIZE;
@@ -84,12 +87,22 @@ static int submit(uint32_t size, uint32_t expected) {
                 queue.used_ring[index].length < sizeof(gpu_header_t)) break;
             consumed++;
             if (response.header.type == expected) return 1;
+            /* A rejected optional 3D command must not reset the 2D display. */
+            if (!fatal) return 0;
             break;
         }
         driver_delay_us(10);
     }
     fail();
+    if (!fatal) { virgl_feature = 0; recover_2d_pending = 1; }
     return 0;
+}
+static int submit(uint32_t size, uint32_t expected) {
+    return exchange(request, size, expected, 1);
+}
+int virtio_gpu_3d_available(void) { return active && virgl_feature; }
+int virtio_gpu_command(const void* packet, uint32_t size) {
+    return exchange(packet, size, GPU_OK, 0);
 }
 static int get_size(uint32_t* width, uint32_t* height) {
     command_init(GPU_DISPLAY_INFO);
@@ -131,6 +144,36 @@ static int set_mode(video_framebuffer_t* fb, uint32_t width, uint32_t height) {
     dirty_right = width; dirty_bottom = height;
     debug_print("[VIDEO] virtio-gpu mode changed\n");
     return 1;
+}
+
+/* An optional renderer timeout reset the device. Re-establish just 2D scanout
+ * on the next presentation, keeping the CPU framebuffer and geometry intact.
+ * Never reuse queue memory before device reset has completed. One attempt. */
+static void recover_2d(void) {
+    recover_2d_pending = 0;
+    if (!common || common[20] || !backing) return;
+    common[20] = 3;
+    write32(8, 0); write32(12, 0);
+    write32(8, 1); write32(12, 1);
+    common[20] = 11;
+    if (!(common[20] & 8)) return;
+    write16(22, 0);
+    if (read16(24) < QUEUE_SIZE) { common[20] = 0; return; }
+    volatile uint8_t* bytes = (volatile uint8_t*)&queue;
+    for (unsigned i = 0; i < sizeof(queue); i++) bytes[i] = 0;
+    consumed = 0;
+    resource = 0;
+    queue.avail_flags = 1;
+    write16(24, QUEUE_SIZE); write16(26, 0xFFFF);
+    write_address(32, queue.desc);
+    write_address(40, (const void*)&queue.avail_flags);
+    write_address(48, (const void*)&queue.used_flags);
+    write16(28, 1);
+    common[20] = 15;
+    active = 1;
+    video_framebuffer_t ignored;
+    if (set_mode(&ignored, SCREEN_WIDTH, SCREEN_HEIGHT))
+        debug_print("[VIDEO] Recovered 2D scanout after 3D timeout\n");
 }
 
 /* Validate capability regions against firmware-assigned BAR sizes before DMA. */
@@ -179,7 +222,9 @@ int virtio_gpu_init(video_framebuffer_t* fb) {
     common[20] = 3; /* ACKNOWLEDGE | DRIVER */
     write32(0, 1);
     if (!(read32(4) & 1)) return 0; /* VIRTIO_F_VERSION_1 */
-    write32(8, 0); write32(12, 0);
+    write32(0, 0);
+    virgl_feature = (read32(4) & 1u) != 0;
+    write32(8, 0); write32(12, virgl_feature ? 1u : 0u);
     write32(8, 1); write32(12, 1);
     common[20] = 11; /* FEATURES_OK */
     if (!(common[20] & 8)) return 0;
@@ -227,6 +272,7 @@ void virtio_gpu_mark_dirty(int32_t x, int32_t y, uint32_t count) {
     dirty = 1;
 }
 void virtio_gpu_present(void) {
+    if (recover_2d_pending) recover_2d();
     if (!active || !dirty) return;
     command_init(GPU_TRANSFER);
     uint32_t* args = (uint32_t*)(request + sizeof(gpu_header_t));

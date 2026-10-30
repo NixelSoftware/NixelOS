@@ -1,5 +1,6 @@
 #include "../settings/settings.h"
 #include "../../../kernel/hal/audio.h"
+#include "../../../kernel/hal/video.h"
 #include "../../../kernel/mutex.h"
 #include "wm.h"
 #include "start.h"
@@ -742,6 +743,35 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
     if (!slot || !drawing || !wm_api) return -1;
     Window* window = &slot->window;
 
+    if (drawing->operation == USER_WINDOW_3D_SUPPORTED)
+        return video_3d_available();
+    if (drawing->operation == USER_WINDOW_DRAW_TRIANGLES) {
+        if (!image_data || !drawing->data_length ||
+            drawing->data_length % sizeof(user_3d_triangle_t) ||
+            drawing->data_length / sizeof(user_3d_triangle_t) > USER_3D_MAX_TRIANGLES ||
+            drawing->x < 0 || drawing->y < 18 ||
+            drawing->width <= 0 || drawing->height <= 0 ||
+            drawing->width > (int32_t)USER_3D_MAX_WIDTH ||
+            drawing->height > (int32_t)USER_3D_MAX_HEIGHT ||
+            drawing->x > window->w - drawing->width ||
+            drawing->y > window->h - drawing->height) return -1;
+        const user_3d_triangle_t* triangles = (const user_3d_triangle_t*)image_data;
+        uint32_t count = drawing->data_length / sizeof(*triangles);
+        for (uint32_t i = 0; i < count; i++) for (uint32_t j = 0; j < 3; j++)
+            if (triangles[i].p[j].x < 0 || triangles[i].p[j].y < 0 ||
+                triangles[i].p[j].x >= drawing->width ||
+                triangles[i].p[j].y >= drawing->height) return -1;
+        if (!video_3d_available()) return 0;
+        uint32_t stride;
+        const uint32_t* pixels = video_3d_render(triangles, count, drawing->width,
+            drawing->height, drawing->color, &stride);
+        if (!pixels) return -1;
+        for (int32_t y = 0; y < drawing->height; y++)
+            for (int32_t x = 0; x < drawing->width; x++)
+                user_surface_set_pixel(slot, drawing->x + x, drawing->y + y,
+                    pixels[(uint32_t)y * stride + (uint32_t)x] & 0xffffffu);
+        return 1;
+    }
     if (drawing->operation == USER_WINDOW_DRAW_BEGIN) {
         if (slot->drawing_frame) return 0;
         /* Allocate lazily; legacy clients retain their single surface. */

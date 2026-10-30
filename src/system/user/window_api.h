@@ -7,6 +7,15 @@
 #define USER_WINDOW_IMAGE_TARGET_W 64u
 #define USER_WINDOW_IMAGE_TARGET_H 64u
 
+/* Safe, bounded triangle batches; applications never submit GPU commands.
+ * Coordinates are viewport-relative pixels. Submit back-to-front triangles.
+ * The GPU path rasterizes/shades; scene transforms remain application-side. */
+#define USER_3D_MAX_TRIANGLES 300u
+#define USER_3D_MAX_WIDTH 640u
+#define USER_3D_MAX_HEIGHT 480u
+typedef struct { int32_t x, y; } user_3d_point_t;
+typedef struct { user_3d_point_t p[3]; uint32_t color; } user_3d_triangle_t;
+
 typedef struct {
     int32_t x, y, width, height;
     char title[USER_WINDOW_TITLE_MAX];
@@ -19,7 +28,10 @@ typedef enum {
     USER_WINDOW_DRAW_IMAGE = 4,
     USER_WINDOW_DRAW_TEXT_SCALED = 5, /* width=advance (4..32), height=glyph size (8..64) */
     USER_WINDOW_DRAW_IMAGE_CLIPPED = 6, /* color=(clip_top<<16)|clip_bottom, window-relative */
-    USER_WINDOW_DRAW_BEGIN = 7 /* Preserve the visible frame until present. */
+    USER_WINDOW_DRAW_BEGIN = 7, /* Preserve the visible frame until present. */
+    USER_WINDOW_3D_SUPPORTED = 8, /* returns 1 for VirGL, 0 if unsupported */
+    USER_WINDOW_DRAW_TRIANGLES = 9 /* data=triangle array; color=clear RGB.
+                                    * returns 1 rendered, 0 unavailable, -1 error */
 } user_window_draw_op_t;
 
 typedef struct {
