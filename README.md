@@ -40,13 +40,36 @@ sudo xbps-install -S base-devel nasm qemu-system-x86_64 e2fsprogs
 ```
 
 ### Windows
-Install [MSYS2](https://www.msys2.org/) and Download [i686-elf-tools](https://github.com/lordmilko/i686-elf-tools).
-In MINGW2, Install MAKE
-```cmd
+Install [MSYS2](https://www.msys2.org/) and download [i686-elf-tools](https://github.com/lordmilko/i686-elf-tools).
+In the MSYS2 shell, install GNU Make:
+```sh
 pacman -S mingw-w64-x86_64-make
 ```
 
-Add both to your path
+Add Make and the cross-toolchain's `bin` directory to your Windows `PATH`,
+along with Python 3.8+, NASM, and QEMU. The compiler must produce ELF objects
+for NixelOS.
+
+For image creation, install WSL and a Linux distribution (for example Ubuntu).
+Inside the default WSL distribution, run:
+
+```sh
+sudo apt update
+sudo apt install python3 e2fsprogs
+```
+
+Then build from PowerShell or Command Prompt in the checkout:
+
+```powershell
+mingw32-make
+mingw32-make run
+```
+
+Compilation uses the Windows tools. `mkext4.py` automatically runs image
+creation in the default WSL distribution when `mke2fs` or `debugfs` is missing
+from the Windows `PATH`. Keep the checkout on a drive accessible to WSL.
+Native Windows e2fsprogs tools on `PATH` are also supported. Tool choices can
+be overridden, for example `mingw32-make PYTHON=python CC=i686-elf-gcc`.
 
 # Building
 Install GNU Make, GCC, NASM, binutils, Python, e2fsprogs, and QEMU, then run `make` to build
@@ -65,8 +88,8 @@ application needs more than the default 128 MiB.
 ## Filesystem layout
 
 The image uses ext4, built without root access by `mkext4.py` using `mke2fs`
-and `debugfs` from e2fsprogs. On Windows, build the image in a Linux/WSL
-environment with those tools installed.
+and `debugfs` from e2fsprogs. On Windows, image creation automatically uses
+WSL when those tools are unavailable natively; see the Windows setup above.
 
 | Path | Contents |
 | :--- | :--- |

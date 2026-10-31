@@ -2,6 +2,7 @@
 """Build the raw BIOS boot area and a journal-free ext4 data partition.
 
 Requires e2fsprogs (mke2fs/debugfs); no root privileges or loop mount needed.
+Windows hosts without native e2fsprogs delegate image creation to WSL.
 The deliberately small feature set is shared with src/kernel/fs.c.
 """
 import os
@@ -29,7 +30,36 @@ BUNDLED_FILES = [
 ]
 
 
+def build_in_wsl(output):
+    """Run against the same checkout and output using WSL's Linux tools."""
+    if not shutil.which("wsl.exe"):
+        raise RuntimeError(
+            "Image creation requires mke2fs and debugfs. Install WSL with a Linux "
+            "distribution, then install python3 and e2fsprogs inside it "
+            "(Ubuntu/Debian: sudo apt install python3 e2fsprogs).")
+
+    def linux_path(path):
+        return subprocess.check_output(
+            ["wsl.exe", "--exec", "wslpath", "-a", "-u", str(Path(path).resolve())],
+            text=True, encoding="utf-8").strip()
+
+    # Keep the cwd for relative resource paths; translate output separately so
+    # absolute Windows paths and paths containing spaces also work.
+    cwd = linux_path(Path.cwd())
+    script = linux_path(__file__)
+    destination = linux_path(output)
+    subprocess.run(["wsl.exe", "--cd", cwd, "--exec", "python3", script, destination],
+                   check=True)
+
+
 def main(output):
+    missing = [tool for tool in ("mke2fs", "debugfs") if not shutil.which(tool)]
+    if missing:
+        if sys.platform == "win32":
+            build_in_wsl(output)
+            return
+        raise RuntimeError("Missing " + ", ".join(missing) +
+                           "; install e2fsprogs in the build environment.")
     disk = bytearray(TOTAL_SECTORS * SECTOR_SIZE)
     for name, lba, exact in (("src/boot.bin", 0, 512),
                              ("src/boot_stage2.bin", STAGE2_LBA, STAGE2_SECTORS * 512),
@@ -98,8 +128,8 @@ def main(output):
         (root / "etc/time.cfg").write_bytes(
             struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
         (root / "etc/time.cfg").chmod(0o777)
-        (root / "etc/hostname").write_text("nixel\n")
-        (root / "etc/os-release").write_text('NAME=NixelOS\nID=nixel\nPRETTY_NAME="NixelOS"\n')
+        (root / "etc/hostname").write_bytes(b"nixel\n")
+        (root / "etc/os-release").write_bytes(b'NAME=NixelOS\nID=nixel\nPRETTY_NAME="NixelOS"\n')
         (root / "var/log/quark.log").write_text("")
         (root / "var/www/index.html").write_text("<!doctype html><title>NixelOS</title><h1>NixelOS</h1>\n")
         fs = work / "ext4.img"
@@ -124,7 +154,7 @@ def main(output):
                          f'set_inode_field "/{name}" gid {owner}',
                          f'set_inode_field "/{name}" mode 0{kind | mode:o}']
         metadata += ["set_inode_field /lost+found uid 0", "set_inode_field /lost+found gid 0"]
-        commands.write_text("\n".join(metadata) + "\n")
+        commands.write_bytes(("\n".join(metadata) + "\n").encode("utf-8"))
         subprocess.run(["debugfs", "-w", "-f", str(commands), str(fs)],
                        check=True, stdout=subprocess.DEVNULL)
         disk[FILESYSTEM_LBA * 512:] = fs.read_bytes()
@@ -133,4 +163,7 @@ def main(output):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "disk.img")
+    try:
+        main(sys.argv[1] if len(sys.argv) > 1 else "disk.img")
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        sys.exit(f"Image creation failed: {error}")

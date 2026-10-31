@@ -35,10 +35,18 @@ STARTUP_TRACE ?= 0
 STARTUP_PROFILE ?= 0
 
 ifeq ($(OS),Windows_NT)
-  PYTHON := python
-  CC := i686-elf-gcc
-  LD := i686-elf-ld
-  OBJCOPY := i686-elf-objcopy
+  ifeq ($(origin PYTHON),file)
+    PYTHON := python
+  endif
+  ifeq ($(origin CC),default)
+    CC := i686-elf-gcc
+  endif
+  ifeq ($(origin LD),default)
+    LD := i686-elf-ld
+  endif
+  ifeq ($(origin OBJCOPY),file)
+    OBJCOPY := i686-elf-objcopy
+  endif
 endif
 
 ifeq ($(QEMU_ACCEL),auto)
@@ -261,7 +269,7 @@ qkftp.bin: Makefile $(FTP_OBJ)
 
 .PHONY: fastfetch.bin
 fastfetch.bin: src/include/os_version.h
-	$(MAKE) -C src/apps/fastfetch
+	$(MAKE) -C src/apps/fastfetch CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NASM="$(NASM)" PYTHON="$(PYTHON)"
 	$(PYTHON) -c "from pathlib import Path; Path('fastfetch.bin').write_bytes(Path('src/apps/fastfetch/fastfetch.bin').read_bytes())"
 
 src/boot.bin: Makefile src/boot/boot.asm
@@ -278,7 +286,7 @@ endif
 src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin tools/build_boot_stage2.py tools/disk_layout.py
 	$(PYTHON) tools/build_boot_stage2.py --nasm "$(NASM)"
 
-RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(str(p) for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
+RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(p.as_posix() for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
 
 DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
 
