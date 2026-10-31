@@ -133,7 +133,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
-                 lspci demo3d
+                 lspci demo3d irc
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
@@ -158,6 +158,12 @@ $(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
 	$(LD) $(LDFLAGS) -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True)"
+
+src/apps/irc/main.o: src/system/user/sys_api.h src/system/user/window_api.h
+
+.PHONY: test-irc
+test-irc:
+	sh src/apps/irc/tests/run_tests.sh
 
 src/apps/chess/piece_assets.h: src/apps/chess/embed_assets.py $(wildcard src/apps/chess/assets/*.png)
 	$(PYTHON) src/apps/chess/embed_assets.py $@
