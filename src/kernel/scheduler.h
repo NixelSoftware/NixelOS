@@ -52,5 +52,7 @@ uint64_t scheduler_clock(void);
 void scheduler_start(void);
 int scheduler_running(void);
 void scheduler_irq_tick(void);
+/* IRQs must be disabled; enable the 1-bit speaker sample clock. */
+void scheduler_set_audio_timer(int enabled);
 
 #endif

@@ -188,6 +188,15 @@ static void calibrate_tsc(void) {
     }
 }
 int scheduler_running(void) { return started; }
+static uint32_t pit_divisor = 1193u;
+void scheduler_set_audio_timer(int enabled) {
+    /* Caller holds IRQs disabled. Preserve the fallback clock across reload. */
+    if (started) pit_epoch = scheduler_clock();
+    pit_divisor = enabled ? 38u : 1193u;
+    outb(0x43, 0x34);
+    outb(0x40, pit_divisor & 255u);
+    outb(0x40, pit_divisor >> 8);
+}
 uint64_t scheduler_clock(void) {
     /* Call with IRQs disabled. TSC avoids losing execution time if an IRQ is
      * delayed/coalesced. A latched PIT phase is the no-TSC fallback. */
@@ -204,7 +213,7 @@ uint64_t scheduler_clock(void) {
         outb(0x43, 0x00);
         uint32_t count = inb(0x40);
         count |= (uint32_t)inb(0x40) << 8;
-        uint32_t phase = count <= 1193u ? (1193u - count) * 838u : 0;
+        uint32_t phase = count <= pit_divisor ? (pit_divisor - count) * 838u : 0;
         now = pit_epoch + phase;
     }
     if (now < last_clock) now = last_clock;
@@ -215,7 +224,7 @@ extern void pc_speaker_tick(void);
 void scheduler_irq_tick(void) {
     pc_speaker_tick();
     if (!started) { frame_timer++; return; }
-    pit_epoch += 1000000u;
+    pit_epoch += pit_divisor * 838u;
     uint64_t now = scheduler_clock();
     /* Keep the ABI clock at 100 Hz, accounting for delayed timer delivery. */
     if (now >= next_legacy_tick) {
