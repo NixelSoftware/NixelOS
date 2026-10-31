@@ -127,7 +127,7 @@ static int load_directory(const char* path) {
     copy_text(current_dir, path, sizeof(current_dir));
     file_count = 0;
     for (int i = 0; i < count; i++) {
-        if (picker_token && !(types[i] & FAT_ATTR_DIRECTORY) && !suffix(names[i], ".BIN")) continue;
+        if (picker_token && !(types[i] & FS_ATTR_DIRECTORY) && !suffix(names[i], ".BIN")) continue;
         copy_text(file_list[file_count], names[i], FS_MAX_FILENAME);
         file_types[file_count] = types[i]; file_sizes[file_count++] = -2;
     }
@@ -152,19 +152,19 @@ static void open_selected(void) {
     if (selected_file < 0 || selected_file >= file_count) return;
     char path[FS_MAX_PATH];
     if (!item_path(selected_file, path)) { copy_text(status, "Path too long.", sizeof(status)); return; }
-    if (file_types[selected_file] & FAT_ATTR_DIRECTORY) load_directory(path);
+    if (file_types[selected_file] & FS_ATTR_DIRECTORY) load_directory(path);
     else if (picker_token) {
         if (sys_file_pick_result(picker_token, path) == 0) {
             picker_finished = 1; files_close_requested = 1;
         } else copy_text(status, "Selection request expired or program inaccessible.", sizeof(status));
     }
     else if (suffix(path, ".MID") || suffix(path, ".MIDI")) {
-        if (sys_app_launch("/syndig.bin", path) < 0)
+        if (sys_app_launch("/usr/bin/syndig.bin", path) < 0)
             copy_text(status, "Cannot launch Syndig.", sizeof(status));
         else copy_text(status, "Opened in Syndig.", sizeof(status));
     }
     else if (suffix(path, ".WAV") || suffix(path, ".MP3")) {
-        if (sys_app_launch("/sound.bin", path) < 0)
+        if (sys_app_launch("/usr/bin/sound.bin", path) < 0)
             copy_text(status, "Cannot launch Sound Player.", sizeof(status));
         else copy_text(status, "Opened in Sound Player.", sizeof(status));
     }
@@ -224,7 +224,7 @@ void files_draw_content(Window* win) {
         uint32_t color = i == selected_file ? COLOR_WHITE : COLOR_BLACK;
         if (i == selected_file) rect(10, y-1, 476, ROW_HEIGHT, COLOR_SELECT_BG);
         label(14, y+3, file_list[i], color);
-        if (file_types[i] & FAT_ATTR_DIRECTORY) label(300, y+3, "Folder", color);
+        if (file_types[i] & FS_ATTR_DIRECTORY) label(300, y+3, "Folder", color);
         else {
             if (file_sizes[i] == -2) {
                 char item[FS_MAX_PATH]; file_sizes[i] = item_path(i, item) ? sys_fs_read(item, 0, 0) : -1;
@@ -303,17 +303,22 @@ void user_main(const char* arguments) {
     if (!prefix[match]) {
         const char* number = arguments+match;
         while (*number >= '0' && *number <= '9') picker_token = picker_token*10 + (*number++-'0');
-        arguments = "/";
+        arguments = "/usr/bin";
     }
     files_window.title = picker_token ? "Select a program" : "Files"; files_window.visible = 1; files_window.focused = 1;
     files_window.draw_content = files_draw_content;
     files_window.handle_key = files_handle_key; files_window.handle_mouse = files_handle_mouse;
     /* A single directory argument, absolute or relative to the filesystem root. */
     char start[FS_MAX_PATH] = "/";
+    (void)sys_fs_getcwd(start, sizeof(start));
     while (arguments && *arguments == ' ') arguments++;
     if (arguments && *arguments) {
         if (*arguments == '/') copy_text(start, arguments, sizeof(start));
-        else copy_text(start+1, arguments, sizeof(start)-1);
+        else {
+            unsigned n=0; while (start[n]) n++;
+            if (n>1 && n<sizeof(start)-1) start[n++]='/';
+            copy_text(start+n, arguments, sizeof(start)-n);
+        }
         int n = 0; while (start[n]) n++;
         while (n > 1 && (start[n-1] == '/' || start[n-1] == ' ')) start[--n] = 0;
     }

@@ -154,7 +154,7 @@ void user_main(const char* arguments) {
     uint32_t body_length = response_length - body_start;
     print_text("Download complete (");
     print_number(body_length);
-    print_text(" bytes).\nSaving to FAT32 disk as NabilShuail95.bmp...\n");
+    print_text(" bytes).\nSaving to ext4 disk as NabilShuail95.bmp...\n");
     if (sys_fs_write("NabilShuail95.bmp", response_buffer + body_start,
                       body_length) >= 0) {
         print_text("File saved successfully! Run 'view NabilShuail95.bmp' to display it.\n");

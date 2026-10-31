@@ -2,6 +2,8 @@
 #define NIXEL_AUDIO_MIXER_H
 #include "../../user/audio_api.h"
 /* One stream per address space; owner 0 is reserved for startup/system PCM. */
+/* reg 256 acquires the selected card synth; other registers require ownership. */
+int32_t audio_mixer_opl(uint32_t owner, uint32_t reg, uint32_t value);
 int32_t audio_mixer_open(uint32_t owner, const user_audio_format_t* format);
 int32_t audio_mixer_write(uint32_t owner, const void* data, uint32_t length);
 int32_t audio_mixer_status(uint32_t owner);

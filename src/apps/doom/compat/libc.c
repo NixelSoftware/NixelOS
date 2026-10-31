@@ -235,7 +235,12 @@ int rand(void) {
     n = n * 1664525 + 1013904223;
     return (n >> 1) & 0x7fffffff;
 }
-char *getenv(const char *s) { return 0; }
+char *getenv(const char *s) {
+    static char home[FS_MAX_PATH];
+    if (!strcmp(s, "DOOMWADDIR")) return "/usr/share/games/doom";
+    if (!strcmp(s, "HOME") && sys_fs_home(home, sizeof(home)) >= 0) return home;
+    return 0;
+}
 int system(const char *s) { return -1; }
 int atexit(void (*f)(void)) { return 0; }
 void exit(int n) {
@@ -598,7 +603,7 @@ int fscanf(FILE *fp, const char *f, ...) {
     va_end(a);
     return n;
 }
-int mkdir(const char *p, unsigned m) { return -1; }
+int mkdir(const char *p, unsigned m) { (void)m; return sys_fs_mkdir(p); }
 int remove(const char *p) { return -1; }
 int rename(const char *a, const char *b) {
     int size = sys_fs_read(a, 0, 0);

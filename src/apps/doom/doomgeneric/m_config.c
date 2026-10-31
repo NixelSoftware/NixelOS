@@ -2042,13 +2042,14 @@ float M_GetFloatVariable(char *name)
 
 static char *GetDefaultConfigDir(void)
 {
-    char *result = (char *)malloc(2);
 #ifdef NIXEL_DOOM
-    result[0] = '\0';
+    const char *home = getenv("HOME");
+    char *result = M_StringJoin(home ? home : "/home/user", "/.config/doom/", NULL);
 #else
+    char *result = (char *)malloc(2);
     result[0] = '.';
-#endif
     result[1] = '\0';
+#endif
 
     return result;
 }

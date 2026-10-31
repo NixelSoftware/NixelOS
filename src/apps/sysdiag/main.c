@@ -33,7 +33,7 @@ typedef struct {
 
 #define NUM_TESTS 7
 static test_item_t tests[NUM_TESTS] = {
-    { "FAT32 Storage (R/W/Verify/Delete)", RESULT_NONE, "Pending" },
+    { "ext4 Storage (R/W/Verify/Delete)", RESULT_NONE, "Pending" },
     { "Network Hardware & Stack",          RESULT_NONE, "Pending" },
     { "Floppy Disk Controller",            RESULT_NONE, "Pending" },
     { "VBE Color Cycle (Interactive)",     RESULT_NONE, "Pending" },
@@ -51,7 +51,7 @@ static void str_copy(char* dst, const char* src, int max) {
     dst[i] = '\0';
 }
 
-static void run_fat32_test(os_api_t* api) {
+static void run_ext4_test(os_api_t* api) {
     tests[0].result = RESULT_RUNNING;
     str_copy(tests[0].detail, "Writing test pattern...", sizeof(tests[0].detail));
 
@@ -60,18 +60,18 @@ static void run_fat32_test(os_api_t* api) {
     char read_buf[64];
 
     
-    if (api->fs.write("DIAG.TMP", (const uint8_t*)test_data, len) < 0) {
+    if (api->fs.write("/tmp/sysdiag.tmp", (const uint8_t*)test_data, len) < 0) {
         tests[0].result = RESULT_FAIL;
         str_copy(tests[0].detail, "Write failed at LBA cluster allocate", sizeof(tests[0].detail));
         return;
     }
 
     
-    int bytes = api->fs.read("DIAG.TMP", (uint8_t*)read_buf, sizeof(read_buf) - 1);
+    int bytes = api->fs.read("/tmp/sysdiag.tmp", (uint8_t*)read_buf, sizeof(read_buf) - 1);
     if (bytes != (int)len) {
         tests[0].result = RESULT_FAIL;
         str_copy(tests[0].detail, "Read failed: byte count mismatch", sizeof(tests[0].detail));
-        api->fs.delete_file("DIAG.TMP");
+        api->fs.delete_file("/tmp/sysdiag.tmp");
         return;
     }
     read_buf[len] = '\0';
@@ -81,13 +81,13 @@ static void run_fat32_test(os_api_t* api) {
         if (read_buf[i] != test_data[i]) {
             tests[0].result = RESULT_FAIL;
             str_copy(tests[0].detail, "Integrity failure: corrupted payload", sizeof(tests[0].detail));
-            api->fs.delete_file("DIAG.TMP");
+            api->fs.delete_file("/tmp/sysdiag.tmp");
             return;
         }
     }
 
     
-    api->fs.delete_file("DIAG.TMP");
+    api->fs.delete_file("/tmp/sysdiag.tmp");
     tests[0].result = RESULT_PASS;
     str_copy(tests[0].detail, "OK", sizeof(tests[0].detail));
 }
@@ -310,7 +310,7 @@ int app_main(os_api_t* api) {
         }
 
         if (state == TEST_STATE_RUNNING) {
-            run_fat32_test(api);
+            run_ext4_test(api);
             needs_draw = 1;
             api->graphics.blit_all();
 

@@ -11,7 +11,7 @@
 stage2_entry:
     mov [boot_drive], dl
     ; Snapshot the boot volume through BIOS DL before leaving real mode.
-    ; Kernel handoff: magic at 0x6000, FAT32 VBR at 0x6004 (FILESYSTEM_LBA).
+    ; Kernel handoff: magic at 0x6000, MBR at 0x6004 (LBA 0).
     mov dword [0x6000], 0
     mov si, dap_volume
     mov ah, 0x42
@@ -23,9 +23,9 @@ stage2_entry:
     mov es, ax
     mov bx, 0x6004
     mov ax, 0x0201
-    mov ch, (FILESYSTEM_LBA / (63 * 16)) & 255
-    mov cl, ((FILESYSTEM_LBA % 63) + 1) | (((FILESYSTEM_LBA / (63 * 16)) >> 2) & 0xC0)
-    mov dh, (FILESYSTEM_LBA / 63) % 16
+    mov ch, 0
+    mov cl, 1
+    mov dh, 0
     mov dl, [boot_drive]
     int 0x13
     jc .volume_done
@@ -281,7 +281,7 @@ dap_volume:
     db 0x10, 0
     dw 1
     dw 0x6004, 0
-    dq FILESYSTEM_LBA
+    dq 0
 
 dap_chunk:
     db 0x10

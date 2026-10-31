@@ -1,698 +1,578 @@
+/* Small ext4 backend for the image profile produced by mkext4.py.
+ * 4 KiB blocks, one block group, 256-byte inodes, extents, no journal or
+ * metadata checksums. Unknown features are rejected before any writes.
+ * The ATA controller and sector interfaces remain filesystem-independent.
+ */
 #include "mutex.h"
 #include "fs.h"
 #include "users.h"
 #include "drivers/ata.h"
 #include "drivers/serial.h"
 
-static fat32_bpb_t bpb;
-static uint32_t fat_begin_lba = 0;
-static uint32_t cluster_begin_lba = 0;
-static uint32_t sectors_per_cluster = 0;
-static uint32_t root_cluster = 0;
-static uint8_t  sector_buffer[512];
-static uint8_t  cluster_scratch[4096];
+#define BLOCK_SIZE 4096u
+#define INODE_SIZE 256u
+#define EXTENTS 0x80000u
+#define DIRECTORY 0040000u
+#define REGULAR 0100000u
+#define KIND 0170000u
+#define ROOT_INO 2u
+
+static uint8_t super[1024], group[BLOCK_SIZE], io[BLOCK_SIZE], bitmap[BLOCK_SIZE];
+static uint32_t base, blocks, inodes, inode_table, block_bitmap, inode_bitmap;
+static uint8_t ready, io_failed;
 static volatile uint32_t change_generation;
-uint32_t fs_generation(void) { return change_generation; }
-static uint8_t  fs_ready = 0;
-static uint32_t last_alloc_cluster = 2;
+typedef struct { uint8_t raw[INODE_SIZE]; } inode_t;
+typedef struct { uint32_t block, offset, ino; } dir_location_t;
 
-/* Nixel FAT extension v1: marker in NT/tenths, uid/gid/mode in
- * creation time/date and access date. These timestamps are not maintained. */
-static fs_stat_t entry_stat(const fat32_dir_entry_t* e) {
-    if (e->nt_res == 0xA5 && e->creation_time_tenth == 0xD1)
-        return (fs_stat_t){e->creation_time, e->creation_date, e->last_access_date & 0777};
-    return (fs_stat_t){USER_ROOT, USER_ROOT,
-        (e->attr & FAT_ATTR_READ_ONLY) ? 0555 : 0755};
+static uint16_t u16(const uint8_t* p) { return p[0] | (uint16_t)p[1] << 8; }
+static uint32_t u32(const uint8_t* p) { return u16(p) | (uint32_t)u16(p+2) << 16; }
+static void w16(uint8_t* p, uint16_t n) { p[0] = n; p[1] = n >> 8; }
+static void w32(uint8_t* p, uint32_t n) { w16(p, n); w16(p+2, n >> 16); }
+static void zero(void* p, uint32_t n) { uint8_t* b=p; while (n--) *b++=0; }
+static void copy(void* d, const void* s, uint32_t n) {
+    uint8_t* a=d; const uint8_t* b=s; while (n--) *a++=*b++;
 }
-static void entry_set_stat(fat32_dir_entry_t* e, fs_stat_t st) {
-    e->nt_res = 0xA5; e->creation_time_tenth = 0xD1;
-    e->creation_time = st.uid; e->creation_date = st.gid;
-    e->last_access_date = st.mode;
-}
-static int allowed(fs_stat_t st, unsigned access) {
-    if (user_uid() == USER_ROOT) return 1;
-    unsigned shift = user_uid() == st.uid ? 6 : user_gid() == st.gid ? 3 : 0;
-    return (((st.mode >> shift) & access) == access);
-}
-static int entry_allowed(const fat32_dir_entry_t* e, unsigned access) {
-    return allowed(entry_stat(e), access);
-}
-/* The root is a shared writable directory until home directories exist. */
-static int parent_writable(const char* path);
-
-static char to_upper(char c) {
-    if (c >= 'a' && c <= 'z') return (char)(c - 32);
-    return c;
-}
-
-static int str_len(const char* s) {
-    int len = 0;
-    while (s && s[len]) len++;
-    return len;
-}
-
-static void str_copy(char* dest, const char* src, int max) {
-    int i = 0;
-    while (src && src[i] && i < max - 1) {
-        dest[i] = src[i];
-        i++;
+static int length(const char* s) { int n=0; if (s) while (s[n]) n++; return n; }
+/* Preserve existing application lookups (many pass uppercase .BIN paths).
+ * Directory records retain their full original spelling, without 8.3 aliases. */
+static int same_name(const uint8_t* a, const char* b, unsigned n) {
+    if ((unsigned)length(b) != n) return 0;
+    for (unsigned i=0; i<n; i++) {
+        char x=a[i], y=b[i];
+        if (x>='A' && x<='Z') x+=32;
+        if (y>='A' && y<='Z') y+=32;
+        if (x!=y) return 0;
     }
-    dest[i] = '\0';
+    return 1;
 }
-
-
-static void filename_to_83(const char* name, char out[11]) {
-    for (int i = 0; i < 11; i++) out[i] = ' ';
-    if (!name || !*name) return;
-
-    
-    if (name[0] == '.' && name[1] == '\0') {
-        out[0] = '.';
-        return;
-    }
-    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
-        out[0] = '.';
-        out[1] = '.';
-        return;
-    }
-
-    int p = 0;
-    int out_idx = 0;
-    while (name[p] && name[p] != '.' && out_idx < 8) {
-        out[out_idx++] = to_upper(name[p++]);
-    }
-    while (name[p] && name[p] != '.') p++;
-    if (name[p] == '.') {
-        p++;
-        out_idx = 8;
-        while (name[p] && out_idx < 11) {
-            out[out_idx++] = to_upper(name[p++]);
-        }
-    }
+static int read_block(uint32_t n, uint8_t* data) {
+    int ok=n<blocks && ata_read_sectors(base+n*8, 8, data);
+    if (!ok) io_failed=1;
+    return ok;
 }
-
-
-static void format_83_to_filename(const char name[11], char* out) {
-    int p = 0;
-    for (int i = 0; i < 8; i++) {
-        if (name[i] != ' ') out[p++] = name[i];
-    }
-    if (name[8] != ' ') {
-        out[p++] = '.';
-        for (int i = 8; i < 11; i++) {
-            if (name[i] != ' ') out[p++] = name[i];
-        }
-    }
-    out[p] = '\0';
+static int write_block(uint32_t n, const uint8_t* data) {
+    int ok=n<blocks && ata_write_sectors(base+n*8, 8, data);
+    if (!ok) io_failed=1;
+    return ok;
 }
-
-static uint32_t cluster_to_lba(uint32_t cluster) {
-    return cluster_begin_lba + ((cluster - 2) * sectors_per_cluster);
+static int write_super(void) {
+    int ok=ata_write_sectors(base+2, 2, super);
+    if (!ok) io_failed=1;
+    return ok;
 }
-
-/* Separate from sector_buffer, which file and directory reads overwrite. */
-static uint32_t cached_fat_sector = 0xFFFFFFFFu;
-static uint32_t cached_fat[128];
-/* Streaming reads resume their FAT walk instead of rescanning from byte zero
- * for every PCM chunk. Separate cursors allow concurrent readers. */
-#define FS_READ_CURSORS 8u
-typedef struct {
-    uint32_t first, size, cluster, offset;
-} read_cursor_t;
-static read_cursor_t read_cursors[FS_READ_CURSORS];
-static uint32_t next_read_cursor;
-
-static uint32_t get_next_cluster(uint32_t current_cluster) {
-    uint32_t fat_offset = current_cluster * 4;
-    uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
-    uint32_t entry_offset = fat_offset % 512;
-
-    if (cached_fat_sector != fat_sector) {
-        cached_fat_sector = 0xFFFFFFFFu;
-        if (!ata_read_sectors(fat_sector, 1, (uint8_t*)cached_fat)) return 0x0FFFFFFF;
-        cached_fat_sector = fat_sector;
-    }
-    uint32_t next = cached_fat[entry_offset / 4];
-    return next & 0x0FFFFFFF;
+static int sync_counts(void) {
+    return write_block(1, group) && write_super();
 }
-
-static void set_cluster_entry(uint32_t cluster, uint32_t value) {
-    for (uint32_t i = 0; i < FS_READ_CURSORS; i++) read_cursors[i].first = 0;
-    cached_fat_sector = 0xFFFFFFFFu;
-    uint32_t fat_offset = cluster * 4;
-    uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
-    uint32_t entry_offset = fat_offset % 512;
-
-    if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return;
-    uint32_t val = (*(uint32_t*)&sector_buffer[entry_offset]) & 0xF0000000;
-    val |= (value & 0x0FFFFFFF);
-    *(uint32_t*)&sector_buffer[entry_offset] = val;
-    ata_write_sectors(fat_sector, 1, sector_buffer);
-
-    
-    if (bpb.num_fats > 1) {
-        uint32_t mirror_sector = fat_sector + bpb.sectors_per_fat_32;
-        ata_write_sectors(mirror_sector, 1, sector_buffer);
-    }
+/* A failed/interrupted mutation leaves the volume dirty for host e2fsck. */
+static int begin_change(void) {
+    if (!ready || u16(super+58)!=1) return 0;
+    io_failed=0;
+    w16(super+58, 0);
+    return write_super();
 }
-
-static uint32_t allocate_free_cluster(void) {
-    uint32_t total_clusters = (bpb.total_sectors_32 - (cluster_begin_lba - bpb.hidden_sectors)) / sectors_per_cluster;
-    uint32_t start_cluster = last_alloc_cluster;
-    uint32_t scanned_sector = 0xFFFFFFFFu;
-
-    for (uint32_t clus = start_cluster; clus < total_clusters; clus++) {
-        uint32_t fat_offset = clus * 4;
-        uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
-        uint32_t entry_offset = fat_offset % 512;
-
-        if (scanned_sector != fat_sector) {
-            if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0;
-            scanned_sector = fat_sector;
-        }
-        uint32_t val = *(uint32_t*)&sector_buffer[entry_offset];
-
-        if ((val & 0x0FFFFFFF) == 0) {
-            set_cluster_entry(clus, 0x0FFFFFFF);
-            last_alloc_cluster = clus + 1;
-            return clus;
-        }
-    }
-
-    for (uint32_t clus = 2; clus < start_cluster; clus++) {
-        uint32_t fat_offset = clus * 4;
-        uint32_t fat_sector = fat_begin_lba + (fat_offset / 512);
-        uint32_t entry_offset = fat_offset % 512;
-
-        if (scanned_sector != fat_sector) {
-            if (!ata_read_sectors(fat_sector, 1, sector_buffer)) return 0;
-            scanned_sector = fat_sector;
-        }
-        uint32_t val = *(uint32_t*)&sector_buffer[entry_offset];
-
-        if ((val & 0x0FFFFFFF) == 0) {
-            set_cluster_entry(clus, 0x0FFFFFFF);
-            last_alloc_cluster = clus + 1;
-            return clus;
-        }
-    }
-
-    return 0;
+static int end_change(void) {
+    if (io_failed) return 0;
+    w16(super+58, 1);
+    if (!write_super()) { w16(super+58, 0); return 0; }
+    change_generation++;
+    return 1;
 }
-
-static void free_cluster_chain(uint32_t start_cluster) {
-    uint32_t curr = start_cluster;
-    while (curr >= 2 && curr < 0x0FFFFFF8) {
-        uint32_t next = get_next_cluster(curr);
-        set_cluster_entry(curr, 0x00000000);
-        curr = next;
-    }
+static int read_inode(uint32_t n, inode_t* out) {
+    if (!n || n>inodes) return 0;
+    uint32_t offset=(n-1)*INODE_SIZE;
+    if (!read_block(inode_table+offset/BLOCK_SIZE, io)) return 0;
+    copy(out->raw, io+offset%BLOCK_SIZE, INODE_SIZE);
+    return 1;
 }
-
-
-static int find_in_directory(uint32_t dir_cluster, const char target_83[11],
-                             fat32_dir_entry_t* out_entry, uint32_t* out_dir_lba, uint32_t* out_dir_offset) {
-    uint32_t curr_cluster = dir_cluster;
-    while (curr_cluster >= 2 && curr_cluster < 0x0FFFFFF8) {
-        uint32_t lba = cluster_to_lba(curr_cluster);
-        for (uint32_t s = 0; s < sectors_per_cluster; s++) {
-            if (!ata_read_sectors(lba + s, 1, sector_buffer)) return 0;
-            fat32_dir_entry_t* entries = (fat32_dir_entry_t*)sector_buffer;
-            for (int i = 0; i < 16; i++) {
-                if ((uint8_t)entries[i].name[0] == 0x00) return 0; 
-                if ((uint8_t)entries[i].name[0] == 0xE5) continue; 
-                if (entries[i].attr == FAT_ATTR_LFN) continue;
-
-                int match = 1;
-                for (int c = 0; c < 11; c++) {
-                    if (to_upper(entries[i].name[c]) != target_83[c]) { match = 0; break; }
-                }
-                if (match) {
-                    if (out_entry) *out_entry = entries[i];
-                    if (out_dir_lba) *out_dir_lba = lba + s;
-                    if (out_dir_offset) *out_dir_offset = i * sizeof(fat32_dir_entry_t);
-                    return 1;
+static int write_inode(uint32_t n, const inode_t* node) {
+    if (!n || n>inodes) return 0;
+    uint32_t offset=(n-1)*INODE_SIZE;
+    if (!read_block(inode_table+offset/BLOCK_SIZE, io)) return 0;
+    copy(io+offset%BLOCK_SIZE, node->raw, INODE_SIZE);
+    return write_block(inode_table+offset/BLOCK_SIZE, io);
+}
+static int is_dir(const inode_t* n) { return (u16(n->raw)&KIND)==DIRECTORY; }
+static fs_stat_t metadata(const inode_t* n) {
+    return (fs_stat_t){u16(n->raw+2), u16(n->raw+24), u16(n->raw)&0777};
+}
+static int allowed(const inode_t* n, unsigned access) {
+    fs_stat_t st=metadata(n);
+    if (user_uid()==USER_ROOT) return 1;
+    unsigned shift=user_uid()==st.uid ? 6 : user_gid()==st.gid ? 3 : 0;
+    return ((st.mode >> shift)&access)==access;
+}
+/* Resolve extent trees, including externally populated files with index nodes.
+ * Return 0 for a hole/unwritten extent, ~0u for malformed data or I/O error. */
+static uint32_t map_block(const inode_t* node, uint32_t logical) {
+    if (!(u32(node->raw+32)&EXTENTS) || u32(node->raw+108)) return ~0u;
+    const uint8_t* p=node->raw+40;
+    unsigned capacity=4, expected=6;
+    for (;;) {
+        unsigned count=u16(p+2), depth=u16(p+6);
+        if (u16(p)!=0xf30a || count>u16(p+4) || u16(p+4)>capacity || depth>=expected)
+            return ~0u;
+        if (!depth) {
+            for (unsigned i=0; i<count; i++) {
+                const uint8_t* e=p+12+i*12;
+                uint32_t start=u32(e), size=u16(e+4);
+                if (size>32768) continue; /* unwritten extent */
+                if (logical>=start && logical-start<size) {
+                    uint32_t physical=u32(e+8);
+                    if (u16(e+6) || !physical || physical>=blocks || size>blocks-physical)
+                        return ~0u;
+                    return physical+logical-start;
                 }
             }
+            return 0;
         }
-        curr_cluster = get_next_cluster(curr_cluster);
+        int selected=-1;
+        for (unsigned i=0; i<count; i++) if (u32(p+12+i*12)<=logical) selected=i;
+        if (selected<0) return 0;
+        const uint8_t* e=p+12+selected*12;
+        uint32_t child=u32(e+4);
+        if (u16(e+8) || !child || !read_block(child, io)) return ~0u;
+        p=io; capacity=(BLOCK_SIZE-12)/12; expected=depth;
+    }
+}
+static int dir_record(unsigned off) {
+    if (off>BLOCK_SIZE-8) return 0;
+    unsigned rec=u16(io+off+4), name=io[off+6];
+    return rec>=8 && !(rec&3) && rec<=BLOCK_SIZE-off && name<=rec-8;
+}
+/* 1 found, 0 missing, -1 malformed / I/O failure. */
+static int find_entry(const inode_t* dir, const char* name, dir_location_t* loc) {
+    if (!is_dir(dir) || u32(dir->raw+32)&0x1000u) return -1; /* indexed directories */
+    uint32_t size=u32(dir->raw+4);
+    for (uint32_t logical=0; logical<(size+BLOCK_SIZE-1)/BLOCK_SIZE; logical++) {
+        uint32_t block=map_block(dir, logical);
+        if (!block || block==~0u || !read_block(block, io)) return -1;
+        for (unsigned off=0; off<BLOCK_SIZE; off+=u16(io+off+4)) {
+            if (!dir_record(off)) return -1;
+            if (u32(io+off) && same_name(io+off+8, name, io[off+6])) {
+                *loc=(dir_location_t){block, off, u32(io+off)};
+                return 1;
+            }
+        }
     }
     return 0;
 }
-
-
-static int resolve_path(const char* path, uint32_t* parent_cluster, char final_83[11]) {
-    *parent_cluster = root_cluster;
-    if (!path || !*path) return 0;
-
-    int p = 0;
-    if (path[p] == '/') p++;
-
-    char segment[FS_MAX_FILENAME];
-    while (path[p]) {
-        int seg_len = 0;
-        while (path[p] && path[p] != '/' && seg_len < FS_MAX_FILENAME - 1) {
-            segment[seg_len++] = path[p++];
+/* Walk directories under search permissions. Also handles /, . and ... */
+static int resolve(const char* path, uint32_t* result) {
+    if (!ready || !path) return 0;
+    unsigned pos=0;
+    while (path[pos] && pos<FS_MAX_PATH) pos++;
+    if (pos==FS_MAX_PATH) return 0;
+    pos=0;
+    uint32_t current=ROOT_INO;
+    if (path[0] && path[0]!='/' && !resolve(fs_getcwd(), &current)) return 0;
+    while (path[pos]) {
+        if (path[pos]=='/') { pos++; continue; }
+        char part[FS_MAX_FILENAME]; unsigned n=0;
+        while (path[pos] && path[pos]!='/') {
+            if (n==FS_MAX_FILENAME-1) return 0;
+            part[n++]=path[pos++];
         }
-        segment[seg_len] = '\0';
-        if (path[p] == '/') p++;
-
-        char target_83[11];
-        filename_to_83(segment, target_83);
-
-        if (path[p] == '\0') {
-            
-            for (int i = 0; i < 11; i++) final_83[i] = target_83[i];
-            return 1;
-        }
-
-        
-        fat32_dir_entry_t dir_ent;
-        if (!find_in_directory(*parent_cluster, target_83, &dir_ent, 0, 0)) return 0;
-        if (!(dir_ent.attr & FAT_ATTR_DIRECTORY) || !entry_allowed(&dir_ent, FS_ACCESS_EXEC)) return 0;
-
-        uint32_t sub_cluster = ((uint32_t)dir_ent.first_cluster_hi << 16) | dir_ent.first_cluster_lo;
-        *parent_cluster = (sub_cluster == 0) ? root_cluster : sub_cluster;
+        part[n]=0;
+        inode_t dir; dir_location_t loc;
+        if (!read_inode(current, &dir) || !is_dir(&dir) ||
+            !allowed(&dir, FS_ACCESS_EXEC) || find_entry(&dir, part, &loc)!=1) return 0;
+        current=loc.ino;
     }
-    return 0;
+    *result=current;
+    return 1;
+}
+static int parent_of(const char* path, uint32_t* parent, char* name) {
+    if (!ready || !path) return 0;
+    unsigned n=0; int slash=-1;
+    while (path[n]) {
+        if (n>=FS_MAX_PATH-1) return 0;
+        if (path[n]=='/') slash=n;
+        n++;
+    }
+    unsigned start=slash+1, len=n-start;
+    if (!len || len>=FS_MAX_FILENAME) return 0;
+    copy(name, path+start, len); name[len]=0;
+    if ((len==1 && name[0]=='.') || (len==2 && name[0]=='.' && name[1]=='.')) return 0;
+    char directory[FS_MAX_PATH];
+    if (slash<0) { directory[0]='.'; directory[1]=0; }
+    else if (!slash) { directory[0]='/'; directory[1]=0; }
+    else { copy(directory, path, slash); directory[slash]=0; }
+    inode_t dir;
+    return resolve(directory, parent) && read_inode(*parent, &dir) && is_dir(&dir);
+}
+static int bit(const uint8_t* b, unsigned n) { return (b[n/8]>>(n%8))&1; }
+static void set_bit(uint8_t* b, unsigned n, int value) {
+    if (value) b[n/8]|=1u<<(n%8); else b[n/8]&=~(1u<<(n%8));
+}
+/* Allocation remains in one block group. Reserve new data before replacing
+ * old extents so ENOSPC cannot silently truncate an existing file. */
+static uint32_t allocate_blocks(uint32_t count) {
+    if (!count || count>32768 || count>u32(super+12) || !read_block(block_bitmap, bitmap)) return 0;
+    uint32_t run=0, start=0;
+    for (uint32_t b=0; b<blocks; b++) {
+        if (bit(bitmap,b)) run=0;
+        else { if (!run) start=b; if (++run==count) break; }
+    }
+    if (run!=count) return 0;
+    for (uint32_t b=start; b<start+count; b++) set_bit(bitmap,b,1);
+    if (!write_block(block_bitmap,bitmap)) return 0;
+    w32(super+12,u32(super+12)-count); w16(group+12,u16(group+12)-count);
+    return sync_counts() ? start : 0;
+}
+static int free_blocks(uint32_t start, uint32_t count) {
+    if (!start || start>=blocks || count>blocks-start || !read_block(block_bitmap,bitmap)) return 0;
+    for (uint32_t b=start; b<start+count; b++) {
+        if (!bit(bitmap,b)) return 0;
+        set_bit(bitmap,b,0);
+    }
+    if (!write_block(block_bitmap,bitmap)) return 0;
+    w32(super+12,u32(super+12)+count); w16(group+12,u16(group+12)+count);
+    return sync_counts();
+}
+static uint32_t allocate_inode(int directory) {
+    if (!read_block(inode_bitmap,bitmap)) return 0;
+    uint32_t n=u32(super+84)-1;
+    while (n<inodes && bit(bitmap,n)) n++;
+    if (n==inodes) return 0;
+    set_bit(bitmap,n,1);
+    if (!write_block(inode_bitmap,bitmap)) return 0;
+    w32(super+16,u32(super+16)-1); w16(group+14,u16(group+14)-1);
+    if (directory) w16(group+16,u16(group+16)+1);
+    return sync_counts() ? n+1 : 0;
+}
+static int release_inode(uint32_t n, int directory) {
+    if (n<u32(super+84) || n>inodes || !read_block(inode_bitmap,bitmap) || !bit(bitmap,n-1)) return 0;
+    set_bit(bitmap,n-1,0);
+    if (!write_block(inode_bitmap,bitmap)) return 0;
+    w32(super+16,u32(super+16)+1); w16(group+14,u16(group+14)+1);
+    if (directory) w16(group+16,u16(group+16)-1);
+    return sync_counts();
+}
+static void empty_inode(inode_t* n, int directory) {
+    zero(n, sizeof(*n));
+    w16(n->raw, (directory ? DIRECTORY|0755 : REGULAR|0644));
+    w16(n->raw+2,user_uid()); w16(n->raw+24,user_gid());
+    w16(n->raw+26,directory ? 2 : 1); w32(n->raw+32,EXTENTS);
+    w16(n->raw+40,0xf30a); w16(n->raw+44,4);
+    w16(n->raw+128,32); /* i_extra_isize */
+}
+static void one_extent(inode_t* n, uint32_t start, uint32_t count, uint32_t size) {
+    zero(n->raw+40,60);
+    w16(n->raw+40,0xf30a); w16(n->raw+42,count ? 1 : 0); w16(n->raw+44,4);
+    if (count) { w16(n->raw+56,count); w32(n->raw+60,start); }
+    w32(n->raw+4,size); w32(n->raw+28,count*8);
+}
+/* Validate before changing a file. Unsupported inode flags, xattrs and
+ * indexed extent trees remain readable but cannot be mutated by this backend. */
+static int mutable(const inode_t* n) {
+    return u32(n->raw+32)==EXTENTS && !u32(n->raw+104) && !u32(n->raw+108) &&
+        u16(n->raw+40)==0xf30a && !u16(n->raw+46) &&
+        u16(n->raw+42)<=4 && u16(n->raw+44)==4;
+}
+static int free_data(const inode_t* n) {
+    if (!mutable(n)) return 0;
+    for (unsigned i=0; i<u16(n->raw+42); i++) {
+        const uint8_t* e=n->raw+52+i*12;
+        unsigned count=u16(e+4);
+        if (count>32768) count-=32768;
+        if (u16(e+6) || !free_blocks(u32(e+8),count)) return 0;
+    }
+    return 1;
+}
+static unsigned record_size(unsigned name) { return (8+name+3)&~3u; }
+static void put_entry(unsigned off, unsigned rec, uint32_t ino, const char* name, int directory) {
+    unsigned n=length(name);
+    zero(io+off,rec); w32(io+off,ino); w16(io+off+4,rec);
+    io[off+6]=n; io[off+7]=directory ? 2 : 1; copy(io+off+8,name,n);
+}
+static int add_entry(uint32_t parent, inode_t* dir, const char* name, uint32_t ino, int directory) {
+    unsigned need=record_size(length(name));
+    uint32_t size=u32(dir->raw+4);
+    for (uint32_t logical=0; logical<size/BLOCK_SIZE; logical++) {
+        uint32_t block=map_block(dir,logical);
+        if (!block || block==~0u || !read_block(block,io)) return 0;
+        for (unsigned off=0; off<BLOCK_SIZE; off+=u16(io+off+4)) {
+            if (!dir_record(off)) return 0;
+            unsigned rec=u16(io+off+4), used=u32(io+off) ? record_size(io[off+6]) : 0;
+            if (rec-used<need) continue;
+            if (used) w16(io+off+4,used);
+            put_entry(off+used,rec-used,ino,name,directory);
+            if (!write_block(block,io)) return 0;
+            if (directory) w16(dir->raw+26,u16(dir->raw+26)+1);
+            return write_inode(parent,dir);
+        }
+    }
+    if (!mutable(dir)) return 0;
+    unsigned count=u16(dir->raw+42);
+    if (count==4) return 0;
+    uint32_t block=allocate_blocks(1);
+    if (!block) return 0;
+    zero(io,BLOCK_SIZE); put_entry(0,BLOCK_SIZE,ino,name,directory);
+    if (!write_block(block,io)) return 0;
+    uint8_t* e=dir->raw+52+count*12;
+    w32(e,size/BLOCK_SIZE); w16(e+4,1); w32(e+8,block);
+    w16(dir->raw+42,count+1); w32(dir->raw+4,size+BLOCK_SIZE);
+    w32(dir->raw+28,u32(dir->raw+28)+8);
+    if (directory) w16(dir->raw+26,u16(dir->raw+26)+1);
+    return write_inode(parent,dir);
 }
 
-static int parent_writable(const char* path) {
-    char parent[FS_MAX_PATH];
-    int last = -1, length = 0;
-    while (path[length]) {
-        if (length >= FS_MAX_PATH - 1) return 0;
-        if (path[length] == '/') last = length;
-        length++;
-    }
-    if (last <= 0) return 1;
-    for (int i = 0; i < last; i++) parent[i] = path[i];
-    parent[last] = 0;
-    return fs_access(parent, FS_ACCESS_WRITE | FS_ACCESS_EXEC);
+const char* fs_getcwd(void) {
+    return current_task && current_task->cwd[0] ? current_task->cwd : user_home();
 }
-static int lookup(const char* path, fat32_dir_entry_t* e, uint32_t* lba, uint32_t* off) {
-    uint32_t parent; char name[11];
-    return fs_ready && resolve_path(path, &parent, name) &&
-        find_in_directory(parent, name, e, lba, off);
+int fs_home_path(const char* suffix, char out[FS_MAX_PATH]) {
+    const char* home=user_home();
+    unsigned a=length(home), b=length(suffix);
+    if (a+b>=FS_MAX_PATH) return 0;
+    copy(out,home,a); copy(out+a,suffix,b+1); return 1;
+}
+int fs_chdir(const char* path) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (!current_task || !path || !*path) return 0;
+    char full[FS_MAX_PATH]; unsigned n=0;
+    if (*path!='/') {
+        const char* cwd=fs_getcwd();
+        n=length(cwd); copy(full,cwd,n);
+        if (n>1) full[n++]='/';
+    }
+    unsigned len=length(path);
+    if (n+len>=FS_MAX_PATH) return 0;
+    copy(full+n,path,len+1);
+    /* Canonicalize dot components for a stable inherited working directory. */
+    char canonical[FS_MAX_PATH]; unsigned end=1, pos=0; canonical[0]='/';
+    while (full[pos]) {
+        if (full[pos]=='/') { pos++; continue; }
+        unsigned start=pos; while (full[pos] && full[pos]!='/') pos++;
+        unsigned size=pos-start;
+        if (size==1 && full[start]=='.') continue;
+        if (size==2 && full[start]=='.' && full[start+1]=='.') {
+            while (end>1 && canonical[end-1]!='/') end--;
+            if (end>1) end--;
+        } else {
+            if (end>1) canonical[end++]='/';
+            copy(canonical+end,full+start,size); end+=size;
+        }
+    }
+    canonical[end]=0;
+    uint32_t ino; inode_t dir;
+    /* Check the original path as well, so inaccessible/../ cannot bypass search permissions. */
+    if (!resolve(full,&ino) || !read_inode(ino,&dir) || !is_dir(&dir) || !allowed(&dir,1)) return 0;
+    copy(current_task->cwd,canonical,end+1); return 1;
+}
+uint32_t fs_generation(void) { return change_generation; }
+static void mount_boot_disk(const volatile uint8_t* boot) {
+    ready=0;
+    if (boot[510]!=0x55 || boot[511]!=0xaa || boot[450]!=0x83) {
+        debug_print("[ext4] Invalid boot disk handoff.\n"); return;
+    }
+    unsigned found=ATA_DRIVE_COUNT;
+    for (unsigned d=0; d<ATA_DRIVE_COUNT; d++) {
+        if (!ata_select_drive(d) || !ata_read_sectors(0,1,io)) continue;
+        unsigned i=0; while (i<512 && io[i]==boot[i]) i++;
+        if (i!=512) continue;
+        if (found!=ATA_DRIVE_COUNT) {
+            ata_select_drive(ATA_DRIVE_COUNT);
+            debug_print("[ext4] Ambiguous boot disk; mount refused.\n"); return;
+        }
+        found=d;
+    }
+    if (found==ATA_DRIVE_COUNT || !ata_select_drive(found) || !ata_read_sectors(0,1,io)) return;
+    base=u32(io+454); uint32_t sectors=u32(io+458);
+    if (!base || sectors<16 || sectors>0x0fffffffu || base>0x0fffffffu-sectors ||
+        !ata_read_sectors(base+2,2,super)) return;
+    blocks=u32(super+4); inodes=u32(super);
+    /* Only the feature profile we can safely update is writable. */
+    if (u16(super+56)!=0xef53 || u16(super+58)!=1 || u32(super+24)!=2 ||
+        u32(super+20)!=0 || u16(super+88)!=INODE_SIZE || u32(super+76)!=1 ||
+        u32(super+92)!=0 || u32(super+96)!=0x42 || (u32(super+100)&~3u) ||
+        !blocks || blocks>32768 || blocks>sectors/8 || blocks>u32(super+32) ||
+        !inodes || inodes>32768 || inodes!=u32(super+40) || u32(super+84)<11 ||
+        u32(super+84)>inodes || !read_block(1,group)) {
+        debug_print("[ext4] Unsupported or dirty filesystem; use mkext4.py / e2fsck.\n"); return;
+    }
+    block_bitmap=u32(group); inode_bitmap=u32(group+4); inode_table=u32(group+8);
+    if (block_bitmap<2 || block_bitmap>=blocks || inode_bitmap<2 || inode_bitmap>=blocks ||
+        inode_table<2 || inode_table>=blocks || (inodes+15)/16>blocks-inode_table ||
+        (u16(group+18)&3) || u32(super+12)>blocks || u32(super+16)>inodes ||
+        u32(super+12)!=u16(group+12) || u32(super+16)!=u16(group+14)) return;
+    inode_t root;
+    if (!read_inode(ROOT_INO,&root) || !is_dir(&root) || !mutable(&root)) return;
+    ready=1; change_generation++;
+    debug_print("[ext4] Mounted successfully!\n");
+}
+void fs_init(void) {
+    MUTEX_GUARD(filesystem_mutex);
+    ready=0;
+    if (*(const volatile uint32_t*)0x6000!=0x5642584e) {
+        debug_print("[ext4] Boot disk handoff unavailable.\n"); return;
+    }
+    mount_boot_disk((const volatile uint8_t*)0x6004);
 }
 int fs_stat(const char* path, fs_stat_t* out) {
     MUTEX_GUARD(filesystem_mutex);
-    if (!out || !fs_ready || !path) return 0;
-    if (path[0] == '/' && !path[1]) { *out = (fs_stat_t){0, 0, 0777}; return 1; }
-    fat32_dir_entry_t e;
-    if (!lookup(path, &e, 0, 0)) return 0;
-    *out = entry_stat(&e); return 1;
+    uint32_t ino; inode_t n;
+    if (!out || !resolve(path,&ino) || !read_inode(ino,&n)) return 0;
+    *out=metadata(&n); return 1;
 }
 int fs_access(const char* path, unsigned access) {
     MUTEX_GUARD(filesystem_mutex);
-    fs_stat_t st;
-    return !(access & ~7u) && fs_stat(path, &st) && allowed(st, access);
+    uint32_t ino; inode_t n;
+    return !(access&~7u) && resolve(path,&ino) && read_inode(ino,&n) && allowed(&n,access);
 }
 static int change_stat(const char* path, uint16_t value, int owner) {
-    fat32_dir_entry_t e; uint32_t lba, off;
-    if (!lookup(path, &e, &lba, &off)) return 0;
-    fs_stat_t st = entry_stat(&e);
-    if (user_uid() != USER_ROOT && (owner || user_uid() != st.uid)) return 0;
+    uint32_t ino; inode_t n;
+    if (!resolve(path,&ino) || !read_inode(ino,&n) ||
+        (user_uid()!=USER_ROOT && (owner || user_uid()!=u16(n.raw+2)))) return 0;
     if (owner) {
-        const user_t* user = user_by_id(value);
-        if (!user) return 0;
-        st.uid = user->uid; st.gid = user->gid;
-    } else { if (value & ~0777) return 0; st.mode = value; }
-    if (!ata_read_sectors(lba, 1, sector_buffer)) return 0;
-    entry_set_stat((fat32_dir_entry_t*)&sector_buffer[off], st);
-    return ata_write_sectors(lba, 1, sector_buffer);
+        const user_t* user=user_by_id(value); if (!user) return 0;
+        w16(n.raw+2,user->uid); w16(n.raw+24,user->gid);
+    } else {
+        if (value&~0777) return 0;
+        w16(n.raw,(u16(n.raw)&~0777u)|value);
+    }
+    return begin_change() && write_inode(ino,&n) && end_change();
 }
 int fs_chmod(const char* path, uint16_t mode) {
-    MUTEX_GUARD(filesystem_mutex);
-    return change_stat(path, mode, 0);
+    MUTEX_GUARD(filesystem_mutex); return change_stat(path,mode,0);
 }
 int fs_chown(const char* path, uint16_t uid) {
-    MUTEX_GUARD(filesystem_mutex);
-    return change_stat(path, uid, 1);
+    MUTEX_GUARD(filesystem_mutex); return change_stat(path,uid,1);
 }
-
-void fs_init(void) {
+int fs_list_dir_types(const char* path, char names[FS_MAX_FILES][FS_MAX_FILENAME], uint8_t types[FS_MAX_FILES]) {
     MUTEX_GUARD(filesystem_mutex);
-    for (uint32_t i = 0; i < FS_READ_CURSORS; i++) read_cursors[i].first = 0;
-    cached_fat_sector = 0xFFFFFFFFu;
-    fs_ready = 0;
-    debug_print("[FAT32] Locating boot volume on IDE drives...\n");
-
-    /* BIOS drive numbers are not IDE positions. Match the VBR read by the
-     * bootloader instead, and refuse ambiguous copies rather than writing
-     * to a different disk. The BIOS VBR supplies the volume's disk offset. */
-    const volatile uint32_t* handoff = (const volatile uint32_t*)0x6000;
-    const volatile uint8_t* boot_vbr = (const volatile uint8_t*)0x6004;
-    if (*handoff != 0x5642584E) {
-        debug_print("[FAT32] Boot volume handoff unavailable.\n");
-        return;
-    }
-    const uint32_t partition_offset =
-        ((const volatile fat32_bpb_t*)boot_vbr)->hidden_sectors;
-    if (!partition_offset || boot_vbr[510] != 0x55 || boot_vbr[511] != 0xAA) {
-        debug_print("[FAT32] Boot volume handoff has an invalid offset/signature.\n");
-        return;
-    }
-    unsigned found = ATA_DRIVE_COUNT;
-    for (unsigned drive = 0; drive < ATA_DRIVE_COUNT; drive++) {
-        if (!ata_select_drive(drive) ||
-            !ata_read_sectors(partition_offset, 1, sector_buffer)) continue;
-        unsigned i = 0;
-        while (i < 512 && sector_buffer[i] == boot_vbr[i]) i++;
-        if (i != 512) continue;
-        if (found != ATA_DRIVE_COUNT) {
-            ata_select_drive(ATA_DRIVE_COUNT);
-            debug_print("[FAT32] Multiple copies of boot volume found; mount refused.\n");
-            return;
+    uint32_t ino; inode_t dir;
+    if (!names || !resolve(path ? path : "/",&ino) || !read_inode(ino,&dir) ||
+        !is_dir(&dir) || !allowed(&dir,5)) return 0;
+    int count=0;
+    for (uint32_t b=0; b<u32(dir.raw+4)/BLOCK_SIZE && count<FS_MAX_FILES; b++) {
+        uint32_t physical=map_block(&dir,b);
+        if (!physical || physical==~0u || !read_block(physical,io)) return count;
+        for (unsigned off=0; off<BLOCK_SIZE && count<FS_MAX_FILES; off+=u16(io+off+4)) {
+            if (!dir_record(off)) return count;
+            unsigned len=io[off+6];
+            if (!u32(io+off) || !len || len>=FS_MAX_FILENAME ||
+                (io[off+8]=='.' && (len==1 || (len==2 && io[off+9]=='.')))) continue;
+            copy(names[count],io+off+8,len); names[count][len]=0;
+            if (types) types[count]=io[off+7]==2 ? FS_ATTR_DIRECTORY : 0;
+            count++;
         }
-        found = drive;
-    }
-    if (found == ATA_DRIVE_COUNT || !ata_select_drive(found) ||
-        !ata_read_sectors(partition_offset, 1, sector_buffer)) {
-        ata_select_drive(ATA_DRIVE_COUNT);
-        debug_print("[FAT32] Boot volume not found on supported IDE drives.\n");
-        return;
-    }
-
-    fat32_bpb_t* b = (fat32_bpb_t*)sector_buffer;
-    if (sector_buffer[510] != 0x55 || sector_buffer[511] != 0xAA ||
-        b->bytes_per_sector != 512 || !b->sectors_per_cluster ||
-        b->sectors_per_cluster > 8 ||
-        (b->sectors_per_cluster & (b->sectors_per_cluster - 1)) ||
-        !b->reserved_sector_count || !b->num_fats ||
-        !b->sectors_per_fat_32 || b->root_cluster < 2) {
-        debug_print("[FAT32] Boot volume has an invalid FAT32 BPB.\n");
-        return;
-    }
-    if (found < 4) {
-        debug_print("[FAT32] Selected IDE");
-        debug_print(found < 2 ? "0:" : "1:");
-        debug_print((found & 1) ? "1\n" : "0\n");
-    } else {
-        debug_print("[FAT32] Selected PCI IDE drive ");
-        debug_hex(found); debug_print("\n");
-    }
-
-    bpb = *b;
-    sectors_per_cluster = bpb.sectors_per_cluster;
-    root_cluster = bpb.root_cluster;
-    fat_begin_lba = partition_offset + bpb.reserved_sector_count;
-    cluster_begin_lba = fat_begin_lba + (bpb.num_fats * bpb.sectors_per_fat_32);
-    fs_ready = 1;
-
-    debug_print("[FAT32] Mounted successfully! Root cluster: ");
-    debug_hex(root_cluster);
-    debug_print("\n");
-}
-
-int fs_list_dir_types(const char* path, char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME], uint8_t types[FS_MAX_FILES]) {
-    MUTEX_GUARD(filesystem_mutex);
-    if (!fs_ready) return 0;
-    uint32_t dir_cluster = root_cluster;
-
-    if (path && path[0] && (path[0] != '/' || path[1])) {
-        fat32_dir_entry_t ent;
-        if (!lookup(path, &ent, 0, 0) || !(ent.attr & FAT_ATTR_DIRECTORY) ||
-            !entry_allowed(&ent, FS_ACCESS_READ | FS_ACCESS_EXEC)) return 0;
-        dir_cluster = ((uint32_t)ent.first_cluster_hi << 16) | ent.first_cluster_lo;
-        if (!dir_cluster) dir_cluster = root_cluster;
-    }
-
-    int count = 0;
-    uint32_t curr_cluster = dir_cluster;
-    while (curr_cluster >= 2 && curr_cluster < 0x0FFFFFF8 && count < FS_MAX_FILES) {
-        uint32_t lba = cluster_to_lba(curr_cluster);
-        for (uint32_t s = 0; s < sectors_per_cluster && count < FS_MAX_FILES; s++) {
-            if (!ata_read_sectors(lba + s, 1, sector_buffer)) return count;
-            fat32_dir_entry_t* entries = (fat32_dir_entry_t*)sector_buffer;
-            for (int i = 0; i < 16 && count < FS_MAX_FILES; i++) {
-                if ((uint8_t)entries[i].name[0] == 0x00) return count;
-                if ((uint8_t)entries[i].name[0] == 0xE5) continue;
-                if (entries[i].attr == FAT_ATTR_LFN || (entries[i].attr & FAT_ATTR_VOLUME_ID)) continue;
-
-                
-                if (entries[i].name[0] == '.') continue;
-
-                if (types) types[count] = entries[i].attr;
-                format_83_to_filename(entries[i].name, file_list_out[count++]);
-            }
-        }
-        curr_cluster = get_next_cluster(curr_cluster);
     }
     return count;
 }
-
 int fs_list_dir(const char* path, char names[FS_MAX_FILES][FS_MAX_FILENAME]) {
-    return fs_list_dir_types(path, names, 0);
+    return fs_list_dir_types(path,names,0);
 }
-
-int fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]) {
+int fs_list(char names[FS_MAX_FILES][FS_MAX_FILENAME]) { return fs_list_dir("/",names); }
+int fs_read_file_at(const char* path, uint8_t* dest, uint32_t capacity, uint32_t offset) {
     MUTEX_GUARD(filesystem_mutex);
-    return fs_list_dir("/", file_list_out);
-}
-
-int fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes) {
-    MUTEX_GUARD(filesystem_mutex);
-    return fs_read_file_at(filename, dest, max_bytes, 0);
-}
-
-int fs_read_file_at(const char* filename, uint8_t* dest, uint32_t capacity,
-                    uint32_t offset) {
-    MUTEX_GUARD(filesystem_mutex);
-    if (!fs_ready || !filename) return -1;
-    uint32_t parent;
-    char name[11];
-    fat32_dir_entry_t entry;
-    if (!resolve_path(filename, &parent, name) ||
-        !find_in_directory(parent, name, &entry, 0, 0) ||
-        (entry.attr & FAT_ATTR_DIRECTORY)) return -1;
-    if (!entry_allowed(&entry, FS_ACCESS_READ)) return -1;
-    if (!dest || !capacity) return (int)entry.file_size;
-    if (offset >= entry.file_size) return 0;
-    uint32_t remaining = entry.file_size - offset;
-    if (remaining > capacity) remaining = capacity;
-    uint32_t cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
-    uint32_t cluster_bytes = sectors_per_cluster * 512u;
-    uint32_t first_cluster = cluster, cluster_offset = 0;
-    read_cursor_t* cursor = 0;
-    for (uint32_t i = 0; i < FS_READ_CURSORS; i++) {
-        if (read_cursors[i].first == first_cluster && read_cursors[i].size == entry.file_size) {
-            cursor = &read_cursors[i];
-            if (offset >= cursor->offset) {
-                cluster = cursor->cluster;
-                cluster_offset = cursor->offset;
-                offset -= cluster_offset;
-            }
-            break;
+    uint32_t ino; inode_t n;
+    if (!resolve(path,&ino) || !read_inode(ino,&n) || (u16(n.raw)&KIND)!=REGULAR ||
+        !allowed(&n,4) || u32(n.raw+108) || u32(n.raw+4)>0x7fffffff) return -1;
+    uint32_t size=u32(n.raw+4);
+    if (!dest || !capacity) return size;
+    if (offset>=size) return 0;
+    uint32_t total=size-offset; if (total>capacity) total=capacity;
+    for (uint32_t done=0; done<total;) {
+        uint32_t pos=offset+done, chunk=BLOCK_SIZE-pos%BLOCK_SIZE;
+        if (chunk>total-done) chunk=total-done;
+        uint32_t physical=map_block(&n,pos/BLOCK_SIZE);
+        if (physical==~0u) return -1;
+        if (!physical) zero(dest+done,chunk);
+        else {
+            if (!read_block(physical,io)) return -1;
+            copy(dest+done,io+pos%BLOCK_SIZE,chunk);
         }
+        done+=chunk;
     }
-    if (!cursor) cursor = &read_cursors[next_read_cursor++ % FS_READ_CURSORS];
-    uint32_t hops = 0;
-    while (offset >= cluster_bytes && cluster >= 2 && cluster < 0x0FFFFFF8) {
-        if (++hops > entry.file_size / cluster_bytes + 1u) return -1;
-        cluster = get_next_cluster(cluster);
-        offset -= cluster_bytes;
-        cluster_offset += cluster_bytes;
-    }
-    uint32_t copied = 0;
-    while (cluster >= 2 && cluster < 0x0FFFFFF8 && copied < remaining) {
-        cursor->first = first_cluster;
-        cursor->size = entry.file_size;
-        cursor->cluster = cluster;
-        cursor->offset = cluster_offset;
-        uint32_t lba = cluster_to_lba(cluster);
-        for (uint32_t sector = offset / 512u;
-             sector < sectors_per_cluster && copied < remaining; sector++) {
-            if (!ata_read_sectors(lba + sector, 1, sector_buffer)) return -1;
-            uint32_t start = offset % 512u;
-            uint32_t chunk = 512u - start;
-            if (chunk > remaining - copied) chunk = remaining - copied;
-            for (uint32_t i = 0; i < chunk; i++) dest[copied+i] = sector_buffer[start+i];
-            copied += chunk;
-            offset = 0;
-        }
-        cluster = get_next_cluster(cluster);
-        cluster_offset += cluster_bytes;
-    }
-    return copied == remaining ? (int)copied : -1;
+    return total;
 }
-
-int fs_delete_file(const char* filename) {
-    MUTEX_GUARD(filesystem_mutex);
-    if (!fs_ready || !filename) return 0;
-
-    uint32_t parent_cluster;
-    char target_83[11];
-    if (!resolve_path(filename, &parent_cluster, target_83)) return 0;
-
-    fat32_dir_entry_t entry;
-    uint32_t dir_lba, dir_offset;
-    if (!find_in_directory(parent_cluster, target_83, &entry, &dir_lba, &dir_offset)) return 0;
-
-    if ((entry.attr & FAT_ATTR_DIRECTORY) || !parent_writable(filename)) return 0;
-    /* Shared root behaves like a sticky directory. */
-    if (parent_cluster == root_cluster && user_uid() != USER_ROOT &&
-        user_uid() != entry_stat(&entry).uid) return 0;
-
-    uint32_t start_cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
-    if (start_cluster >= 2) free_cluster_chain(start_cluster);
-
-    
-    if (ata_read_sectors(dir_lba, 1, sector_buffer)) {
-        sector_buffer[dir_offset] = 0xE5;
-        ata_write_sectors(dir_lba, 1, sector_buffer);
-        change_generation++;
-        return 1;
-    }
-    return 0;
+int fs_read_file(const char* path, uint8_t* dest, uint32_t capacity) {
+    return fs_read_file_at(path,dest,capacity,0);
 }
-
-int fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes) {
+int fs_write_file(const char* path, const uint8_t* src, uint32_t size) {
     MUTEX_GUARD(filesystem_mutex);
-    if (!fs_ready || !filename) return -1;
-
-    uint32_t parent_cluster;
-    char target_83[11];
-    if (!resolve_path(filename, &parent_cluster, target_83)) return -1;
-
-    fat32_dir_entry_t entry;
-    uint32_t dir_lba = 0, dir_offset = 0;
-    int exists = find_in_directory(parent_cluster, target_83, &entry, &dir_lba, &dir_offset);
-
-    if (exists && ((entry.attr & FAT_ATTR_DIRECTORY) || !entry_allowed(&entry, FS_ACCESS_WRITE))) return -1;
-    if (!exists && !parent_writable(filename)) return -1;
-    fs_stat_t metadata = exists ? entry_stat(&entry) :
-        (fs_stat_t){user_uid(), user_gid(), 0644};
-
+    uint32_t parent; char name[FS_MAX_FILENAME]; inode_t dir, old, node;
+    dir_location_t loc;
+    if ((size && !src) || size>32768u*BLOCK_SIZE || !parent_of(path,&parent,name) ||
+        !read_inode(parent,&dir) || !mutable(&dir)) return -1;
+    int exists=find_entry(&dir,name,&loc);
+    if (exists<0) return -1;
     if (exists) {
-        uint32_t old_cluster = ((uint32_t)entry.first_cluster_hi << 16) | entry.first_cluster_lo;
-        if (old_cluster >= 2) free_cluster_chain(old_cluster);
+        if (!read_inode(loc.ino,&old) || (u16(old.raw)&KIND)!=REGULAR ||
+            !mutable(&old) || !allowed(&old,2)) return -1;
+        node=old;
     } else {
-        uint32_t curr = parent_cluster;
-        int found_slot = 0;
-        while (curr >= 2 && curr < 0x0FFFFFF8 && !found_slot) {
-            uint32_t lba = cluster_to_lba(curr);
-            for (uint32_t s = 0; s < sectors_per_cluster && !found_slot; s++) {
-                if (!ata_read_sectors(lba + s, 1, sector_buffer)) return -1;
-                fat32_dir_entry_t* entries = (fat32_dir_entry_t*)sector_buffer;
-                for (int i = 0; i < 16; i++) {
-                    if ((uint8_t)entries[i].name[0] == 0x00 || (uint8_t)entries[i].name[0] == 0xE5) {
-                        dir_lba = lba + s;
-                        dir_offset = i * sizeof(fat32_dir_entry_t);
-                        found_slot = 1;
-                        break;
-                    }
-                }
-            }
-            if (!found_slot) {
-                uint32_t next = get_next_cluster(curr);
-                if (next >= 0x0FFFFFF8) {
-                    uint32_t new_c = allocate_free_cluster();
-                    if (!new_c) return -1;
-                    set_cluster_entry(curr, new_c);
-                    next = new_c;
-                }
-                curr = next;
-            }
-        }
-        if (!found_slot) return -1;
+        if (!allowed(&dir,3)) return -1;
+        empty_inode(&node,0);
     }
-
-    uint32_t first_cluster = 0;
-    uint32_t prev_cluster = 0;
-    uint32_t bytes_written = 0;
-    uint32_t cluster_bytes = sectors_per_cluster * 512;
-
-    while (bytes_written < size_bytes || (size_bytes == 0 && first_cluster == 0)) {
-        uint32_t new_cluster = allocate_free_cluster();
-        if (!new_cluster) return -1;
-
-        if (first_cluster == 0) first_cluster = new_cluster;
-        if (prev_cluster != 0) set_cluster_entry(prev_cluster, new_cluster);
-        prev_cluster = new_cluster;
-
-        uint32_t lba = cluster_to_lba(new_cluster);
-        uint32_t remaining = size_bytes - bytes_written;
-
-        if (remaining >= cluster_bytes) {
-            
-            ata_write_sectors(lba, sectors_per_cluster, src + bytes_written);
-            bytes_written += cluster_bytes;
-        } else {
-            
-            for (uint32_t b = 0; b < 512; b++) sector_buffer[b] = 0;
-            for (uint32_t b = 0; b < remaining; b++) {
-                sector_buffer[b] = src[bytes_written + b];
-            }
-            ata_write_sectors(lba, 1, sector_buffer);
-            bytes_written += remaining;
-        }
-
-        if (size_bytes == 0) break;
+    if (!begin_change()) return -1;
+    uint32_t count=(size+BLOCK_SIZE-1)/BLOCK_SIZE, start=count ? allocate_blocks(count) : 0;
+    if (count && !start) { end_change(); return -1; }
+    for (uint32_t i=0; i<count; i++) {
+        unsigned chunk=size-i*BLOCK_SIZE; if (chunk>BLOCK_SIZE) chunk=BLOCK_SIZE;
+        zero(io,BLOCK_SIZE); copy(io,src+i*BLOCK_SIZE,chunk);
+        if (!write_block(start+i,io)) return -1;
     }
-
-    
-    if (!ata_read_sectors(dir_lba, 1, sector_buffer)) return -1;
-    fat32_dir_entry_t* dir_ptr = (fat32_dir_entry_t*)&sector_buffer[dir_offset];
-    /* Preserve the spelling of new short names; legacy callers may still
-     * look them up using FAT's case-insensitive matching. */
-    if (exists) {
-        for (int i = 0; i < 11; i++) dir_ptr->name[i] = entry.name[i];
-    } else {
-        const char* base = filename;
-        for (const char* p = filename; *p; p++) if (*p == '/') base = p + 1;
-        for (int i = 0; i < 11; i++) dir_ptr->name[i] = ' ';
-        int i = 0;
-        while (*base && *base != '.' && i < 8) dir_ptr->name[i++] = *base++;
-        while (*base && *base != '.') base++;
-        if (*base == '.') {
-            base++; i = 8;
-            while (*base && i < 11) dir_ptr->name[i++] = *base++;
-        }
+    uint32_t ino=exists ? loc.ino : allocate_inode(0);
+    if (!ino) {
+        if (count && !free_blocks(start,count)) return -1;
+        end_change(); return -1;
     }
-    dir_ptr->attr = FAT_ATTR_ARCHIVE;
-    entry_set_stat(dir_ptr, metadata);
-    dir_ptr->first_cluster_hi = (uint16_t)(first_cluster >> 16);
-    dir_ptr->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
-    dir_ptr->file_size = size_bytes;
-
-    ata_write_sectors(dir_lba, 1, sector_buffer);
-    change_generation++;
-    return (int)size_bytes;
+    one_extent(&node,start,count,size);
+    if (!write_inode(ino,&node)) return -1;
+    if (!exists && !add_entry(parent,&dir,name,ino,0)) {
+        if (io_failed) return -1;
+        inode_t unused; zero(&unused,sizeof(unused));
+        if (!write_inode(ino,&unused) || !release_inode(ino,0) || (count && !free_blocks(start,count))) return -1;
+        end_change(); return -1;
+    }
+    if (exists && !free_data(&old)) return -1;
+    return end_change() ? (int)size : -1;
 }
-
-/* Kernel desktop/browser helpers; keep directory metadata under the FS lock. */
+int fs_delete_file(const char* path) {
+    MUTEX_GUARD(filesystem_mutex);
+    uint32_t parent; char name[FS_MAX_FILENAME]; inode_t dir, node; dir_location_t loc;
+    if (!parent_of(path,&parent,name) || !read_inode(parent,&dir) || !allowed(&dir,3) ||
+        find_entry(&dir,name,&loc)!=1 || !read_inode(loc.ino,&node) ||
+        (u16(node.raw)&KIND)!=REGULAR || !mutable(&node)) return 0;
+    if ((u16(dir.raw)&01000) && user_uid()!=USER_ROOT && user_uid()!=u16(dir.raw+2) &&
+        user_uid()!=u16(node.raw+2)) return 0;
+    if (!begin_change() || !read_block(loc.block,io)) return 0;
+    w32(io+loc.offset,0);
+    if (!write_block(loc.block,io)) return 0;
+    unsigned links=u16(node.raw+26);
+    if (links>1) { w16(node.raw+26,links-1); if (!write_inode(loc.ino,&node)) return 0; }
+    else {
+        if (!free_data(&node)) return 0;
+        zero(&node,sizeof(node));
+        if (!write_inode(loc.ino,&node) || !release_inode(loc.ino,0)) return 0;
+    }
+    return end_change();
+}
 int fs_is_directory(const char* path) {
     MUTEX_GUARD(filesystem_mutex);
-    fat32_dir_entry_t e;
-    return fs_ready && lookup(path, &e, 0, 0) &&
-        (e.attr & FAT_ATTR_DIRECTORY) && entry_allowed(&e, FS_ACCESS_READ | FS_ACCESS_EXEC);
+    uint32_t ino; inode_t n;
+    return resolve(path,&ino) && read_inode(ino,&n) && is_dir(&n) && allowed(&n,5);
 }
-
 int fs_mkdir(const char* path) {
     MUTEX_GUARD(filesystem_mutex);
-    fat32_dir_entry_t e;
-    uint32_t lba, offset;
-    if (!fs_ready || !path) return -1;
-    if (lookup(path, &e, &lba, &offset))
-        return (e.attr & FAT_ATTR_DIRECTORY) && entry_allowed(&e, FS_ACCESS_READ | FS_ACCESS_EXEC) ? 0 : -1;
-    if (fs_write_file(path, 0, 0) < 0 || !lookup(path, &e, &lba, &offset)) return -1;
-    uint32_t cluster = ((uint32_t)e.first_cluster_hi << 16) | e.first_cluster_lo;
-    uint32_t parent; char name[11];
-    if (!resolve_path(path, &parent, name)) return -1;
-    for (unsigned i = 0; i < sizeof(sector_buffer); i++) sector_buffer[i] = 0;
-    for (uint32_t i = 0; i < sectors_per_cluster; i++)
-        if (!ata_write_sectors(cluster_to_lba(cluster) + i, 1, sector_buffer)) return -1;
-    fat32_dir_entry_t* dots = (fat32_dir_entry_t*)sector_buffer;
-    for (int i = 0; i < 11; i++) dots[0].name[i] = dots[1].name[i] = ' ';
-    dots[0].name[0] = dots[1].name[0] = '.'; dots[1].name[1] = '.';
-    dots[0].attr = dots[1].attr = FAT_ATTR_DIRECTORY;
-    dots[0].first_cluster_hi = cluster >> 16; dots[0].first_cluster_lo = cluster;
-    dots[1].first_cluster_hi = parent >> 16; dots[1].first_cluster_lo = parent;
-    if (!ata_write_sectors(cluster_to_lba(cluster), 1, sector_buffer)) return -1;
-    if (!ata_read_sectors(lba, 1, sector_buffer)) return -1;
-    fat32_dir_entry_t* entry = (fat32_dir_entry_t*)(sector_buffer + offset);
-    entry->attr = FAT_ATTR_DIRECTORY;
-    entry_set_stat(entry, (fs_stat_t){user_uid(), user_gid(), 0755});
-    return ata_write_sectors(lba, 1, sector_buffer) ? 0 : -1;
+    uint32_t parent; char name[FS_MAX_FILENAME]; inode_t dir, node; dir_location_t loc;
+    if (!parent_of(path,&parent,name) || !read_inode(parent,&dir) || !mutable(&dir)) return -1;
+    int exists=find_entry(&dir,name,&loc);
+    if (exists==1) return read_inode(loc.ino,&node) && is_dir(&node) && allowed(&node,5) ? 0 : -1;
+    if (exists<0 || !allowed(&dir,3) || !begin_change()) return -1;
+    uint32_t block=allocate_blocks(1);
+    if (!block) { end_change(); return -1; }
+    uint32_t ino=allocate_inode(1);
+    if (!ino) { if (free_blocks(block,1)) end_change(); return -1; }
+    empty_inode(&node,1); one_extent(&node,block,1,BLOCK_SIZE);
+    zero(io,BLOCK_SIZE); put_entry(0,12,ino,".",1); put_entry(12,BLOCK_SIZE-12,parent,"..",1);
+    if (!write_block(block,io) || !write_inode(ino,&node)) return -1;
+    if (!add_entry(parent,&dir,name,ino,1)) {
+        if (io_failed) return -1;
+        inode_t unused; zero(&unused,sizeof(unused));
+        if (write_inode(ino,&unused) && release_inode(ino,1) && free_blocks(block,1)) end_change();
+        return -1;
+    }
+    return end_change() ? 0 : -1;
 }

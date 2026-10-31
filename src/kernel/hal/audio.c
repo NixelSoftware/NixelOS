@@ -84,7 +84,7 @@ void audio_set_volume(uint32_t value) {
 int32_t audio_init(uint32_t sample_rate) {
     MUTEX_GUARD(audio_mutex);
     audio_trace("audio_init", sample_rate, 0, "call", 0);
-    if (opl_active || !active_driver || !active_driver->init) return audio_result("audio_init", sample_rate, 0, -1);
+    if (!active_driver || !active_driver->init) return audio_result("audio_init", sample_rate, 0, -1);
     if (pcm_active) return audio_result("audio_init", sample_rate, 0, -1);
     int32_t result = active_driver->init(sample_rate);
     if (result == 0) { pcm_active = 1; audio_set_volume(volume); }
@@ -94,7 +94,7 @@ int32_t audio_init(uint32_t sample_rate) {
 int32_t audio_write(const void* data, uint32_t length) {
     MUTEX_GUARD(audio_mutex);
     audio_trace("audio_write", length, 0, "call", 0);
-    if (opl_active || !active_driver || !active_driver->write) return audio_result("audio_write", length, 0, -1);
+    if (!pcm_active || !active_driver || !active_driver->write) return audio_result("audio_write", length, 0, -1);
     return audio_result("audio_write", length, 0, active_driver->write(data, length));
 }
 
@@ -114,7 +114,7 @@ int32_t audio_pending_frames(void) {
 int32_t audio_drain(void) {
     MUTEX_GUARD(audio_mutex);
     audio_trace("audio_drain", 0, 0, "call", 0);
-    if (opl_active || !active_driver || !active_driver->drain) return audio_result("audio_drain", 0, 0, -1);
+    if (!pcm_active || !active_driver || !active_driver->drain) return audio_result("audio_drain", 0, 0, -1);
     return audio_result("audio_drain", 0, 0, active_driver->drain());
 }
 
@@ -128,7 +128,7 @@ void audio_service(void) {
 int32_t audio_opl_init(void) {
     MUTEX_GUARD(audio_mutex);
     audio_trace("audio_opl_init", 0, 0, "call", 0);
-    if (pcm_active || opl_active) return audio_result("audio_opl_init", 0, 0, -1);
+    if (opl_active) return audio_result("audio_opl_init", 0, 0, -1);
     if (!active_driver || !active_driver->opl_init || !active_driver->opl_write) return audio_result("audio_opl_init", 0, 0, -1);
     if (active_driver->opl_init() < 0) return audio_result("audio_opl_init", 0, 0, -1);
     for (uint32_t i = 0; i < 22; i++) opl_levels[i] = 0;
@@ -149,22 +149,20 @@ int32_t audio_opl_write(uint32_t reg, uint32_t value) {
     return audio_result("audio_opl_write", reg, value, 0);
 }
 
+void audio_opl_shutdown(void) {
+    MUTEX_GUARD(audio_mutex);
+    if (!opl_active) return;
+    for (uint8_t i = 0; i < 9; i++) active_driver->opl_write(0xB0 + i, 0);
+    for (uint8_t i = 0; i < 22; i++) active_driver->opl_write(0x40 + i, 63);
+    opl_active = 0;
+}
+
 void audio_shutdown(void) {
     MUTEX_GUARD(audio_mutex);
     audio_trace("audio_shutdown", 0, 0, "call", 0);
-    pcm_active = 0;
-    if (opl_active) {
-        for (uint8_t i = 0; i < 9; i++) {
-            active_driver->opl_write(0xB0 + i, 0);
-        }
-        for (uint8_t i = 0; i < 22; i++) active_driver->opl_write(0x40 + i, 63);
-        opl_active = 0;
-        audio_trace("audio_shutdown", 0, 0, "return", 0);
-        return;
-    }
-    if (active_driver && active_driver->shutdown) {
+    if (pcm_active && active_driver && active_driver->shutdown)
         active_driver->shutdown();
-    }
+    pcm_active = 0;
     audio_trace("audio_shutdown", 0, 0, "return", 0);
 }
 

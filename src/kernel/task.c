@@ -191,6 +191,8 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
     t->shell_clear = current_task ? current_task->shell_clear : 0;
     for (unsigned i = 0; i < sizeof(t->command_args); i++)
         t->command_args[i] = current_task ? current_task->command_args[i] : 0;
+    for (unsigned i = 0; i < sizeof(t->cwd); i++)
+        t->cwd[i] = current_task ? current_task->cwd[i] : 0;
     t->directory = paging_kernel_directory();
     t->user_kernel_esp = t->user_exit_requested = t->preempt_count = 0;
     t->wait_next = 0;

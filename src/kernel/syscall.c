@@ -2,6 +2,7 @@
 #include "../system/services/audio/system_sound.h"
 #include "hal/audio.h"
 #include "syscall.h"
+#include "users.h"
 #include "task.h"
 #include "mutex.h"
 #include "idt.h"
@@ -369,8 +370,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
             return;
         }
         case SYS_AUDIO_OPL:
-            /* Hardware FM bypasses mixing; clients use their software PCM synth. */
-            regs->eax = (uint32_t)-1;
+            regs->eax = audio_mixer_opl(paging_current_directory(), regs->ebx, regs->ecx);
             return;
         case SYS_AUDIO_CONFIGURE: {
             if (!user_readable(regs->ebx, sizeof(user_audio_format_t))) {
@@ -400,6 +400,22 @@ static void syscall_dispatch_impl(registers_t* regs) {
             audio_mixer_close(paging_current_directory());
             regs->eax = 0;
             return;
+        case SYS_FS_GETCWD:
+        case SYS_FS_HOME: {
+            const char* path = regs->eax == SYS_FS_HOME ? user_home() : fs_getcwd();
+            uint32_t length = 0; while (path[length]) length++;
+            if (regs->ecx <= length || !user_writable(regs->ebx, length + 1)) {
+                regs->eax = (uint32_t)-1; return;
+            }
+            for (uint32_t i = 0; i <= length; i++) ((char*)regs->ebx)[i] = path[i];
+            regs->eax = length; return;
+        }
+        case SYS_FS_MKDIR: {
+            char path[FS_MAX_PATH];
+            regs->eax = copy_user_text(regs->ebx, path, sizeof(path)) ?
+                (uint32_t)fs_mkdir(path) : (uint32_t)-1;
+            return;
+        }
         case SYS_FS_READ_AT:
         case SYS_FS_READ: {
             char filename[FS_MAX_PATH];
@@ -478,8 +494,8 @@ static void syscall_dispatch_impl(registers_t* regs) {
             uint32_t source_address = regs->ecx;
             uint32_t length = regs->edx;
             uint32_t name_length = 0;
-            if (!length || length > SYS_FS_WRITE_MAX ||
-                !user_readable(source_address, length)) {
+            if (length > SYS_FS_WRITE_MAX ||
+                (length && !user_readable(source_address, length))) {
                 regs->eax = (uint32_t)-1;
                 return;
             }
@@ -985,7 +1001,7 @@ void syscall_dispatch(registers_t* regs) {
     if (!regs) return;
     switch (regs->eax) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
-        case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
+        case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
             syscall_dispatch_impl(regs);
             return;

@@ -34,7 +34,7 @@ def check_boot(image, qemu, vga, timeout):
                     raise RuntimeError(f"{vga}: QEMU stopped before a stable boot.\n{error}\n{log[-3000:]}")
                 if log.count("=== SYSTEM BOOTING ===") > 1:
                     raise RuntimeError(f"{vga}: boot restarted")
-                if ("[FAT32] Mounted successfully!" in log and
+                if ("[ext4] Mounted successfully!" in log and
                         "[INIT] EEVDF scheduler started" in log):
                     if ready_at is None:
                         ready_at = time.monotonic()

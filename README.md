@@ -10,33 +10,33 @@ Install the required build toolchain (`gcc`, `make`, `ld`), `nasm`, and `qemu` u
 ### Debian / Ubuntu / Linux Mint
 ```bash
 sudo apt update
-sudo apt install -y build-essential nasm qemu-system-x86
+sudo apt install -y build-essential nasm qemu-system-x86 e2fsprogs
 ```
 
 ### Arch Linux / Manjaro
 ```bash
-sudo pacman -S --needed base-devel nasm qemu-system-x86
+sudo pacman -S --needed base-devel nasm qemu-system-x86 e2fsprogs
 ```
 
 ### Fedora / RHEL
 ```bash
-sudo dnf install -y @development-tools nasm qemu-system-x86
+sudo dnf install -y @development-tools nasm qemu-system-x86 e2fsprogs
 ```
 
 ### openSUSE (Tumbleweed / Leap)
 ```bash
 sudo zypper install -t pattern devel_basis
-sudo zypper install -y nasm qemu-x86
+sudo zypper install -y nasm qemu-x86 e2fsprogs
 ```
 
 ### Alpine Linux
 ```bash
-sudo apk add build-base nasm qemu-system-x86_64
+sudo apk add build-base nasm qemu-system-x86_64 e2fsprogs
 ```
 
 ### Void Linux
 ```bash
-sudo xbps-install -S base-devel nasm qemu-system-x86_64
+sudo xbps-install -S base-devel nasm qemu-system-x86_64 e2fsprogs
 ```
 
 ### Windows
@@ -49,7 +49,7 @@ pacman -S mingw-w64-x86_64-make
 Add both to your path
 
 # Building
-Install GNU Make, GCC, NASM, binutils, Python, and QEMU, then run `make` to build
+Install GNU Make, GCC, NASM, binutils, Python, e2fsprogs, and QEMU, then run `make` to build
 `os.img` or `make run` to build and start it in QEMU. Set
 `DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
 remove generated build artifacts.
@@ -61,6 +61,34 @@ software emulation for debugging, use `make run QEMU_ACCEL=tcg`.
 The kernel currently uses one CPU, so increasing QEMU's CPU count does not
 distribute guest work. RAM remains configurable with `QEMU_MEMORY=256M` if an
 application needs more than the default 128 MiB.
+
+## Filesystem layout
+
+The image uses ext4, built without root access by `mkext4.py` using `mke2fs`
+and `debugfs` from e2fsprogs. On Windows, build the image in a Linux/WSL
+environment with those tools installed.
+
+| Path | Contents |
+| :--- | :--- |
+| `/home/user` | Regular user's home: Desktop, Documents, Downloads, Pictures, Music |
+| `/root` | Root's private home |
+| `/usr/bin` | Application binaries; searched when launching a bare command |
+| `/usr/share/nixel` | Bundled audio and images |
+| `/usr/share/games/doom` | Doom WAD files |
+| `/etc` | System configuration, including `quark.cfg` |
+| `/var/log` | Logs, including `quark.log` |
+| `/var/lib/nixel` | Persistent OS state |
+| `/var/www` | Default HTTP and FTP content |
+| `/tmp` | Shared temporary files with sticky permissions |
+
+Terminals start in the signed-in user's home. `cd` (or `cd ~`) returns there;
+child applications inherit the shell's working directory. Personal desktop
+settings are under `~/.config/desktop`, Doom settings under `~/.config/doom`,
+notes under `~/Documents`, and screenshots under `~/Pictures`.
+
+See [filesystem implementation and limits](documentation/filesystem.md).
+Run `make test-ext4 test-boot-layout` to check filesystem operations and boot
+layout, and `python3 tools/test_boot.py` after building for QEMU boot checks.
 
 # Makefile arguments
 

@@ -5,8 +5,8 @@
 #include "../../system/user/sys_api.h"
 
 #define DEFAULT_PORT    8080u
-#define CONFIG_PATH     "/quark.cfg"
-#define DEFAULT_ROOT    "/www"
+#define CONFIG_PATH     "/etc/quark.cfg"
+#define DEFAULT_ROOT    "/var/www"
 #define CHUNK_BUF_SIZE  2048u
 
 typedef struct {

@@ -7,7 +7,7 @@
 
 #define FTP_CONTROL_PORT   21u
 #define FTP_PASV_PORT_BASE 20000u
-#define FTP_ROOT           "/www"
+#define FTP_ROOT           "/var/www"
 
 typedef struct {
     uint32_t control_socket;

@@ -31,7 +31,8 @@ static uint8_t* screenshot_buffer;
 
 int screenshot_capture(void) {
     MUTEX_GUARD(kernel_mutex);
-    const char* filename = "SHOT.BMP";
+    char filename[FS_MAX_PATH];
+    fs_home_path("/Pictures/screenshot.bmp", filename);
 
     uint32_t w = SCREEN_WIDTH;
     uint32_t h = SCREEN_HEIGHT;
@@ -91,7 +92,7 @@ int screenshot_capture(void) {
 
     int res = fs_write_file(filename, screenshot_buffer, file_size);
     if (res >= 0) {
-        debug_print("[SCREENSHOT] Saved successfully: SHOT.BMP\n");
+        debug_print("[SCREENSHOT] Saved successfully in home Pictures directory\n");
         return 1;
     }
 

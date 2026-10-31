@@ -51,7 +51,7 @@ enum {
     SYS_AUDIO_OPL = 42, /* legacy hardware OPL returns -1; synthesize PCM into the shared mixer */
     SYS_GETPID = 37,
     SYS_GETPPID = 38,
-    SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FAT attributes */
+    SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FS type bits */
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
     SYS_APP_LAUNCH = 40, /* EBX: executable path, ECX: arguments; starts detached */
     SYS_TCP_LISTEN = 45, /* EBX: local port; returns listener handle or -1 */
@@ -59,8 +59,30 @@ enum {
     SYS_TCP_REMOTE_IP = 47, /* EBX: socket handle; returns uint32_t IPv4 address */
     SYS_RTC_TIME = 48, /* EBX: writable user_rtc_time_t* */
     SYS_AUDIO_CONFIGURE = 50, /* EBX: user_audio_format_t; open caller-owned mixed PCM stream */
+    SYS_FS_GETCWD = 51, /* EBX: output path, ECX: capacity */
+    SYS_FS_HOME = 52, /* EBX: output home path, ECX: capacity */
+    SYS_FS_MKDIR = 53, /* EBX: directory path; 0 success, -1 failure */
     SYS_PCI_DEVICE_INFO = 49 /* EBX: index, ECX: writable user_pci_device_t* */
 };
+
+static inline int32_t sys_fs_getcwd(char* out, uint32_t capacity) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_GETCWD), "b"(out), "c"(capacity) : "memory", "cc");
+    return result;
+}
+static inline int32_t sys_fs_home(char* out, uint32_t capacity) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_HOME), "b"(out), "c"(capacity) : "memory", "cc");
+    return result;
+}
+static inline int32_t sys_fs_mkdir(const char* path) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_MKDIR), "b"(path) : "memory", "cc");
+    return result;
+}
 
 typedef struct { uint32_t next, lost; } user_serial_cursor_t;
 static inline int32_t sys_serial_log_read(char* output, uint32_t capacity, user_serial_cursor_t* cursor) {

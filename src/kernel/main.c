@@ -380,6 +380,8 @@ void desktop_service(void* arg) {
         debug_print("[WM] Refusing unauthenticated session identity\n");
         task_exit();
     }
+    /* Rebind home paths after authentication; early graphics init runs as root. */
+    desktop_init(&kernel_api);
     if (terminal_launch() < 0) debug_print("[WM] Cannot create initial terminal\n");
     uint8_t desktop_ready = 0;
     for (;;) {
@@ -443,7 +445,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
     char oobe_check[1];
-    if (fs_read_file("OOBE.DON", (uint8_t*)oobe_check, 1) < 0) {
+    if (fs_read_file("/var/lib/nixel/oobe.done", (uint8_t*)oobe_check, 1) < 0) {
         debug_print("[OOBE] First boot detected. Launching setup wizard...\n");
         api_launch_app("oobe.bin", "");
     }

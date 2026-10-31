@@ -39,6 +39,7 @@ typedef struct task {
     uint16_t uid, gid;
     struct terminal* terminal;
     char command_args[256];
+    char cwd[256]; /* absolute working directory, inherited by child tasks */
     void (*shell_output)(const char*);
     void (*shell_clear)(void);
     uint32_t preempt_count;

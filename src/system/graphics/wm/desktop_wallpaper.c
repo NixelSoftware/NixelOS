@@ -13,6 +13,7 @@ static uint8_t   wallpaper_loaded = 0;
 static wallpaper_mode_t current_mode = WALLPAPER_MODE_STRETCH;
 
 static uint8_t   bmp_header_buf[54];
+static char wallpaper_path[FS_MAX_PATH];
 static uint8_t   row_scratch[SCREEN_W * 4];
 
 static int wallpaper_allocate_target(void) {
@@ -36,7 +37,8 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
     current_mode = mode;
     if (!api || !api->fs.read) return;
 
-    int bytes_read = api->fs.read("WALLPAPR.BMP", bmp_header_buf, sizeof(bmp_header_buf));
+    fs_home_path("/.config/desktop/wallpaper.bmp", wallpaper_path);
+    int bytes_read = api->fs.read(wallpaper_path, bmp_header_buf, sizeof(bmp_header_buf));
     if (bytes_read < 54 || bmp_header_buf[0] != 'B' || bmp_header_buf[1] != 'M') {
         debug_print("[WALLPAPER] WALLPAPR.BMP not found or invalid header.\n");
         return;
@@ -77,7 +79,7 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
 
             if (file_row_y != last_fetched_src_y) {
                 uint32_t offset = data_offset + (file_row_y * row_stride);
-                fs_read_file_at("WALLPAPR.BMP", row_scratch, row_stride, offset);
+                fs_read_file_at(wallpaper_path, row_scratch, row_stride, offset);
                 last_fetched_src_y = file_row_y;
             }
 
@@ -114,7 +116,7 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
 
             if (file_row_y != last_fetched_src_y) {
                 uint32_t offset = data_offset + (file_row_y * row_stride);
-                fs_read_file_at("WALLPAPR.BMP", row_scratch, row_stride, offset);
+                fs_read_file_at(wallpaper_path, row_scratch, row_stride, offset);
                 last_fetched_src_y = file_row_y;
             }
 

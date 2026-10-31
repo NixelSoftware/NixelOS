@@ -142,6 +142,7 @@ void login_screen_task(void* arg) {
                                 const user_t* user = user_by_name(username);
                                 current_task->uid = user->uid;
                                 current_task->gid = user->gid;
+                                current_task->cwd[0] = 0;
                                 authenticated = 1;
                             } else {
                                 error_msg = "Invalid username or password.";
@@ -189,6 +190,7 @@ void login_screen_task(void* arg) {
                             const user_t* user = user_by_name(username);
                             current_task->uid = user->uid;
                             current_task->gid = user->gid;
+                                current_task->cwd[0] = 0;
                             authenticated = 1;
                             debug_print("[LOGIN] User authenticated successfully.\n");
                             redraw = 1;

@@ -31,18 +31,20 @@ class DiskLayoutTest(unittest.TestCase):
             kernel = bytes(range(256)) * 1200  # 307,200 bytes, beyond old LBA 500.
             self.assertGreater(len(kernel), (500 - KERNEL_LBA) * SECTOR_SIZE)
             (work / "src/kernel/kernel.bin").write_bytes(kernel)
-            result = subprocess.run([sys.executable, str(ROOT / "mkfat32.py"), "test.img"],
+            result = subprocess.run([sys.executable, str(ROOT / "mkext4.py"), "test.img"],
                                     cwd=work, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             image = (work / "test.img").read_bytes()
             begin = KERNEL_LBA * SECTOR_SIZE
             self.assertEqual(image[begin:begin + len(kernel)], kernel)
-            vbr = FILESYSTEM_LBA * SECTOR_SIZE
-            self.assertEqual(image[vbr + 510:vbr + 512], b"\x55\xaa")
-            self.assertEqual(struct.unpack_from("<I", image, vbr + 28)[0], FILESYSTEM_LBA)
+            self.assertEqual(image[510:512], b"\x55\xaa")
+            self.assertEqual(image[450], 0x83)
+            self.assertEqual(struct.unpack_from("<I", image, 454)[0], FILESYSTEM_LBA)
+            sb = FILESYSTEM_LBA * SECTOR_SIZE + 1024
+            self.assertEqual(struct.unpack_from("<H", image, sb + 56)[0], 0xef53)
 
             (work / "src/kernel/kernel.bin").write_bytes(bytes(MAX_KERNEL_BYTES + 1))
-            result = subprocess.run([sys.executable, str(ROOT / "mkfat32.py"), "invalid.img"],
+            result = subprocess.run([sys.executable, str(ROOT / "mkext4.py"), "invalid.img"],
                                     cwd=work, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((work / "invalid.img").exists())
@@ -59,13 +61,10 @@ class DiskLayoutTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             stage2 = output.read_bytes()
             self.assertEqual(len(stage2), 2048)
-            dap = struct.pack("<BBHHHQ", 0x10, 0, 1, 0x6004, 0, FILESYSTEM_LBA)
+            dap = struct.pack("<BBHHHQ", 0x10, 0, 1, 0x6004, 0, 0)
             self.assertIn(dap, stage2)
-            # BIOS CHS fallback for 2048: cylinder 2, head 0, sector 33.
-            cylinder = FILESYSTEM_LBA // (63 * 16)
-            sector = (FILESYSTEM_LBA % 63) + 1 | ((cylinder >> 2) & 0xC0)
-            head = (FILESYSTEM_LBA // 63) % 16
-            self.assertIn(bytes((0xB5, cylinder & 255, 0xB1, sector, 0xB6, head)), stage2)
+            # BIOS snapshot now reads the boot MBR (cylinder/head 0, sector 1).
+            self.assertIn(bytes((0xB5, 0, 0xB1, 1, 0xB6, 0)), stage2)
             kernel.write_bytes(bytes(MAX_KERNEL_BYTES + 1))
             output.unlink()
             result = subprocess.run(command, capture_output=True, text=True)

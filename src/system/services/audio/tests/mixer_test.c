@@ -13,7 +13,20 @@ extern int puts(const char*);
 #include "../mixer.c"
 static uint32_t selected_device, queued, init_calls, shutdown_calls;
 static uint32_t capture_frames, write_calls, write_mode;
-static int hardware_open;
+static int hardware_open, synth_open;
+static uint32_t synth_writes;
+int32_t audio_opl_init(void) {
+    if (selected_device != 0 || synth_open) return -1;
+    synth_open = 1;
+    return 0;
+}
+int32_t audio_opl_write(uint32_t reg, uint32_t value) {
+    if (!synth_open || reg > 255 || value > 255) return -1;
+    synth_writes++;
+    return 0;
+}
+void audio_opl_shutdown(void) { synth_open = 0; }
+
 static int16_t capture[32768][2];
 int32_t audio_init(uint32_t rate) {
     init_calls++;
@@ -78,6 +91,23 @@ int main(void) {
     static uint8_t mono[QUEUE_FRAMES];
     user_audio_format_t a = {48000, 2, USER_AUDIO_S16_LE};
     user_audio_format_t b = {24000, 1, USER_AUDIO_U8};
+    reset();
+    CHECK(audio_mixer_opl(1, 32, 1) < 0);
+    CHECK(audio_mixer_open(2, &a) == 0);
+    CHECK(audio_mixer_opl(1, 256, 0) == 0);
+    CHECK(audio_mixer_opl(2, 256, 0) < 0);
+    CHECK(audio_mixer_opl(2, 32, 1) < 0);
+    CHECK(audio_mixer_opl(1, 32, 1) == 0 && synth_writes == 1);
+    CHECK(audio_mixer_opl(1, 257, 0) < 0);
+    CHECK(audio_mixer_device_select(1) < 0 && hardware_open);
+    audio_mixer_close(2);
+    CHECK(synth_open && !hardware_open);
+    CHECK(audio_mixer_open(2, &a) == 0);
+    audio_mixer_close(1);
+    CHECK(!synth_open && hardware_open);
+    audio_mixer_close(2);
+    CHECK(audio_mixer_device_select(1) == 0);
+    CHECK(audio_mixer_opl(1, 256, 0) < 0);
     reset();
     CHECK(audio_mixer_open(1, &a) == 0 && audio_mixer_open(2, &b) == 0);
     CHECK(init_calls == 1); /* Applications share one hardware stream. */

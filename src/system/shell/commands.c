@@ -44,7 +44,7 @@ static shell_session_t* active_session(void) {
     return current_task ? session_for(current_task->terminal) : 0;
 }
 /* Resolve relative paths and dot segments, requiring exact directory-entry
- * spelling. FAT remains compatible with existing applications. */
+ * spelling. Applications inherit this shell task's working directory. */
 static int resolve_path(const char* input, char out[FS_MAX_PATH], int create) {
     shell_session_t* session = active_session();
     copy_text(out, input[0] == '/' ? "/" : session ? session->cwd : "/", FS_MAX_PATH);
@@ -73,15 +73,8 @@ static int resolve_path(const char* input, char out[FS_MAX_PATH], int create) {
         if (!found && (!create || *rest)) return 0;
         /* Refuse a differently-cased alias when creating a file. */
         if (!found && create) {
-            unsigned base = 0, extension = 0; int dot = 0;
-            for (unsigned i = 0; i < n; i++) {
-                if (part[i] == '.') { if (dot || !base) return 0; dot = 1; }
-                else {
-                    if (part[i] <= ' ' || part[i] == ':' || part[i] == '*' || part[i] == '?') return 0;
-                    if (dot) extension++; else base++;
-                }
-            }
-            if (!base || base > 8 || extension > 3 || (dot && !extension)) return 0;
+            for (unsigned i = 0; i < n; i++)
+                if (part[i] < ' ' || part[i] == ':' || part[i] == '*' || part[i] == '?') return 0;
             char candidate[FS_MAX_PATH];
             copy_text(candidate, out, sizeof(candidate)); unsigned k = length;
             if (k > 1) candidate[k++] = '/';
@@ -243,6 +236,9 @@ void shell_execute_command(const char* command, shell_output_fn output,
         if (login_shell) {
             current_task->uid = USER_ROOT;
             current_task->gid = USER_ROOT;
+            fs_chdir("/root");
+            shell_session_t* session = active_session();
+            if (session) copy_text(session->cwd, fs_getcwd(), sizeof(session->cwd));
             print("Started root login shell.\n");
         } else {
             shell_execute_command(elevated, output, clear);
@@ -264,7 +260,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ps              Show processes and parent PIDs\n"
                     " com0            Follow kernel serial/audio logs\n"
                     " ls [path]       List directory or file (exact case)\n"
-                    " cd [dir]        Change directory (default /)\n"
+                    " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"
                     " pwd             Show current directory\n"
                     " rm              Remove files\n"
@@ -320,11 +316,11 @@ void shell_execute_command(const char* command, shell_output_fn output,
     } else if (has_prefix(command, "cd") && (!command[2] || command[2] == ' ')) {
         const char* arg = command + 2; while (*arg == ' ') arg++;
         shell_session_t* session = active_session();
-        if (!*arg) arg = "/";
+        if (!*arg || equal(arg, "~")) arg = user_home();
         if (!session || !resolve_path(arg, path, 0) ||
             (!equal(path, "/") && !fs_is_directory(path)) || !fs_access(path, FS_ACCESS_EXEC))
             print("cd: directory not found (case sensitive) or permission denied.\n");
-        else copy_text(session->cwd, path, sizeof(session->cwd));
+        else if (fs_chdir(path)) copy_text(session->cwd, fs_getcwd(), sizeof(session->cwd));
     } else if (equal(command, "pwd")) {
         shell_session_t* session = active_session(); print(session ? session->cwd : "/"); print("\n");
     } else if (has_prefix(command, "cat ")) {
@@ -407,9 +403,9 @@ void shell_execute_command(const char* command, shell_output_fn output,
         for (int root = 0; root < 2 && !found; root++) {
             if (root && name[0] == '/') break;
             for (int ext = 0; ext < 3 && !found; ext++) {
-                unsigned prefix = root ? 1 : 0;
+                unsigned prefix = root ? 9 : 0;
                 if (n + prefix + (ext ? 4 : 0) >= sizeof(candidate)) continue;
-                if (root) candidate[0] = '/';
+                if (root) copy_text(candidate, "/usr/bin/", sizeof(candidate));
                 copy_text(candidate+prefix, name, sizeof(candidate)-prefix);
                 copy_text(candidate+prefix+n, extensions[ext], sizeof(candidate)-prefix-n);
                 found = resolve_path(candidate, path, 0);
@@ -439,6 +435,7 @@ int shell_open_terminal(terminal_t* terminal) {
             .allocated = 1,
             .cwd = "/"
         };
+        copy_text(s->cwd, user_home(), sizeof(s->cwd));
         if (task_create(shell_service, s, "terminal") < 0) { s->allocated = 0; return -1; }
         return 0;
     }
@@ -479,6 +476,7 @@ void shell_service(void* argument) {
     mutex_lock(&kernel_mutex);
     s->task = current_task;
     current_task->terminal = s->terminal;
+    fs_chdir(s->cwd);
     /* Keep the UID/GID inherited from the authenticated WM session. */
     /* A new shell is independent of the terminal that launched it. */
     current_task->detached = 0;

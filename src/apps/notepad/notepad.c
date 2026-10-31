@@ -13,6 +13,7 @@ typedef struct {
     char buffer[NOTEPAD_MAX_CHARS];
     int cursor;
     uint8_t active;
+    char path[FS_MAX_PATH];
 } notepad_t;
 static notepad_t notes[NOTEPAD_MAX_INSTANCES];
 static notepad_t* note_for(Window* window) {
@@ -23,6 +24,7 @@ static notepad_t* note_for(Window* window) {
 void notepad_draw(Window* win) {
     notepad_t* note = note_for(win);
     if (!note) return;
+    if (!note->path[0]) fs_home_path("/Documents/note.txt", note->path);
     int32_t box_x = win->x + 6;
     int32_t box_y = win->y + 20;
     int32_t box_w = win->w - 12;
@@ -58,16 +60,17 @@ void notepad_draw(Window* win) {
 void notepad_handle_key(Window* win, char c) {
     notepad_t* note = note_for(win);
     if (!note) return;
+    if (!note->path[0]) fs_home_path("/Documents/note.txt", note->path);
 
     
     if ((uint8_t)c == 0x3C) {
-        fs_write_file("note.txt", (const uint8_t*)note->buffer, note->cursor);
+        fs_write_file(note->path, (const uint8_t*)note->buffer, note->cursor);
         return;
     }
 
     
     if ((uint8_t)c == 0x3D) {
-        int bytes = fs_read_file("note.txt", (uint8_t*)note->buffer, NOTEPAD_MAX_CHARS - 1);
+        int bytes = fs_read_file(note->path, (uint8_t*)note->buffer, NOTEPAD_MAX_CHARS - 1);
         if (bytes >= 0) {
             note->cursor = bytes;
             note->buffer[note->cursor] = '\0';

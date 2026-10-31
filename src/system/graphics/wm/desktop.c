@@ -27,6 +27,8 @@ static char targets[NUM_ICONS][FS_MAX_PATH], labels[NUM_ICONS][FS_MAX_FILENAME];
 static char shortcut_labels[NUM_ICONS][FS_MAX_FILENAME];
 static char shortcut_paths[NUM_ICONS][FS_MAX_PATH];
 static char pending[FS_MAX_PATH];
+static char desktop_dir[FS_MAX_PATH], layout_dir[FS_MAX_PATH];
+static void join_path(char* out, const char* directory, const char* name);
 static int chosen_icon, overlay, menu_x, menu_y;
 static Window shortcut_window;
 static uint32_t picker_token;
@@ -104,11 +106,8 @@ void desktop_init(os_api_t* api) {
     debug_subsystem_hex((uint32_t)api->graphics.put_pixel);
     debug_subsystem_print("\n");
     icon_count = 0;
-    /* Older disks may predate the default desktop directory. Create it at
-     * startup, before the first listing or shortcut save. */
-    fs_stat_t desktop_stat;
-    if (!fs_stat("/Desktop", &desktop_stat) && fs_mkdir("/Desktop") == 0)
-        fs_chown("/Desktop", USER_REGULAR);
+    fs_home_path("/Desktop", desktop_dir);
+    fs_home_path("/.config/desktop/layout", layout_dir);
     refresh_desktop();
     seen_generation = fs_generation();
     desktop_wallpaper_init(api, WALLPAPER_MODE_STRETCH);
@@ -263,17 +262,20 @@ static void clamp_icon(int i) {
     if (icons[i].y < 0) icons[i].y = 0;
     if (icons[i].y > WM_TASKBAR_Y - 70) icons[i].y = WM_TASKBAR_Y - 70;
 }
-/* Layout lives outside /Desktop so saving a position never adds a fake file
- * to the folder being represented. Existing .POS files remain visible files. */
+static void join_path(char* out, const char* directory, const char* name) {
+    copy_text(out, directory, FS_MAX_PATH);
+    int n=0; while (out[n]) n++;
+    if (n<FS_MAX_PATH-1) out[n++]='/';
+    copy_text(out+n, name, FS_MAX_PATH-n);
+}
 static void layout_path(int i, char* path) {
-    copy_text(path, "/DeskCfg/", FS_MAX_PATH);
-    copy_text(path+9, labels[i], FS_MAX_PATH-9);
+    join_path(path, layout_dir, labels[i]);
 }
 static void save_icon(int i) {
     Shortcut record = {0}; record.magic = 0x314B5344;
     record.x = icons[i].x; record.y = icons[i].y;
     char path[FS_MAX_PATH]; layout_path(i, path);
-    if (fs_mkdir("/DeskCfg") < 0 || fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
+    if (fs_mkdir(layout_dir) < 0 || fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
         show_info_dialog("Desktop", "Could not save icon position.");
 }
 static void refresh_desktop(void) {
@@ -285,17 +287,16 @@ static void refresh_desktop(void) {
         old_x[i] = icons[i].x; old_y[i] = icons[i].y;
     }
     uint8_t types[FS_MAX_FILES];
-    int count = fs_list_dir_types("/Desktop", files, types);
+    int count = fs_list_dir_types(desktop_dir, files, types);
     icon_count = 0; last_clicked_icon = -1;
     for (int j = 0; j < count; j++) {
         int i = icon_count++;
         copy_text(labels[i], files[j], sizeof(labels[i]));
-        copy_text(shortcut_paths[i], "/Desktop/", FS_MAX_PATH);
-        copy_text(shortcut_paths[i]+9, files[j], FS_MAX_PATH-9);
+        join_path(shortcut_paths[i], desktop_dir, files[j]);
         copy_text(targets[i], shortcut_paths[i], FS_MAX_PATH);
         int slot = i % ICONS_PER_PAGE;
         icons[i] = (DesktopIcon){24+(slot%5)*152, 20+(slot/5)*64, labels[i], targets[i], 0, 1, 0};
-        if (types[j] & FAT_ATTR_DIRECTORY) icons[i].icon_type = 2;
+        if (types[j] & FS_ATTR_DIRECTORY) icons[i].icon_type = 2;
         else if (suffix(files[j], ".BIN")) icons[i].icon_type = 0;
         else if (suffix(files[j], ".LNK")) {
             Shortcut record;
@@ -337,10 +338,10 @@ void desktop_poll(void) {
 }
 static void open_path(const char* path) {
     if (fs_is_directory(path)) {
-        if (app_loader_launch_detached(desktop_api, "/files.bin", path) < 0)
+        if (app_loader_launch_detached(desktop_api, "/usr/bin/files.bin", path) < 0)
             show_info_dialog("Desktop", "Cannot open File Explorer.");
     } else if (suffix(path, ".MID") || suffix(path, ".MIDI")) {
-        if (app_loader_launch_detached(desktop_api, "/syndig.bin", path) < 0)
+        if (app_loader_launch_detached(desktop_api, "/usr/bin/syndig.bin", path) < 0)
             show_info_dialog("Desktop", "Cannot launch Syndig.");
     } else if (suffix(path, ".BIN")) {
         if (app_loader_launch_detached(desktop_api, path, "") < 0)
@@ -389,8 +390,9 @@ void desktop_draw_overlay(void) {
 static void create_shortcut(void) {
     char path[FS_MAX_PATH]; int slot;
     for (slot = 0; slot < 1000; slot++) {
-        char name[] = "/Desktop/SC000.LNK";
-        name[11] = '0'+slot/100; name[12] = '0'+slot/10%10; name[13] = '0'+slot%10;
+        char leaf[] = "SC000.LNK", name[FS_MAX_PATH];
+        leaf[2] = '0'+slot/100; leaf[3] = '0'+slot/10%10; leaf[4] = '0'+slot%10;
+        join_path(name, desktop_dir, leaf);
         fs_stat_t st;
         if (!fs_stat(name, &st)) { copy_text(path, name, FS_MAX_PATH); break; }
     }
@@ -398,8 +400,7 @@ static void create_shortcut(void) {
     const char* program_name = pending;
     for (int i = 0; pending[i]; i++) if (pending[i] == '/') program_name = pending+i+1;
     char named_path[FS_MAX_PATH];
-    copy_text(named_path, "/Desktop/", sizeof(named_path));
-    copy_text(named_path+9, program_name, sizeof(named_path)-9);
+    join_path(named_path, desktop_dir, program_name);
     int end = 0; while (named_path[end]) end++;
     copy_text(named_path+end-4, ".LNK", sizeof(named_path)-end+4);
     fs_stat_t existing;

@@ -283,11 +283,8 @@ void sb16_opl_write(uint8_t reg, uint8_t value) {
 
 int32_t sb16_opl_init(void) {
     MUTEX_GUARD(audio_mutex);
-    if (opened) {
-        debug_audio_print("[SB16] OPL probe skipped: PCM device busy\n");
-        return -1;
-    }
-    if (reset() < 0) {
+    /* The OPL timer probe is independent of DSP/DMA playback. */
+    if (!opened && reset() < 0) {
         debug_audio_print("[SB16] OPL unavailable: sound card not responding\n");
         return -1;
     }

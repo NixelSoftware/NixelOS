@@ -23,7 +23,7 @@ static Window hex_window;
 static uint32_t hex_window_handle;
 static uint8_t hex_close_requested;
 
-static char target_file[FS_MAX_FILENAME] = "calc.bin";
+static char target_file[FS_MAX_PATH] = "/usr/bin/calc.bin";
 static uint8_t file_buffer[MAX_FILE_SIZE];
 static int total_bytes = 0;
 static int current_offset = 0;
@@ -213,15 +213,15 @@ void hex_handle_key(Window* win, char c) {
     }
 
     if (c == '1') {
-        char name[] = "files.bin";
+        char name[] = "/usr/bin/files.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
     } else if (c == '2') {
-        char name[] = "mines.bin";
+        char name[] = "/usr/bin/mines.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
     } else if (c == '3') {
-        char name[] = "calc.bin";
+        char name[] = "/usr/bin/calc.bin";
         for (int i = 0; (target_file[i] = name[i]); i++);
         load_current_file();
     }

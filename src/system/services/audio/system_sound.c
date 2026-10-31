@@ -64,9 +64,9 @@ static int startup_read(void* destination, uint32_t length, uint32_t file_offset
 void system_sound_start(void) {
     MUTEX_GUARD(startup_mutex);
     if (active) return;
-    startup_log("starting /startup.wav");
+    startup_log("starting /usr/share/nixel/audio/startup.wav");
     startup_stage = "file lookup/size failed";
-    int size = fs_read_file("/startup.wav", 0, 0);
+    int size = fs_read_file("/usr/share/nixel/audio/startup.wav", 0, 0);
     debug_audio_print("[STARTUP AUDIO] source bytes="); debug_audio_hex((uint32_t)size); debug_audio_print("\n");
     if (size < 12 || (uint32_t)size > STARTUP_FILE_MAX) { startup_log(startup_stage); return; }
     startup_stage = "RAM allocation or source preload failed";
@@ -80,7 +80,7 @@ void system_sound_start(void) {
         uint32_t file_offset = i * PAGE_SIZE;
         uint32_t amount = startup_size - file_offset;
         if (amount > PAGE_SIZE) amount = PAGE_SIZE;
-        if (fs_read_file_at("/startup.wav", (uint8_t*)startup_frames[i],
+        if (fs_read_file_at("/usr/share/nixel/audio/startup.wav", (uint8_t*)startup_frames[i],
                             amount, file_offset) != (int)amount) {
             stop();
             return;

@@ -63,7 +63,7 @@ int serve_directory_listing(uint32_t socket, const char* full_path, const char* 
     char child_path[256];
 
     for (int i = 0; i < count; i++) {
-        uint8_t is_dir = (dir_types[i] & FAT_ATTR_DIRECTORY) != 0;
+        uint8_t is_dir = (dir_types[i] & FS_ATTR_DIRECTORY) != 0;
 
         send_string(socket, "<tr><td><a href=\"");
         send_string(socket, dir_names[i]);

@@ -52,14 +52,20 @@ void user_main(const char* argument) {
 
     print("Applying wallpaper: ");
     print(source_path);
-    print(" -> WALLPAPR.BMP\n");
+    char destination[FS_MAX_PATH];
+    if (sys_fs_home(destination, sizeof(destination)) < 0) sys_exit(1);
+    uint32_t end=0; while (destination[end]) end++;
+    const char* suffix="/.config/desktop/wallpaper.bmp";
+    for (uint32_t i=0; suffix[i] && end+1<sizeof(destination); i++) destination[end++]=suffix[i];
+    destination[end]=0;
+    print(" -> "); print(destination); print("\n");
 
-    int32_t written = sys_fs_write("WALLPAPR.BMP", image_buf, (uint32_t)total_size);
+    int32_t written = sys_fs_write(destination, image_buf, (uint32_t)total_size);
     if (written < 0) {
-        print("setwall: failed writing to WALLPAPR.BMP on disk\n");
+        print("setwall: failed saving wallpaper\n");
         sys_exit(1);
     }
 
-    print("Success: Wallpaper saved as WALLPAPR.BMP. Reboot to apply.\n");
+    print("Success: Wallpaper saved in your home directory. Reboot to apply.\n");
     sys_exit(0);
 }

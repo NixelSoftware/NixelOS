@@ -40,6 +40,14 @@ const user_t* user_by_id(uint16_t uid) {
     return 0;
 }
 uint16_t user_uid(void) { return current_task ? current_task->uid : USER_ROOT; }
+const char* user_home(void) {
+    switch (user_uid()) {
+        case USER_ROOT: return "/root";
+        case USER_REGULAR: return "/home/user";
+        case USER_SYSTEM: return "/var/lib/nixel";
+        default: return "/tmp";
+    }
+}
 uint16_t user_gid(void) { return current_task ? current_task->gid : USER_ROOT; }
 int user_switch(const char* name) {
     const user_t* user = user_by_name(name);

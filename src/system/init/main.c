@@ -36,7 +36,7 @@ void nixinit_start(const nixinit_services_t* services) {
     trace_step("before network configuration");
     if (services->configure_network) services->configure_network();
     trace_step("after network configuration");
-    if (services->show_status) services->show_status("Mounting SFS Filesystem...", 65);
+    if (services->show_status) services->show_status("Mounting ext4 Filesystem...", 65);
     trace_step("before filesystem mount");
     if (services->mount_filesystem) services->mount_filesystem();
     trace_step("after filesystem mount");

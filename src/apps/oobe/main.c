@@ -78,7 +78,7 @@ int app_main(os_api_t* api) {
 
                         
                         const char marker = '1';
-                        api->fs.write("OOBE.DON", (const uint8_t*)&marker, 1);
+                        api->fs.write("/var/lib/nixel/oobe.done", (const uint8_t*)&marker, 1);
 
                         
                         api->graphics.fill_rect(card_x + 30, card_y + 200, 400, 20, COLOR_WIN_BG);
@@ -96,7 +96,7 @@ int app_main(os_api_t* api) {
                 char ch = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
                 if (ch == '\n' || ch == ' ') {
                     const char marker = '1';
-                    api->fs.write("OOBE.DON", (const uint8_t*)&marker, 1);
+                    api->fs.write("/var/lib/nixel/oobe.done", (const uint8_t*)&marker, 1);
 
                     if (api->system.reboot) {
                         api->system.reboot();

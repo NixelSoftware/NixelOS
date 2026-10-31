@@ -276,9 +276,9 @@ RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join
 
 DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
 
-os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkfat32.py tools/disk_layout.py
-	$(PYTHON) mkfat32.py os.img.new
-	$(PYTHON) -c "from pathlib import Path; p=Path('os.img.new'); d=bytearray(p.read_bytes()); b=Path('src/boot.bin').read_bytes(); d[:3]=b[:3]; d[90:512]=b[90:512]; p.write_bytes(d); p.replace('os.img')"
+os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py
+	$(PYTHON) mkext4.py os.img.new
+	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build
 
 run: os.img
@@ -311,7 +311,7 @@ src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h sr
 $(KERNEL_C:.c=.o): src/kernel/hal/video.h
 src/kernel/hal/video.o src/kernel/drivers/display/vga.o src/kernel/drivers/display/qemu.o: src/kernel/drivers/display/video_drivers.h
 
-$(KERNEL_C:.c=.o): src/kernel/types.h src/kernel/drivers/display.h
+$(KERNEL_C:.c=.o): src/kernel/fs.h src/kernel/users.h src/kernel/types.h src/kernel/drivers/display.h
 src/kernel/drivers/display/virtio_gpu.o: src/kernel/drivers/display/video_drivers.h
 
 # Native settings controls and their driver interfaces.
@@ -362,3 +362,7 @@ test-audio:
 .PHONY: test-boot-layout
 test-boot-layout:
 	$(PYTHON) tools/tests/test_disk_layout.py
+
+.PHONY: test-ext4
+test-ext4:
+	$(PYTHON) tools/tests/test_ext4.py

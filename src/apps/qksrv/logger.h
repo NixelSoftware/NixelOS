@@ -3,7 +3,7 @@
 
 #include "../../kernel/types.h"
 
-#define LOG_FILE_PATH "/quark.log"
+#define LOG_FILE_PATH "/var/log/quark.log"
 
 void logger_init(void);
 void logger_log_combined(const char* client_ip,

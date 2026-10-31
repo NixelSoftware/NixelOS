@@ -19,7 +19,8 @@ static mutex_t mixer_mutex;
 static int16_t output[BLOCK_FRAMES * 2];
 static uint32_t output_rate, pending_bytes, pending_offset;
 static uint64_t submitted_frames;
-static uint8_t device_open, failed;
+static uint8_t device_open, failed, synth_active;
+static uint32_t synth_owner;
 
 static mixer_stream_t* find(uint32_t owner) {
     for (uint32_t i = 0; i < STREAMS; i++)
@@ -54,6 +55,20 @@ static void reset_output_timeline(uint32_t previous_rate) {
             streams[i].phase = previous_rate ? streams[i].phase * output_rate / previous_rate : 0;
         }
 }
+/* Serialize ownership with PCM lifecycle and device selection. Register writes
+ * go directly to the card, without entering the PCM queues. */
+int32_t audio_mixer_opl(uint32_t owner, uint32_t reg, uint32_t value) {
+    MUTEX_GUARD(mixer_mutex);
+    if (reg == 256) {
+        if (synth_active || audio_opl_init() < 0) return -1;
+        synth_owner = owner;
+        synth_active = 1;
+        return 0;
+    }
+    if (!synth_active || synth_owner != owner) return -1;
+    return audio_opl_write(reg, value);
+}
+
 int32_t audio_mixer_open(uint32_t owner, const user_audio_format_t* format) {
     /* HDA may allocate DMA frames while opening; keep allocation lock order. */
     MUTEX_GUARD(kernel_mutex);
@@ -187,6 +202,10 @@ int32_t audio_mixer_drain(uint32_t owner) {
 }
 void audio_mixer_close(uint32_t owner) {
     MUTEX_GUARD(mixer_mutex);
+    if (synth_active && synth_owner == owner) {
+        audio_opl_shutdown();
+        synth_active = 0;
+    }
     mixer_stream_t* s = find(owner);
     if (!s)
         return;
@@ -250,6 +269,8 @@ int32_t audio_mixer_device_select(uint32_t index) {
         result = 0;
         goto done;
     }
+    if (synth_active)
+        goto done;
     int reopen = device_open || any_streams();
     if (device_open)
         audio_shutdown();

@@ -108,26 +108,25 @@ static int app_instance_reserve(void) {
 }
 
 static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
-    int length = 0;
-    while (name[length] && length < FS_MAX_PATH - 1) {
-        destination[length] = (uint8_t)name[length];
-        length++;
+    char path[FS_MAX_PATH];
+    unsigned length = 0;
+    int bare = 1;
+    for (unsigned i = 0; name[i]; i++) if (name[i] == '/') bare = 0;
+    const char* prefix = bare ? "/usr/bin/" : "";
+    while (*prefix) path[length++] = *prefix++;
+    for (unsigned i = 0; name[i]; i++) {
+        if (length >= FS_MAX_PATH - 5) return -1;
+        path[length++] = name[i];
     }
-    if (name[length]) return -1;
-
-    int bytes = fs_access(name, FS_ACCESS_READ | FS_ACCESS_EXEC) ?
-        api->fs.read(name, (uint8_t*)APP_VIRTUAL_BASE, APP_LOAD_LIMIT) : -1;
+    path[length] = 0;
+    (void)destination;
+    int bytes = fs_access(path, FS_ACCESS_READ | FS_ACCESS_EXEC) ?
+        api->fs.read(path, (uint8_t*)APP_VIRTUAL_BASE, APP_LOAD_LIMIT) : -1;
     if (bytes > 0) return bytes;
-
-    if (length >= FS_MAX_PATH - 5) return bytes;
-    destination[length++] = '.';
-    destination[length++] = 'b';
-    destination[length++] = 'i';
-    destination[length++] = 'n';
-    destination[length] = '\0';
-    if (!fs_access((const char*)destination, FS_ACCESS_READ | FS_ACCESS_EXEC)) return -1;
-    return api->fs.read((const char*)destination, (uint8_t*)APP_VIRTUAL_BASE,
-                        APP_LOAD_LIMIT);
+    path[length++] = '.'; path[length++] = 'b'; path[length++] = 'i'; path[length++] = 'n';
+    path[length] = 0;
+    return fs_access(path, FS_ACCESS_READ | FS_ACCESS_EXEC) ?
+        api->fs.read(path, (uint8_t*)APP_VIRTUAL_BASE, APP_LOAD_LIMIT) : -1;
 }
 
 /* Runs on a private kernel stack, independently of the input callback that
@@ -312,5 +311,5 @@ int app_loader_launch_detached(os_api_t* api, const char* name, const char* argu
 }
 
 int app_loader_launch_picker(os_api_t* api, const char* arguments) {
-    return app_loader_queue(api, "/files.bin", arguments, 1);
+    return app_loader_queue(api, "/usr/bin/files.bin", arguments, 1);
 }

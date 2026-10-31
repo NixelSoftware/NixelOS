@@ -11,8 +11,8 @@ resize; text reflows to the available width. The terminal retains up to 128
 logical lines, each up to 256 characters, and shows the most recent rows.
 
 For testing, root `make` temporarily includes `fastfetch.bin` in `os.img`.
-Later remove its dependency/rule from the root Makefile and its `ROOT_FILES`
-entry in `mkfat32.py` to return to standalone delivery.
+Later remove its dependency/rule from the root Makefile and its `BUNDLED_FILES`
+entry in `mkext4.py` to return to standalone delivery.
 
 This is a limited, independently implemented Fastfetch-style app, inspired by
 https://github.com/fastfetch-cli/fastfetch (main frontend, OS and CPU modules).

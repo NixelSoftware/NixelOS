@@ -155,6 +155,6 @@ hardware playback boundary, even when another stream continues playing. Close or
 process exit releases only the owner's stream. Device selection through Settings
 or the volume panel reopens the shared sink and preserves queued source samples;
 a brief gap and loss of already submitted device buffers can occur during switching.
-Hardware OPL syscalls return unavailable so synthesizers use their software PCM path.
+Hardware OPL bypasses the PCM mixer on the selected card. `sys_audio_opl(256, 0)` acquires exclusive synth ownership; subsequent register writes require that owner. PCM streams may run concurrently. Audio shutdown or process exit releases the synth and silences its voices. Device changes are rejected while the synth is owned. Cards without OPL return unavailable so synthesizers use their software PCM path.
 
 Run `sh src/system/services/audio/tests/run_mixer_tests.sh` for mixer regressions.

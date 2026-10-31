@@ -37,6 +37,8 @@ int32_t  audio_drain(void);
 void     audio_service(void);
 int32_t  audio_opl_init(void);
 int32_t  audio_opl_write(uint32_t reg, uint32_t value);
+/* PCM and hardware synthesis have independent lifetimes. */
+void     audio_opl_shutdown(void);
 void     audio_shutdown(void);
 void     audio_interrupt(uint8_t int_no);
 

@@ -16,6 +16,7 @@ const user_t* user_by_name(const char* name);
 const user_t* user_by_id(uint16_t uid);
 int user_authenticate(const char* name, const char* password);
 int user_can_logon(const user_t* user);
+const char* user_home(void);
 uint16_t user_uid(void);
 uint16_t user_gid(void);
 int user_sudo_begin(const char* password);

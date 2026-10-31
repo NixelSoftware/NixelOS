@@ -156,6 +156,6 @@ void viewer_init(void) {
 
     
     debug_print("[APPS] viewer loading image.bmp...\n");
-    viewer_load_bmp("image.bmp");
+    viewer_load_bmp("/usr/share/nixel/images/image.bmp");
     debug_print("[APPS] viewer image.bmp load done\n");
 }

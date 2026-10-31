@@ -3,7 +3,7 @@
 
     jmp short entry
     nop
-    db "MSWIN4.1"
+    db "NIXEL   "
 
 entry:
     jmp 0x0000:.flush_cs
@@ -90,10 +90,10 @@ times 446 - ($ - $$) db 0
 
 db 0x80                         
 db 0x00, 0x02, 0x00             
-db 0x0C                         
+db 0x83
 db 0xFF, 0xFF, 0xFF             
-dd 1                            
-dd 65535                        
+dd 2048
+dd 100352
 
 
 times 48 db 0

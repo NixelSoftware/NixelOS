@@ -139,7 +139,7 @@ void ftp_handle_command(ftp_session_t* session, const char* line) {
             for (int i = 0; i < count; i++) {
                 char entry[128];
                 int ep = 0;
-                uint8_t is_dir = (d_types[i] & FAT_ATTR_DIRECTORY) != 0;
+                uint8_t is_dir = (d_types[i] & FS_ATTR_DIRECTORY) != 0;
                 const char* perm = is_dir ? "drwxr-xr-x 1 owner group " : "-rw-r--r-- 1 owner group ";
                 while (*perm) entry[ep++] = *perm++;
 
