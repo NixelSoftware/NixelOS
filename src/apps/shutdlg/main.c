@@ -1,12 +1,8 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/types.h"
 #include "../../kernel/window.h"
 #include "../../system/user/sys_api.h"
 
-#define COLOR_WIN_BG     0x00C0C0C0
-#define COLOR_DARK_GRAY  0x00808080
-#define COLOR_WHITE      0x00FFFFFF
-#define COLOR_BLACK      0x00000000
-#define COLOR_BLUE       0x00000080
 
 enum {
     ACTION_SHUTDOWN = 0,
@@ -41,34 +37,34 @@ static void draw_text(int32_t x, int32_t y, const char* str, uint32_t col) {
 }
 
 static void draw_btn(int32_t x, int32_t y, int32_t w, int32_t h, const char* lbl, uint8_t pressed) {
-    user_draw(USER_WINDOW_DRAW_BUTTON, x, y, w, h, lbl, COLOR_WIN_BG, pressed);
+    user_draw(USER_WINDOW_DRAW_BUTTON, x, y, w, h, lbl, COLOR_SURFACE, pressed);
 }
 
 static void draw_radio_button(int32_t x, int32_t y, const char* label, uint8_t selected) {
-    shut_fill_rect(x, y, 12, 12, COLOR_WHITE);
-    shut_fill_rect(x, y, 12, 1, COLOR_DARK_GRAY);
-    shut_fill_rect(x, y, 1, 12, COLOR_DARK_GRAY);
-    shut_fill_rect(x, y + 11, 12, 1, COLOR_WHITE);
-    shut_fill_rect(x + 11, y, 1, 12, COLOR_WHITE);
+    shut_fill_rect(x, y, 12, 12, COLOR_MODERN_BG);
+    shut_fill_rect(x, y, 12, 1, COLOR_SURFACE_BORDER);
+    shut_fill_rect(x, y, 1, 12, COLOR_SURFACE_BORDER);
+    shut_fill_rect(x, y + 11, 12, 1, COLOR_SURFACE_BORDER);
+    shut_fill_rect(x + 11, y, 1, 12, COLOR_SURFACE_BORDER);
 
     if (selected) {
-        shut_fill_rect(x + 4, y + 4, 4, 4, COLOR_BLACK);
+        shut_fill_rect(x + 4, y + 4, 4, 4, COLOR_TEXT_PRIMARY);
     }
-    draw_text(x + 18, y + 2, label, COLOR_BLACK);
+    draw_text(x + 18, y + 2, label, COLOR_TEXT_PRIMARY);
 }
 
 static void draw_computer_icon(int32_t x, int32_t y) {
-    shut_fill_rect(x + 2, y + 2, 28, 20, COLOR_DARK_GRAY);
-    shut_fill_rect(x + 4, y + 4, 24, 16, 0x00008080);
-    shut_fill_rect(x + 12, y + 22, 8, 5, COLOR_DARK_GRAY);
-    shut_fill_rect(x + 8, y + 27, 16, 3, COLOR_DARK_GRAY);
+    shut_fill_rect(x + 2, y + 2, 28, 20, COLOR_SURFACE_BORDER);
+    shut_fill_rect(x + 4, y + 4, 24, 16, COLOR_ACCENT);
+    shut_fill_rect(x + 12, y + 22, 8, 5, COLOR_SURFACE_BORDER);
+    shut_fill_rect(x + 8, y + 27, 16, 3, COLOR_SURFACE_BORDER);
 }
 
 static void shut_draw_content(Window* win) {
-    shut_fill_rect(win->x + 2, win->y + 20, win->w - 4, win->h - 22, COLOR_WIN_BG);
+    shut_fill_rect(win->x + 2, win->y + 22, win->w - 4, win->h - 24, COLOR_SURFACE);
 
     draw_computer_icon(win->x + 16, win->y + 36);
-    draw_text(win->x + 58, win->y + 34, "What do you want the computer to do?", COLOR_BLACK);
+    draw_text(win->x + 58, win->y + 34, "What do you want the computer to do?", COLOR_TEXT_PRIMARY);
 
     int32_t opt_x = win->x + 60;
     int32_t opt_y1 = win->y + 60;

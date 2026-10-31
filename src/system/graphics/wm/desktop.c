@@ -1,4 +1,5 @@
 #include "desktop.h"
+#include "theme.h"
 #include "desktop_wallpaper.h"
 #include "../../../kernel/drivers/serial.h"
 #include "wm.h"
@@ -361,11 +362,11 @@ static void open_item(int i) {
     open_path(targets[i]);
 }
 static void text(int x, int y, const char* value) {
-    desktop_api->graphics.draw_string(x, y, value, COLOR_BLACK);
+    desktop_api->graphics.draw_string(x, y, value, COLOR_TEXT_PRIMARY);
 }
 static void box(int x, int y, int w, int h) {
-    desktop_api->graphics.fill_rect(x, y, w, h, COLOR_BLACK);
-    desktop_api->graphics.fill_rect(x+1, y+1, w-2, h-2, COLOR_WIN_BG);
+    desktop_api->graphics.fill_rect(x, y, w, h, COLOR_SURFACE_BORDER);
+    desktop_api->graphics.fill_rect(x+1, y+1, w-2, h-2, COLOR_SURFACE);
 }
 void desktop_draw_overlay(void) {
     if (!overlay) return;
@@ -474,7 +475,7 @@ static void shortcut_draw(Window* win) {
     int x = win->x, y = win->y;
     text(x+16, y+38, "Program:");
     box(x+16, y+60, 366, 26);
-    desktop_api->graphics.fill_rect(x+18, y+62, 362, 22, COLOR_WHITE);
+    desktop_api->graphics.fill_rect(x+18, y+62, 362, 22, COLOR_MODERN_BG);
     int n = 0; while (pending[n]) n++;
     text(x+22, y+69, pending+(n > 43 ? n-43 : 0));
     graphics_draw_button(x+392, y+60, 72, 26, "Open", 0);

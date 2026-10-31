@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 /* Native Nixel frontend for ircy */
 #ifdef IRC_HOST_TEST
 #include "tests/mock_api.h"
@@ -8,9 +9,9 @@
 #define COLS 76u
 #define ROWS 21u
 #define HISTORY 256u
-#define FG 0xC9D7E8u
-#define BG 0x101622u
-#define ACCENT 0x75DAD0u
+#define FG COLOR_TEXT_PRIMARY
+#define BG COLOR_MODERN_BG
+#define ACCENT COLOR_ACCENT
 static uint32_t window, socket_handle, resolver, started;
 static int phase, running = 1, dirty = 1; /* idle, DNS, TCP, registration, ready */
 static char server[128] = "irc.libera.chat", nick[32] = "nixel", channel[64] = "#nixel";
@@ -71,7 +72,7 @@ static void redraw(void) {
     draw(USER_WINDOW_DRAW_FILL, 4, 22, 632, 414, 0, BG);
     append(bar, sizeof(bar), nick); append(bar, sizeof(bar), " @ "); append(bar, sizeof(bar), server);
     append(bar, sizeof(bar), " | "); append(bar, sizeof(bar), channel);
-    draw(USER_WINDOW_DRAW_FILL, 8, 26, 624, 20, 0, 0x26364A);
+    draw(USER_WINDOW_DRAW_FILL, 8, 26, 624, 20, 0, COLOR_SURFACE);
     draw(USER_WINDOW_DRAW_TEXT, 12, 32, 0, 0, bar, ACCENT);
     unsigned max_scroll = count > ROWS ? count - ROWS : 0;
     if (scroll > max_scroll) scroll = max_scroll;
@@ -82,7 +83,7 @@ static void redraw(void) {
     }
     bar[0] = 0; append(bar, sizeof(bar), status);
     append(bar, sizeof(bar), scroll ? " | SCROLLBACK | PgDn: newer" : " | /help | PgUp: scroll | Up: recall");
-    draw(USER_WINDOW_DRAW_FILL, 8, 374, 624, 20, 0, 0x26364A);
+    draw(USER_WINDOW_DRAW_FILL, 8, 374, 624, 20, 0, COLOR_SURFACE);
     draw(USER_WINDOW_DRAW_TEXT, 12, 380, 0, 0, bar, ACCENT);
     unsigned offset = cursor >= COLS - 3 ? cursor - (COLS - 4) : 0;
     copy(visible, COLS - 1, input + offset);
@@ -99,7 +100,7 @@ static void disconnect(void) {
 static int queue(const char* text) {
     unsigned n = length(text);
     if (n > 510 || pending + n + 2 > sizeof(outgoing)) {
-        log_line("! Message too long or send queue full.", 0xFFAC88); return 0;
+        log_line("! Message too long or send queue full.", COLOR_BTN_CLOSE); return 0;
     }
     for (unsigned i = 0; i < n; i++) {
         if (text[i] == '\r' || text[i] == '\n') return 0;
@@ -111,7 +112,7 @@ static void connect_server(void) {
     if (resolver) { log_line("* DNS lookup still pending; please wait.", FG); return; }
     disconnect();
     int32_t r = sys_dns_start(server);
-    if (r <= 0) { log_line("! Cannot start DNS lookup. Check Network settings.", 0xFFAC88); return; }
+    if (r <= 0) { log_line("! Cannot start DNS lookup. Check Network settings.", COLOR_BTN_CLOSE); return; }
     resolver = (uint32_t)r; phase = 1; started = sys_get_ticks(); status = "Resolving server..."; dirty = 1;
 }
 static int valid_token(const char* s, unsigned cap) {
@@ -180,17 +181,17 @@ static void network_poll(void) {
         uint32_t ip = 0; int32_t r = sys_dns_poll(resolver, &ip);
         if (!r) return;
         resolver = 0;
-        if (r != 1) { disconnect(); log_line("! DNS failed. Try /server again.", 0xFFAC88); return; }
+        if (r != 1) { disconnect(); log_line("! DNS failed. Try /server again.", COLOR_BTN_CLOSE); return; }
         r = sys_tcp_connect(ip, port);
-        if (r <= 0) { disconnect(); log_line("! Cannot open TCP connection.", 0xFFAC88); return; }
+        if (r <= 0) { disconnect(); log_line("! Cannot open TCP connection.", COLOR_BTN_CLOSE); return; }
         socket_handle = (uint32_t)r; phase = 2; started = now; status = "Connecting..."; dirty = 1;
     }
     int32_t state = sys_tcp_state(socket_handle);
     if (state < 0 || state == USER_TCP_CLOSED) {
-        disconnect(); log_line("! Connection closed. Use /connect to retry.", 0xFFAC88); return;
+        disconnect(); log_line("! Connection closed. Use /connect to retry.", COLOR_BTN_CLOSE); return;
     }
     if ((phase == 2 || phase == 3) && now - started > 3000u) {
-        disconnect(); log_line("! Connection or registration timed out.", 0xFFAC88); return;
+        disconnect(); log_line("! Connection or registration timed out.", COLOR_BTN_CLOSE); return;
     }
     if (phase == 2 && state == USER_TCP_ESTABLISHED) {
         char text[128] = "NICK "; append(text, sizeof(text), nick); queue(text);
@@ -207,12 +208,12 @@ static void network_poll(void) {
     }
     if (phase >= 3) {
         char buffer[1024]; int32_t n = sys_tcp_read(socket_handle, buffer, sizeof(buffer));
-        if (n < 0) { disconnect(); log_line("! Receive failed.", 0xFFAC88); return; }
+        if (n < 0) { disconnect(); log_line("! Receive failed.", COLOR_BTN_CLOSE); return; }
         for (int32_t i = 0; i < n; i++) {
             char c = buffer[i];
             if (c == '\n') {
                 if (!dropping) { incoming[receive_len] = 0; server_line(incoming); }
-                else log_line("! Discarded oversized server line.", 0xFFAC88);
+                else log_line("! Discarded oversized server line.", COLOR_BTN_CLOSE);
                 receive_len = 0; dropping = 0;
                 if (!phase) return;
             } else if (c != '\r') {
@@ -295,8 +296,8 @@ static void submit(char* text) {
         copy(echo, sizeof(echo), "<"); append(echo, sizeof(echo), nick);
         append(echo, sizeof(echo), "> "); append(echo, sizeof(echo), text);
     }
-    if (phase < 3) { log_line("! Not connected. Set /nick, then /server HOST [PORT].", 0xFFAC88); return; }
-    if (queue(wire) && *echo) { scroll = 0; log_line(echo, 0x94BFFF); }
+    if (phase < 3) { log_line("! Not connected. Set /nick, then /server HOST [PORT].", COLOR_BTN_CLOSE); return; }
+    if (queue(wire) && *echo) { scroll = 0; log_line(echo, COLOR_ACCENT); }
 }
 static char last_input[sizeof(input)];
 static void key(unsigned code) {

@@ -11,6 +11,7 @@
 #include "../system/graphics/wm/wm.h"
 #include "../system/graphics/wm/cursor.h"
 #include "../system/graphics/widgets.h"
+#include "../system/graphics/wm/theme.h"
 
 extern void desktop_service(void* arg);
 
@@ -30,9 +31,6 @@ void login_screen_task(void* arg) {
     int win_x = (SCREEN_WIDTH - 460) / 2;
     int win_y = (SCREEN_HEIGHT - 320) / 2;
     int dragging = 0;
-    int restore_old_window = 0;
-    int old_win_x = win_x;
-    int old_win_y = win_y;
     uint8_t previous_left = 0;
     const char* error_msg = "";
 
@@ -41,67 +39,50 @@ void login_screen_task(void* arg) {
         if (display_take_resize()) {
             win_x = (SCREEN_WIDTH - 460) / 2;
             win_y = (SCREEN_HEIGHT - 320) / 2;
-            old_win_x = win_x; old_win_y = win_y;
             mouse_x = mouse_x < SCREEN_WIDTH - 12 ? mouse_x : SCREEN_WIDTH - 12;
             mouse_y = mouse_y < SCREEN_HEIGHT - 19 ? mouse_y : SCREEN_HEIGHT - 19;
             wm_cursor_move(mouse_x, mouse_y, 0);
-            dragging = restore_old_window = 0;
+            dragging = 0;
             redraw = 1;
         }
         if (redraw) {
             wm_cursor_erase();
-            if (restore_old_window) {
-                display_fill_rect(old_win_x, old_win_y, 464, 324, COLOR_DESKTOP);
-                display_blit_rect(old_win_x, old_win_y, 464, 324);
-            } else if (old_win_x == win_x && old_win_y == win_y &&
-                       old_win_x == (SCREEN_WIDTH - 460) / 2 &&
-                       old_win_y == (SCREEN_HEIGHT - 320) / 2) {
-                display_clear(COLOR_DESKTOP);
-            }
-            display_fill_rect(win_x + 4, win_y + 4, 460, 320, COLOR_BLACK);
+            display_clear(COLOR_MODERN_BG);
             wm_draw_native_frame(win_x, win_y, 460, 320,
                                  "NixelOS Display Manager", 1);
 
-            draw_string(win_x + 30, win_y + 48, "Sign in to start your session.", COLOR_BLACK);
-            draw_string(win_x + 30, win_y + 78, "Username:", COLOR_BLACK);
+            draw_string(win_x + 30, win_y + 48, "Sign in to start your session.", COLOR_TEXT_PRIMARY);
+            draw_string(win_x + 30, win_y + 78, "Username:", COLOR_TEXT_PRIMARY);
 
-            display_fill_rect(win_x + 30, win_y + 105, 400, 28, COLOR_WHITE);
-            display_fill_rect(win_x + 30, win_y + 105, 400, 2,
-                             password_focus ? COLOR_DARK_GRAY : COLOR_TITLE_BAR);
-            display_fill_rect(win_x + 30, win_y + 105, 2, 28, COLOR_DARK_GRAY);
-            draw_string(win_x + 40, win_y + 111, username, COLOR_BLACK);
+            display_fill_rect(win_x + 30, win_y + 105, 400, 28,
+                              !password_focus ? COLOR_ACCENT : COLOR_SURFACE_BORDER);
+            display_fill_rect(win_x + 31, win_y + 106, 398, 26, COLOR_MODERN_BG);
+            draw_string(win_x + 40, win_y + 111, username, COLOR_TEXT_PRIMARY);
 
-            draw_string(win_x + 30, win_y + 148, "Password:", COLOR_BLACK);
-            display_fill_rect(win_x + 30, win_y + 175, 400, 28, COLOR_WHITE);
-            display_fill_rect(win_x + 30, win_y + 175, 400, 2,
-                             password_focus ? COLOR_TITLE_BAR : COLOR_DARK_GRAY);
-            display_fill_rect(win_x + 30, win_y + 175, 2, 28, COLOR_DARK_GRAY);
-            for (int i = 0; i < password_len; i++)
-                draw_string(win_x + 40 + i * 8, win_y + 181, "*", COLOR_BLACK);
+            draw_string(win_x + 30, win_y + 148, "Password:", COLOR_TEXT_PRIMARY);
+            display_fill_rect(win_x + 30, win_y + 175, 400, 28,
+                              password_focus ? COLOR_ACCENT : COLOR_SURFACE_BORDER);
+            display_fill_rect(win_x + 31, win_y + 176, 398, 26, COLOR_MODERN_BG);
+            int password_visible = password_len > 46 ? 46 : password_len;
+            for (int i = 0; i < password_visible; i++)
+                draw_string(win_x + 40 + i * 8, win_y + 181, "*", COLOR_TEXT_PRIMARY);
+
+            int caret_column = password_focus ? password_visible : username_len;
+            display_fill_rect(win_x + 40 + caret_column * 8,
+                              win_y + (password_focus ? 181 : 111), 1, 12, COLOR_ACCENT);
 
             if (error_msg[0] != '\0')
-                draw_string(win_x + 30, win_y + 218, error_msg, COLOR_RED);
+                draw_string(win_x + 30, win_y + 211, error_msg, COLOR_BTN_CLOSE);
 
             graphics_draw_button(win_x + 250, win_y + 230, 82, 28,
                                  "Log on", login_hover);
             graphics_draw_button(win_x + 340, win_y + 230, 82, 28,
                                  "Clear", clear_hover);
             draw_string(win_x + 30, win_y + 270,
-                        "TAB switches fields   ENTER signs in", COLOR_DARK_GRAY);
-            if (old_win_x == win_x && old_win_y == win_y && !restore_old_window) {
-                display_blit_rect(win_x, win_y, 460, 320);
-            } else {
-                int left = old_win_x < win_x ? old_win_x : win_x;
-                int top = old_win_y < win_y ? old_win_y : win_y;
-                int right = (old_win_x + 464 > win_x + 460) ?
-                    old_win_x + 464 : win_x + 460;
-                int bottom = (old_win_y + 324 > win_y + 320) ?
-                    old_win_y + 324 : win_y + 320;
-                display_blit_rect(left, top, right - left, bottom - top);
-            }
+                        "TAB switches fields   ENTER signs in", COLOR_TEXT_MUTED);
+            display_blit();
             wm_cursor_draw();
             redraw = 0;
-            restore_old_window = 0;
         }
 
         os_input_event_t event;
@@ -128,11 +109,11 @@ void login_screen_task(void* arg) {
 
                 uint8_t left = event.mouse_buttons & 1;
                 if (left && !previous_left) {
-                    if (mouse_x >= win_x + 460 - 16 && mouse_x < win_x + 460 - 3 &&
-                        mouse_y >= win_y + 3 && mouse_y < win_y + 16) {
+                    if (mouse_x >= win_x + 438 && mouse_x <= win_x + 454 &&
+                        mouse_y >= win_y + 3 && mouse_y <= win_y + 19) {
                         power_shutdown();
                     } else if (mouse_x >= win_x && mouse_x < win_x + 460 &&
-                        mouse_y >= win_y && mouse_y < win_y + 20) {
+                        mouse_y >= win_y && mouse_y < win_y + 22) {
                         dragging = 1;
                     } else if (new_login_hover) {
                         if (username_len > 0 && password_len > 0) {
@@ -148,12 +129,14 @@ void login_screen_task(void* arg) {
                                 error_msg = "Invalid username or password.";
                                 password_len = 0;
                                 password[0] = '\0';
+                                password_focus = 1;
                                 redraw = 1;
                             }
                         }
                     } else if (new_clear_hover) {
                         username_len = password_len = 0;
                         username[0] = password[0] = '\0';
+                        password_focus = 0;
                         error_msg = "";
                         redraw = 1;
                     } else if (mouse_x >= win_x + 30 && mouse_x < win_x + 430 &&
@@ -167,15 +150,12 @@ void login_screen_task(void* arg) {
                     }
                 }
                 if (dragging && left) {
-                    old_win_x = win_x;
-                    old_win_y = win_y;
                     win_x += event.mouse_dx;
                     win_y -= event.mouse_dy;
                     if (win_x < 0) win_x = 0;
                     if (win_x > SCREEN_WIDTH - 460) win_x = SCREEN_WIDTH - 460;
                     if (win_y < 0) win_y = 0;
                     if (win_y > SCREEN_HEIGHT - 320) win_y = SCREEN_HEIGHT - 320;
-                    restore_old_window = 1;
                     redraw = 1;
                 }
                 if (!left) dragging = 0;
@@ -198,6 +178,7 @@ void login_screen_task(void* arg) {
                             error_msg = "Invalid username or password.";
                             password_len = 0;
                             password[0] = '\0';
+                            password_focus = 1;
                             redraw = 1;
                         }
                     } else if (username_len > 0 && !password_focus) {

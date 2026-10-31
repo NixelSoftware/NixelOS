@@ -372,3 +372,8 @@ test-boot-layout:
 .PHONY: test-ext4
 test-ext4:
 	$(PYTHON) tools/tests/test_ext4.py
+
+# Shared native UI palette dependencies.
+src/kernel/login.o src/apps/notepad/notepad.o src/apps/viewer/viewer.o src/apps/calc/main.o src/apps/mines/main.o src/apps/hexview/main.o src/apps/files/main.o src/apps/floppy_debug/main.o src/apps/shutdlg/main.o src/apps/sound/main.o src/apps/chess/main.o src/apps/irc/main.o src/apps/oobe/main.o src/apps/sysdiag/main.o src/apps/nixplorer/browser/main.o: src/system/graphics/wm/theme.h
+
+src/system/graphics/terminal/terminal.o: src/system/graphics/wm/theme.h

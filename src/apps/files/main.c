@@ -1,14 +1,10 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/fs.h"
 #include "../../kernel/window.h"
 #include "../../system/user/sys_api.h"
 
-#define COLOR_WIN_BG    0x00C0C0C0
-#define COLOR_DARK_GRAY 0x00808080
-#define COLOR_WHITE     0x00FFFFFF
-#define COLOR_BLACK     0x00000000
-#define COLOR_SELECT_BG 0x000000AA
 
 static os_api_t user_api;
 static os_api_t* os = &user_api;
@@ -193,36 +189,36 @@ static void raised_button(int x, int y, int w, int h, const char* value) {
     user_window_draw_t drawing = {0};
     drawing.operation = USER_WINDOW_DRAW_BUTTON;
     drawing.x = x; drawing.y = y; drawing.width = w; drawing.height = h;
-    drawing.color = COLOR_WIN_BG;
+    drawing.color = COLOR_SURFACE;
     drawing.text = w < 20 ? "" : value;
     (void)sys_window_draw(files_window_handle, &drawing);
-    if (w < 20 && value[0]) label(x+5, y+(h/2)-4, value, COLOR_BLACK);
+    if (w < 20 && value[0]) label(x+5, y+(h/2)-4, value, COLOR_TEXT_PRIMARY);
 }
 static void inset(int x, int y, int w, int h, uint32_t fill) {
     rect(x, y, w, h, fill);
-    rect(x-1, y-1, w+2, 1, COLOR_DARK_GRAY);
-    rect(x-1, y-1, 1, h+2, COLOR_DARK_GRAY);
-    rect(x-1, y+h, w+2, 1, COLOR_WHITE);
-    rect(x+w, y-1, 1, h+2, COLOR_WHITE);
+    rect(x-1, y-1, w+2, 1, COLOR_SURFACE_BORDER);
+    rect(x-1, y-1, 1, h+2, COLOR_SURFACE_BORDER);
+    rect(x-1, y+h, w+2, 1, COLOR_SURFACE_BORDER);
+    rect(x+w, y-1, 1, h+2, COLOR_SURFACE_BORDER);
 }
 static void button(int x, int w, const char* value) {
     raised_button(x, 28, w, 22, value);
 }
 void files_draw_content(Window* win) {
     (void)win;
-    rect(3, 21, 514, 366, COLOR_WIN_BG);
+    rect(3, 22, 514, 365, COLOR_SURFACE);
     button(10, 56, "Up"); button(76, 80, "Refresh"); button(166, 64, "Open");
     char path[61]; unsigned length = 0; while (current_dir[length]) length++;
     copy_text(path, current_dir+(length > 60 ? length-60 : 0), sizeof(path));
-    inset(10, 57, 500, 17, COLOR_WHITE);
-    label(14, 62, path, COLOR_BLACK);
-    inset(8, 78, 480, 260, COLOR_WHITE);
+    inset(10, 57, 500, 17, COLOR_MODERN_BG);
+    label(14, 62, path, COLOR_TEXT_PRIMARY);
+    inset(8, 78, 480, 260, COLOR_MODERN_BG);
     raised_button(10, 80, 284, 20, "Name");
     raised_button(294, 80, 192, 20, "Type / size");
     for (int row = 0; row < VISIBLE_ROWS && first_row+row < file_count; row++) {
         int i = first_row+row, y = ROW_TOP+row*ROW_HEIGHT;
-        uint32_t color = i == selected_file ? COLOR_WHITE : COLOR_BLACK;
-        if (i == selected_file) rect(10, y-1, 476, ROW_HEIGHT, COLOR_SELECT_BG);
+        uint32_t color = i == selected_file ? COLOR_ACCENT : COLOR_TEXT_PRIMARY;
+        if (i == selected_file) rect(10, y-1, 476, ROW_HEIGHT, COLOR_TASKBAR_ITEM_ACT);
         label(14, y+3, file_list[i], color);
         if (file_types[i] & FS_ATTR_DIRECTORY) label(300, y+3, "Folder", color);
         else {
@@ -235,9 +231,9 @@ void files_draw_content(Window* win) {
             label(300, y+3, size, color);
         }
     }
-    if (!file_count) label(14, ROW_TOP+4, "This directory is empty.", COLOR_DARK_GRAY);
+    if (!file_count) label(14, ROW_TOP+4, "This directory is empty.", COLOR_TEXT_MUTED);
     int bottom = ROW_TOP+VISIBLE_ROWS*ROW_HEIGHT;
-    inset(494, ROW_TOP, 18, bottom-ROW_TOP, 0x00DEDEDE);
+    inset(494, ROW_TOP, 18, bottom-ROW_TOP, COLOR_SURFACE_BORDER);
     raised_button(494, ROW_TOP, 18, 18, "^");
     raised_button(494, bottom-18, 18, 18, "v");
     int track = bottom-ROW_TOP-36;
@@ -245,11 +241,11 @@ void files_draw_content(Window* win) {
     if (thumb < 12) thumb = 12;
     int offset = file_count > VISIBLE_ROWS ? (track-thumb)*first_row/(file_count-VISIBLE_ROWS) : 0;
     raised_button(495, ROW_TOP+18+offset, 16, thumb, "");
-    inset(10, 346, 88, 16, COLOR_WIN_BG);
-    inset(10, 365, 500, 18, COLOR_WIN_BG);
-    char count[16]; itoa(file_count, count); label(12, 350, count, COLOR_BLACK);
-    label(52, 350, "items", COLOR_BLACK);
-    label(12, 369, status[0] ? status : "Enter / double-click: open   Backspace: up   F5: refresh", COLOR_BLACK);
+    inset(10, 346, 88, 16, COLOR_SURFACE);
+    inset(10, 365, 500, 18, COLOR_SURFACE);
+    char count[16]; itoa(file_count, count); label(12, 350, count, COLOR_TEXT_PRIMARY);
+    label(52, 350, "items", COLOR_TEXT_PRIMARY);
+    label(12, 369, status[0] ? status : "Enter / double-click: open   Backspace: up   F5: refresh", COLOR_TEXT_PRIMARY);
 }
 void files_handle_key(Window* win, char key) {
     (void)win; uint8_t c = key;

@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 /* Windowed WAV/MP3 player. Original ECE391 example by Soumithri Bala. */
 #include "../../system/user/sys_api.h"
 #include "mp3.h"
@@ -38,19 +39,19 @@ static unsigned format_time(char* out, uint32_t seconds) {
 static char audio_device[64];
 static void redraw(void) {
     if (!window_handle) return;
-    draw(USER_WINDOW_DRAW_FILL, 4, 24, 432, 174, 0, 0xC0C0C0);
-    draw(USER_WINDOW_DRAW_TEXT, 16, 38, 0, 0, "Sound Player", 0);
+    draw(USER_WINDOW_DRAW_FILL, 4, 24, 432, 174, 0, COLOR_SURFACE);
+    draw(USER_WINDOW_DRAW_TEXT, 16, 38, 0, 0, "Sound Player", COLOR_TEXT_PRIMARY);
     /* Keep long paths inside the window while showing the filename. */
     const char* name = current_path;
     for (const char* p = current_path; *p; p++) if (*p == '/') name = p+1;
     char title[51]; unsigned n = 0;
     while (name[n] && n < sizeof(title)-1) { title[n] = name[n]; n++; }
     title[n] = 0;
-    draw(USER_WINDOW_DRAW_TEXT, 16, 62, 0, 0, title, 0);
-    draw(USER_WINDOW_DRAW_FILL, 16, 88, 404, 16, 0, 0x808080);
-    draw(USER_WINDOW_DRAW_FILL, 18, 90, (int)(progress*400u/100u), 12, 0, 0x0000AA);
-    draw(USER_WINDOW_DRAW_BUTTON, 16, 116, 90, 28, "Play", 0xC0C0C0);
-    draw(USER_WINDOW_DRAW_BUTTON, 116, 116, 90, 28, "Stop", 0xC0C0C0);
+    draw(USER_WINDOW_DRAW_TEXT, 16, 62, 0, 0, title, COLOR_TEXT_PRIMARY);
+    draw(USER_WINDOW_DRAW_FILL, 16, 88, 404, 16, 0, COLOR_SURFACE_BORDER);
+    draw(USER_WINDOW_DRAW_FILL, 18, 90, (int)(progress*400u/100u), 12, 0, COLOR_ACCENT);
+    draw(USER_WINDOW_DRAW_BUTTON, 16, 116, 90, 28, "Play", COLOR_SURFACE);
+    draw(USER_WINDOW_DRAW_BUTTON, 116, 116, 90, 28, "Stop", COLOR_SURFACE);
     char timestamp[32];
     unsigned t = format_time(timestamp, elapsed_seconds);
     timestamp[t++] = ' '; timestamp[t++] = '/'; timestamp[t++] = ' ';
@@ -59,9 +60,9 @@ static void redraw(void) {
         const char* unknown = "--:--";
         for (unsigned i = 0; i <= 5; i++) timestamp[t+i] = unknown[i];
     }
-    draw(USER_WINDOW_DRAW_TEXT, 232, 124, 0, 0, timestamp, 0);
-    draw(USER_WINDOW_DRAW_TEXT, 16, 158, 0, 0, player_status, 0);
-    draw(USER_WINDOW_DRAW_TEXT, 16, 178, 0, 0, audio_device, 0);
+    draw(USER_WINDOW_DRAW_TEXT, 232, 124, 0, 0, timestamp, COLOR_TEXT_PRIMARY);
+    draw(USER_WINDOW_DRAW_TEXT, 16, 158, 0, 0, player_status, COLOR_TEXT_PRIMARY);
+    draw(USER_WINDOW_DRAW_TEXT, 16, 178, 0, 0, audio_device, COLOR_TEXT_PRIMARY);
     (void)sys_window_present(window_handle);
     last_draw = sys_get_ticks();
 }

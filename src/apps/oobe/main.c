@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
 
@@ -28,23 +29,23 @@ int app_main(os_api_t* api) {
 
         
         if (needs_full_draw) {
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0x00003366);
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 56, 0x00002244);
-            api->graphics.draw_string(24, 20, "NixelOS Out-of-Box Experience", COLOR_WHITE);
+            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_MODERN_BG);
+            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 56, COLOR_TITLEBAR_ACTIVE);
+            api->graphics.draw_string(24, 20, "NixelOS Out-of-Box Experience", COLOR_TEXT_PRIMARY);
 
-            api->graphics.fill_rect(card_x, card_y, card_w, card_h, COLOR_WIN_BG);
-
-            
-            api->graphics.fill_rect(card_x, card_y, card_w, 2, COLOR_WHITE);
-            api->graphics.fill_rect(card_x, card_y, 2, card_h, COLOR_WHITE);
-            api->graphics.fill_rect(card_x + card_w - 2, card_y, 2, card_h, COLOR_DARK_GRAY);
-            api->graphics.fill_rect(card_x, card_y + card_h - 2, card_w, 2, COLOR_DARK_GRAY);
+            api->graphics.fill_rect(card_x, card_y, card_w, card_h, COLOR_SURFACE);
 
             
-            api->graphics.draw_string(card_x + 30, card_y + 40, "Welcome to your new NixelOS installation!", COLOR_BLACK);
-            api->graphics.draw_string(card_x + 30, card_y + 80, "[PLACEHOLDER]", 0x00333333);
-            api->graphics.draw_string(card_x + 30, card_y + 110, "[PLACEHOLDER]", 0x00333333);
-            api->graphics.draw_string(card_x + 30, card_y + 150, "[PLACEHOLDER]", 0x00333333);
+            api->graphics.fill_rect(card_x, card_y, card_w, 2, COLOR_SURFACE_BORDER);
+            api->graphics.fill_rect(card_x, card_y, 2, card_h, COLOR_SURFACE_BORDER);
+            api->graphics.fill_rect(card_x + card_w - 2, card_y, 2, card_h, COLOR_SURFACE_BORDER);
+            api->graphics.fill_rect(card_x, card_y + card_h - 2, card_w, 2, COLOR_SURFACE_BORDER);
+
+            
+            api->graphics.draw_string(card_x + 30, card_y + 40, "Welcome to your new NixelOS installation!", COLOR_TEXT_PRIMARY);
+            api->graphics.draw_string(card_x + 30, card_y + 80, "[PLACEHOLDER]", COLOR_TEXT_MUTED);
+            api->graphics.draw_string(card_x + 30, card_y + 110, "[PLACEHOLDER]", COLOR_TEXT_MUTED);
+            api->graphics.draw_string(card_x + 30, card_y + 150, "[PLACEHOLDER]", COLOR_TEXT_MUTED);
 
             
             api->graphics.draw_button(btn_x, btn_y, btn_w, btn_h, "Finish Setup", 0);
@@ -81,8 +82,8 @@ int app_main(os_api_t* api) {
                         api->fs.write("/var/lib/nixel/oobe.done", (const uint8_t*)&marker, 1);
 
                         
-                        api->graphics.fill_rect(card_x + 30, card_y + 200, 400, 20, COLOR_WIN_BG);
-                        api->graphics.draw_string(card_x + 30, card_y + 200, "Restarting computer...", COLOR_BLACK);
+                        api->graphics.fill_rect(card_x + 30, card_y + 200, 400, 20, COLOR_SURFACE);
+                        api->graphics.draw_string(card_x + 30, card_y + 200, "Restarting computer...", COLOR_TEXT_PRIMARY);
                         api->graphics.blit_all();
 
                         

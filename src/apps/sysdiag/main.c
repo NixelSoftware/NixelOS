@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
 #include "../../kernel/drivers/serial.h"
@@ -59,14 +60,14 @@ static void run_ext4_test(os_api_t* api) {
     uint32_t len = 39;
     char read_buf[64];
 
-    
+
     if (api->fs.write("/tmp/sysdiag.tmp", (const uint8_t*)test_data, len) < 0) {
         tests[0].result = RESULT_FAIL;
         str_copy(tests[0].detail, "Write failed at LBA cluster allocate", sizeof(tests[0].detail));
         return;
     }
 
-    
+
     int bytes = api->fs.read("/tmp/sysdiag.tmp", (uint8_t*)read_buf, sizeof(read_buf) - 1);
     if (bytes != (int)len) {
         tests[0].result = RESULT_FAIL;
@@ -76,7 +77,7 @@ static void run_ext4_test(os_api_t* api) {
     }
     read_buf[len] = '\0';
 
-    
+
     for (uint32_t i = 0; i < len; i++) {
         if (read_buf[i] != test_data[i]) {
             tests[0].result = RESULT_FAIL;
@@ -86,7 +87,7 @@ static void run_ext4_test(os_api_t* api) {
         }
     }
 
-    
+
     api->fs.delete_file("/tmp/sysdiag.tmp");
     tests[0].result = RESULT_PASS;
     str_copy(tests[0].detail, "OK", sizeof(tests[0].detail));
@@ -141,7 +142,7 @@ static void run_vbe_test(os_api_t* api) {
     tests[3].result = RESULT_RUNNING;
     str_copy(tests[3].detail, "Testing backbuffer blit...", sizeof(tests[3].detail));
 
-    
+
     api->graphics.fill_rect(780, 580, 10, 10, 0x00FF0000);
     api->graphics.fill_rect(780, 580, 10, 10, 0x00003366);
 
@@ -165,17 +166,17 @@ static int run_fullscreen_color_test(os_api_t* api) {
     const int step_count = sizeof(color_steps) / sizeof(color_steps[0]);
 
     for (int step = 0; step < step_count; step++) {
-        
+
         api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, color_steps[step].color);
 
-        
-        api->graphics.fill_rect(16, 16, 360, 48, 0x00101822);
-        api->graphics.fill_rect(16, 16, 360, 2, COLOR_WHITE);
-        api->graphics.fill_rect(16, 16, 2, 48, COLOR_WHITE);
-        api->graphics.fill_rect(374, 16, 2, 48, COLOR_DARK_GRAY);
-        api->graphics.fill_rect(16, 62, 360, 2, COLOR_DARK_GRAY);
 
-        
+        api->graphics.fill_rect(16, 16, 360, 48, COLOR_TITLEBAR_ACTIVE);
+        api->graphics.fill_rect(16, 16, 360, 2, COLOR_SURFACE_BORDER);
+        api->graphics.fill_rect(16, 16, 2, 48, COLOR_SURFACE_BORDER);
+        api->graphics.fill_rect(374, 16, 2, 48, COLOR_SURFACE_BORDER);
+        api->graphics.fill_rect(16, 62, 360, 2, COLOR_SURFACE_BORDER);
+
+
         char label[64];
         char step_buf[16];
         step_buf[0] = '1' + step;
@@ -183,15 +184,15 @@ static int run_fullscreen_color_test(os_api_t* api) {
         step_buf[2] = '0' + step_count;
         step_buf[3] = '\0';
 
-        api->graphics.draw_string(28, 24, "COLOR: ", COLOR_WHITE);
-        api->graphics.draw_string(84, 24, color_steps[step].name, 0x0000FFFF);
-        api->graphics.draw_string(200, 24, step_buf, COLOR_DARK_GRAY);
-        api->graphics.draw_string(28, 44, "Press 'P' for Next, 'F' to Fail", 0x00D0D0D0);
+        api->graphics.draw_string(28, 24, "COLOR: ", COLOR_TEXT_PRIMARY);
+        api->graphics.draw_string(84, 24, color_steps[step].name, COLOR_ACCENT);
+        api->graphics.draw_string(200, 24, step_buf, COLOR_TEXT_MUTED);
+        api->graphics.draw_string(28, 44, "Press 'P' for Next, 'F' to Fail", COLOR_TEXT_PRIMARY);
 
-        
+
         api->graphics.blit_all();
 
-        
+
         int step_decided = 0;
         while (!step_decided) {
             if (api->network.net_poll) {
@@ -203,11 +204,11 @@ static int run_fullscreen_color_test(os_api_t* api) {
                 if (ev.type == OS_INPUT_KEY) {
                     char c = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
                     if (c == 'p' || c == 'P') {
-                        step_decided = 1; 
+                        step_decided = 1;
                     } else if (c == 'f' || c == 'F') {
-                        return 0;         
+                        return 0;
                     } else if (c == 27) {
-                        return 0;         
+                        return 0;
                     }
                 }
             }
@@ -215,7 +216,7 @@ static int run_fullscreen_color_test(os_api_t* api) {
         }
     }
 
-    return 1; 
+    return 1;
 }
 
 int app_main(os_api_t* api) {
@@ -242,66 +243,66 @@ int app_main(os_api_t* api) {
             api->network.net_poll();
         }
 
-        
+
         if (needs_draw) {
-            
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0x001B2838);
 
-            
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 50, 0x00101822);
-            api->graphics.draw_string(24, 16, "NixelOS All-in-One System Diagnostics", COLOR_WHITE);
+            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_MODERN_BG);
 
-            
-            api->graphics.fill_rect(30, 70, 740, 420, 0x00243447);
-            api->graphics.fill_rect(30, 70, 740, 2, COLOR_WHITE);
-            api->graphics.fill_rect(30, 70, 2, 420, COLOR_WHITE);
-            api->graphics.fill_rect(768, 70, 2, 420, COLOR_DARK_GRAY);
-            api->graphics.fill_rect(30, 488, 740, 2, COLOR_DARK_GRAY);
 
-            
+            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 50, COLOR_TITLEBAR_ACTIVE);
+            api->graphics.draw_string(24, 16, "NixelOS All-in-One System Diagnostics", COLOR_TEXT_PRIMARY);
+
+
+            api->graphics.fill_rect(30, 70, 740, 420, COLOR_SURFACE);
+            api->graphics.fill_rect(30, 70, 740, 2, COLOR_SURFACE_BORDER);
+            api->graphics.fill_rect(30, 70, 2, 420, COLOR_SURFACE_BORDER);
+            api->graphics.fill_rect(768, 70, 2, 420, COLOR_SURFACE_BORDER);
+            api->graphics.fill_rect(30, 488, 740, 2, COLOR_SURFACE_BORDER);
+
+
             for (int i = 0; i < NUM_TESTS; i++) {
                 int row_y = 90 + (i * 54);
 
-                api->graphics.draw_string(50, row_y, tests[i].name, COLOR_WHITE);
+                api->graphics.draw_string(50, row_y, tests[i].name, COLOR_TEXT_PRIMARY);
 
-                
+
                 uint32_t tag_col;
                 const char* tag_txt;
                 if (tests[i].result == RESULT_PASS) {
-                    tag_col = 0x0000FF00; 
+                    tag_col = COLOR_BTN_MAX;
                     tag_txt = "[ PASS ]";
                 } else if (tests[i].result == RESULT_FAIL) {
-                    tag_col = 0x00FF4444; 
+                    tag_col = COLOR_BTN_CLOSE;
                     tag_txt = "[ FAIL ]";
                 } else if (tests[i].result == RESULT_RUNNING) {
-                    tag_col = 0x00FFFF00; 
+                    tag_col = COLOR_BTN_MIN;
                     tag_txt = "[ RUN  ]";
                 } else if (tests[i].result == RESULT_WAIT_INPUT) {
-                    tag_col = 0x0000FFFF; 
+                    tag_col = COLOR_ACCENT;
                     tag_txt = "[ P / F ]";
                 } else {
-                    tag_col = COLOR_DARK_GRAY;
+                    tag_col = COLOR_TEXT_MUTED;
                     tag_txt = "[ IDLE ]";
                 }
 
                 api->graphics.draw_string(340, row_y, tag_txt, tag_col);
-                api->graphics.draw_string(430, row_y, tests[i].detail, 0x00D0D0D0);
+                api->graphics.draw_string(430, row_y, tests[i].detail, COLOR_TEXT_PRIMARY);
 
-                
+
                 if (i < NUM_TESTS - 1) {
-                    api->graphics.fill_rect(50, row_y + 36, 700, 1, 0x003A4D64);
+                    api->graphics.fill_rect(50, row_y + 36, 700, 1, COLOR_SURFACE_BORDER);
                 }
             }
 
             if (state == TEST_STATE_WAIT_KEYBOARD) {
-                api->graphics.fill_rect(340, 520, 430, 36, 0x00334455);
-                api->graphics.draw_string(350, 530, "Testing Keyboard: Press 'P' (Pass) or 'F' (Fail)", 0x0000FFFF);
+                api->graphics.fill_rect(340, 520, 430, 36, COLOR_SURFACE);
+                api->graphics.draw_string(350, 530, "Testing Keyboard: Press 'P' (Pass) or 'F' (Fail)", COLOR_ACCENT);
             } else if (state == TEST_STATE_WAIT_MOUSE) {
-                api->graphics.fill_rect(340, 520, 430, 36, 0x00334455);
-                api->graphics.draw_string(350, 530, "Testing Mouse: Move cursor, then press 'P' or 'F'", 0x0000FFFF);
+                api->graphics.fill_rect(340, 520, 430, 36, COLOR_SURFACE);
+                api->graphics.draw_string(350, 530, "Testing Mouse: Move cursor, then press 'P' or 'F'", COLOR_ACCENT);
             }
 
-            
+
             api->graphics.draw_button(start_btn_x, start_btn_y, start_btn_w, start_btn_h, "Run Tests", 0);
             api->graphics.draw_button(exit_btn_x, exit_btn_y, exit_btn_w, exit_btn_h, "Exit", 0);
 
@@ -326,7 +327,7 @@ int app_main(os_api_t* api) {
             needs_draw = 1;
             api->graphics.blit_all();
 
-            
+
             tests[4].result = RESULT_RUNNING;
             str_copy(tests[4].detail, "Cycling colors fullscreen...", sizeof(tests[4].detail));
 
@@ -340,10 +341,10 @@ int app_main(os_api_t* api) {
 
             os_input_event_t drain_ev;
             while (api->input.poll_input && api->input.poll_input(&drain_ev)) {
-                
+
             }
 
-            
+
             tests[5].result = RESULT_WAIT_INPUT;
             //str_copy(tests[5].detail, "Press P to Pass, F to Fail", sizeof(tests[5].detail));
             str_copy(tests[5].detail, "Input tests are currently unavailable", sizeof(tests[5].detail));
@@ -354,7 +355,7 @@ int app_main(os_api_t* api) {
             //return 0;
         }
 
-        
+
         os_input_event_t ev;
         while (api->input.poll_input && api->input.poll_input(&ev)) {
             if (ev.type == OS_INPUT_MOUSE) {
@@ -374,7 +375,7 @@ int app_main(os_api_t* api) {
                 prev_buttons = ev.mouse_buttons;
 
                 if (left_click) {
-                    
+
                     if (mouse_x >= start_btn_x && mouse_x <= (start_btn_x + start_btn_w) &&
                         mouse_y >= start_btn_y && mouse_y <= (start_btn_y + start_btn_h)) {
                         for (int i = 0; i < NUM_TESTS; i++) {
@@ -384,7 +385,7 @@ int app_main(os_api_t* api) {
                         state = TEST_STATE_RUNNING;
                         needs_draw = 1;
                     }
-                    
+
                     else if (mouse_x >= exit_btn_x && mouse_x <= (exit_btn_x + exit_btn_w) &&
                              mouse_y >= exit_btn_y && mouse_y <= (exit_btn_y + exit_btn_h)) {
                         return 0;
@@ -393,9 +394,9 @@ int app_main(os_api_t* api) {
             } else if (ev.type == OS_INPUT_KEY) {
                 char c = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
 
-                
+
                 } else if (ev.type == OS_INPUT_KEY) {
-                
+
                 if (ev.scancode & 0x80) {
                     continue;
                 }
@@ -404,7 +405,7 @@ int app_main(os_api_t* api) {
                 uint8_t is_p = (c == 'p' || c == 'P' || ev.scancode == 0x19);
                 uint8_t is_f = (c == 'f' || c == 'F' || ev.scancode == 0x21);
 
-                
+
                 if (state == TEST_STATE_WAIT_KEYBOARD) {
                     /*
                     if (is_p) {
@@ -446,7 +447,7 @@ int app_main(os_api_t* api) {
                     needs_draw = 1;
                 }
 
-                if (c == 27 || ev.scancode == 0x01) { 
+                if (c == 27 || ev.scancode == 0x01) {
                     return 0;
                 }
             }

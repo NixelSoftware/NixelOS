@@ -1,3 +1,4 @@
+#include "../../../system/graphics/wm/theme.h"
 #include "../engine/platform/nixel.h"
 #include "../engine/parser/html.h"
 #include "../engine/font/font.h"
@@ -96,7 +97,7 @@ static void browser_user_draw_button(int32_t x, int32_t y, int32_t width,
                                      int32_t height, const char* label,
                                      uint8_t pressed) {
     (void)browser_user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height,
-                            label, COLOR_WIN_BG, pressed, 0, 0);
+                            label, COLOR_SURFACE, pressed, 0, 0);
 }
 
 static int browser_user_png_render(const uint8_t* data, uint32_t length,
@@ -764,10 +765,10 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
 
 static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t bg_col) {
     browser_user_fill_rect(x, y, w, h, bg_col);
-    browser_user_fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    browser_user_fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    browser_user_fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    browser_user_fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    browser_user_fill_rect(x - 1, y - 1, w + 2, 1, COLOR_SURFACE_BORDER);
+    browser_user_fill_rect(x - 1, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
+    browser_user_fill_rect(x - 1, y + h, w + 2, 1, COLOR_SURFACE_BORDER);
+    browser_user_fill_rect(x + w, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
 }
 
 static int render_char_offset(int line, int count) {
@@ -839,19 +840,19 @@ static void draw_page_boxes(int left, int top, int right, int bottom) {
 
 static void browser_draw(browser_window_t* win) {
     int32_t x = win->x;
-    int32_t y = win->y + 20; 
+    int32_t y = win->y + 22;
     int32_t w = win->w;
-    int32_t h = win->h - 20;
+    int32_t h = win->h - 22;
 
-    browser_user_fill_rect(x + 2, y, w - 4, h - 2, COLOR_WIN_BG);
+    browser_user_fill_rect(x + 2, y, w - 4, h - 2, COLOR_SURFACE);
 
     
-    browser_user_draw_string(x + 10, y + 8, "URL:", COLOR_BLACK);
+    browser_user_draw_string(x + 10, y + 8, "URL:", COLOR_TEXT_PRIMARY);
     int32_t url_x = x + 44;
     int32_t url_y = y + 4;
     int32_t url_w = w - 110;
     int32_t url_h = 20;
-    draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_WHITE);
+    draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_MODERN_BG);
     char visible_url[64];
     int visible_chars = (url_w - 12) / 8;
     if (visible_chars > 62) visible_chars = 62;
@@ -859,10 +860,10 @@ static void browser_draw(browser_window_t* win) {
     int displayed = 0;
     while (url_input[url_start + displayed] && displayed < visible_chars) { visible_url[displayed] = url_input[url_start + displayed]; displayed++; }
     visible_url[displayed] = 0;
-    browser_user_draw_string(url_x + 4, url_y + 4, visible_url, COLOR_BLACK);
+    browser_user_draw_string(url_x + 4, url_y + 4, visible_url, COLOR_TEXT_PRIMARY);
 
     if (win->focused) {
-        browser_user_draw_string(url_x + 4 + ((url_cursor - url_start) * 8), url_y + 4, "_", COLOR_BLACK);
+        browser_user_draw_string(url_x + 4 + ((url_cursor - url_start) * 8), url_y + 4, "_", COLOR_TEXT_PRIMARY);
     }
 
     browser_user_draw_button(x + w - 60, y + 3, 50, 22, "Go", 0);
@@ -886,7 +887,7 @@ static void browser_draw(browser_window_t* win) {
             int img_x = canvas_x + 8 + lines[i].offset;
             int idx = lines[i].image_index;
             if (browser_user_png_render(image_pool[idx], image_sizes[idx], img_x, row_top, lines[i].image_width, lines[i].image_height) < 0)
-                browser_user_draw_string(img_x, row_top, "[Image decode failed]", COLOR_DARK_GRAY);
+                browser_user_draw_string(img_x, row_top, "[Image decode failed]", COLOR_TEXT_MUTED);
             continue;
         }
         int row_x = canvas_x + 8 + lines[i].offset;
@@ -917,8 +918,8 @@ static void browser_draw(browser_window_t* win) {
                 if (controls[control].line == i) draw_control(&controls[control], row_x, text_y);
     }
 
-    draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_WIN_BG);
-    browser_user_draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
+    draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_SURFACE);
+    browser_user_draw_string(x + 14, y + h - 17, status_text, COLOR_TEXT_PRIMARY);
 }
 
 static int copy_string(char* dst, int max_len, const char* src) {

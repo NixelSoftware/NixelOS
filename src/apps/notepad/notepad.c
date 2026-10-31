@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 #include "notepad.h"
 #include "../../kernel/mutex.h"
 #include "../../system/graphics/wm/wm.h"
@@ -26,18 +27,18 @@ void notepad_draw(Window* win) {
     if (!note) return;
     if (!note->path[0]) fs_home_path("/Documents/note.txt", note->path);
     int32_t box_x = win->x + 6;
-    int32_t box_y = win->y + 20;
+    int32_t box_y = win->y + 26;
     int32_t box_w = win->w - 12;
-    int32_t box_h = win->h - 26;
+    int32_t box_h = win->h - 32;
 
-    display_fill_rect(box_x, box_y, box_w, box_h, COLOR_WHITE);
+    display_fill_rect(box_x, box_y, box_w, box_h, COLOR_MODERN_BG);
 
-    display_fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
-    display_fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
-    display_fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
-    display_fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
+    display_fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_SURFACE_BORDER);
+    display_fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_SURFACE_BORDER);
+    display_fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_SURFACE_BORDER);
+    display_fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_SURFACE_BORDER);
 
-    draw_string(box_x + 6, box_y + 6, note->buffer, COLOR_BLACK);
+    draw_string(box_x + 6, box_y + 6, note->buffer, COLOR_TEXT_PRIMARY);
 
     if (win->focused) {
         int cursor_column = 0;
@@ -53,7 +54,7 @@ void notepad_draw(Window* win) {
 
         int caret_x = box_x + 6 + (cursor_column * 8);
         int caret_y = box_y + 6 + (cursor_row * 10);
-        draw_char(caret_x, caret_y, '|', COLOR_BLACK, 1, 0);
+        draw_char(caret_x, caret_y, '|', COLOR_TEXT_PRIMARY, 1, 0);
     }
 }
 

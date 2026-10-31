@@ -1,14 +1,9 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
 #include "../../system/user/sys_api.h"
 
-#define COLOR_WIN_BG      0x00C0C0C0
-#define COLOR_DARK_GRAY   0x00808080
-#define COLOR_LIGHT_GRAY  0x00DFDFDF
-#define COLOR_WHITE       0x00FFFFFF
-#define COLOR_BLACK       0x00000000
-#define COLOR_BLUE        0x000000AA
 
 #define BTN_W 36
 #define BTN_H 26
@@ -74,7 +69,7 @@ static void user_draw_string(int32_t x, int32_t y, const char* text,
 static void user_draw_button(int32_t x, int32_t y, int32_t width, int32_t height,
                              const char* label, uint8_t pressed) {
     (void)user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height, label,
-                    COLOR_WIN_BG, pressed);
+                    COLOR_SURFACE, pressed);
 }
 
 static void user_blit_all(void) {
@@ -201,11 +196,11 @@ static void handle_input(char key) {
 }
 
 static void draw_sunken_panel(int32_t x, int32_t y, int32_t w, int32_t h) {
-    os->graphics.fill_rect(x, y, w, h, COLOR_WHITE);
-    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, w, h, COLOR_MODERN_BG);
+    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
 }
 
 void calc_draw_content(Window* win) {
@@ -217,7 +212,7 @@ void calc_draw_content(Window* win) {
 
     int text_x = disp_x + disp_w - 10 - (display_len * 8);
     if (text_x < disp_x + 6) text_x = disp_x + 6;
-    os->graphics.draw_string(text_x, disp_y + 6, display_buf, COLOR_BLACK);
+    os->graphics.draw_string(text_x, disp_y + 6, display_buf, COLOR_TEXT_PRIMARY);
 
     int32_t grid_top_y = disp_y + disp_h + 10;
     for (int r = 0; r < 4; r++) {

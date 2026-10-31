@@ -740,7 +740,7 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
         slot->surface_frames[slot->surface_page_count++] = frame;
     }
     user_surface_fill(slot, 0, 18, slot->window.w, slot->window.h - 18,
-                      COLOR_WIN_BG);
+                      COLOR_SURFACE);
 
     windows[window_index] = &slot->window;
     window_directories[window_index] = owner_directory;
