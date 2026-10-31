@@ -156,23 +156,36 @@ static void user_surface_fill(user_window_slot_t* slot, int32_t x, int32_t y,
             user_surface_set_pixel(slot, x + px, y + py, color);
 }
 
-static void user_surface_text(user_window_slot_t* slot, int32_t x, int32_t y,
-                              const char* text, uint32_t color,
-                              uint32_t max_chars) {
-    if (!slot || !text || x < 0 || y < 18 || x >= slot->window.w ||
-        y > slot->window.h - 8) return;
-    for (uint32_t i = 0; i < max_chars && text[i]; i++) {
-        uint8_t ch = (uint8_t)text[i];
-        if (ch >= 128) ch = '?';
-        for (int32_t row = 0; row < 8; row++) {
-            uint8_t bits = font_8x8[ch][row];
-            for (int32_t col = 0; col < 8; col++) {
-                if (bits & (0x80u >> col))
-                    user_surface_set_pixel(slot, x + (int32_t)i * 8 + col,
-                                           y + row, color);
-            }
-        }
+typedef struct {
+    user_window_slot_t* slot;
+    uint32_t color;
+    int32_t width, height;
+} user_text_context_t;
+
+static void user_text_glyph(void* context, int32_t x, int32_t y, uint8_t ch) {
+    user_text_context_t* c = context;
+    for (int32_t row = 0; row < c->height; row++) {
+        uint8_t bits = font_8x8[ch][row * 8 / c->height];
+        for (int32_t col = 0; col < c->width; col++)
+            if (bits & (0x80u >> (col * 8 / c->width)))
+                user_surface_set_pixel(c->slot, x + col, y + row, c->color);
     }
+}
+static void user_surface_text(user_window_slot_t* slot, int32_t x, int32_t y,
+                              const char* text, uint32_t color, uint32_t limit,
+                              text_rect_t bounds, int32_t width, int32_t height) {
+    user_text_context_t context = {slot, color, width, height};
+    text_layout_draw(text, limit, x, y, bounds, width, height, height + 2,
+                     user_text_glyph, &context);
+}
+static text_rect_t user_text_bounds(user_window_slot_t* slot) {
+    int border = slot->fullscreen ? 0 : 1;
+    return (text_rect_t){border, slot->fullscreen ? 0 : 18,
+                         slot->window.w - border, slot->window.h - border};
+}
+static text_rect_t window_text_bounds(Window* window) {
+    return (text_rect_t){window->x + 1, window->y + 22,
+                         window->x + window->w - 1, window->y + window->h - 1};
 }
 
 static void user_surface_composite(user_window_slot_t* slot) {
@@ -330,7 +343,11 @@ void wm_draw_native_frame(int32_t x, int32_t y, int32_t w, int32_t h,
 
     if (title) {
         uint32_t text_col = focused ? COLOR_TEXT_PRIMARY : COLOR_TEXT_MUTED;
-        wm_api->graphics.draw_string(x + 12, y + 7, title, text_col);
+        font_text_scope_t scope = font_text_scope_begin((text_rect_t){x+1, y+1, x+w-1, y+22});
+        /* Title remains one line and cannot paint over the close control. */
+        draw_string_box(x + 12, y + 7, title, text_col,
+                         (text_rect_t){x+12, y+7, x+w-26, y+15});
+        font_text_scope_end(scope);
     }
 
     uint32_t border_col = focused ? COLOR_ACCENT : COLOR_SURFACE_BORDER;
@@ -352,7 +369,9 @@ static void draw_window_frame(Window* window) {
             for(int i=3;i<12;i+=3)
                 wm_api->graphics.fill_rect(window->x+window->w-i,window->y+window->h-3,i-1,1,COLOR_ACCENT);
     } else if (window->draw_content) {
+        font_text_scope_t scope = font_text_scope_begin(window_text_bounds(window));
         window->draw_content(window);
+        font_text_scope_end(scope);
     }
 }
 
@@ -562,7 +581,9 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
         }
 
         /* Label */
-        wm_api->graphics.draw_string(bx + 8, by + 8, label, is_focused ? COLOR_TEXT_PRIMARY : COLOR_TEXT_MUTED);
+        draw_string_box(bx + 8, by + 8, label,
+                         is_focused ? COLOR_TEXT_PRIMARY : COLOR_TEXT_MUTED,
+                         (text_rect_t){bx+8, by+8, bx+width-8, by+16});
 
         window_context_leave(previous);
         button++;
@@ -947,10 +968,6 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
         if (drawing->x < 0 || drawing->y < 18 || drawing->width <= 0 ||
             drawing->height <= 0 || drawing->x > window->w - drawing->width ||
             drawing->y > window->h - drawing->height) return -1;
-        uint32_t max_chars = drawing->width > 12
-            ? (uint32_t)(drawing->width - 12) / 8u : 0;
-        if (max_chars > USER_WINDOW_TEXT_MAX - 1u)
-            max_chars = USER_WINDOW_TEXT_MAX - 1u;
         uint32_t background = drawing->pressed ? COLOR_TASKBAR_ITEM_ACT : COLOR_SURFACE;
         uint32_t border = drawing->pressed ? COLOR_ACCENT : COLOR_SURFACE_BORDER;
         uint32_t text_color = drawing->pressed ? COLOR_ACCENT : COLOR_TEXT_PRIMARY;
@@ -963,40 +980,37 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
         user_surface_fill(slot, drawing->x + drawing->width - 1, drawing->y,
                           1, drawing->height, border);
         uint32_t length = 0;
-        while (text && length < max_chars && text[length]) length++;
-        user_surface_text(slot, drawing->x + (drawing->width - (int32_t)length * 8) / 2,
-                          drawing->y + (drawing->height - 8) / 2,
-                          text, text_color, length);
-        return 0;
-    }
-
-    if (drawing->operation == USER_WINDOW_DRAW_TEXT) {
-        if (!text || drawing->x < 0 || drawing->y < 18 ||
-            drawing->x >= window->w || drawing->y > window->h - 8) return -1;
-        uint32_t max_chars = (uint32_t)(window->w - drawing->x) / 8u;
-        if (max_chars > USER_WINDOW_TEXT_MAX - 1u)
-            max_chars = USER_WINDOW_TEXT_MAX - 1u;
-        uint32_t length = 0;
-        while (length < max_chars && text[length]) {
+        int multiline = 0;
+        int columns = drawing->width > 12 ? (drawing->width - 12) / 8 : 0;
+        while (text && length < USER_WINDOW_TEXT_MAX - 1u && text[length]) {
+            if (text[length] == '\n') multiline = 1;
             length++;
         }
-        user_surface_text(slot, drawing->x, drawing->y, text, drawing->color,
-                          length);
+        if (length > (uint32_t)columns) multiline = 1;
+        int tx = multiline ? drawing->x + 6 : drawing->x + (drawing->width - (int32_t)length * 8) / 2;
+        int ty = multiline ? drawing->y + 4 : drawing->y + (drawing->height - 8) / 2;
+        text_rect_t bounds = {drawing->x+6, drawing->y+2,
+                              drawing->x+drawing->width-6, drawing->y+drawing->height-2};
+        text_rect_t client = user_text_bounds(slot);
+        if (bounds.left < client.left) bounds.left = client.left;
+        if (bounds.top < client.top) bounds.top = client.top;
+        if (bounds.right > client.right) bounds.right = client.right;
+        if (bounds.bottom > client.bottom) bounds.bottom = client.bottom;
+        user_surface_text(slot, tx, ty, text, text_color, length, bounds, 8, 8);
         return 0;
     }
 
-    if (drawing->operation == USER_WINDOW_DRAW_TEXT_SCALED) {
-        if (!text || drawing->width < 4 || drawing->width > 32 || drawing->height < 8 || drawing->height > 64 ||
-            drawing->x < 0 || drawing->y < 18 || drawing->x >= window->w || drawing->y > window->h - drawing->height) return -1;
-        unsigned advance = (unsigned)drawing->width, height = (unsigned)drawing->height;
-        unsigned count = (unsigned)(window->w - drawing->x) / advance;
-        if (count > USER_WINDOW_TEXT_MAX - 1) count = USER_WINDOW_TEXT_MAX - 1;
-        for (unsigned i = 0; i < count && text[i]; i++) {
-            unsigned char ch = (unsigned char)text[i]; if (ch >= 128) ch = '?';
-            for (unsigned y = 0; y < height; y++) for (unsigned x = 0; x < advance; x++)
-                if (font_8x8[ch][y * 8 / height] & (0x80u >> (x * 8 / advance)))
-                    user_surface_set_pixel(slot, drawing->x + (int)(i * advance + x), drawing->y + (int)y, drawing->color);
-        }
+    if (drawing->operation == USER_WINDOW_DRAW_TEXT ||
+        drawing->operation == USER_WINDOW_DRAW_TEXT_SCALED) {
+        int scaled = drawing->operation == USER_WINDOW_DRAW_TEXT_SCALED;
+        int width = scaled ? drawing->width : 8;
+        int height = scaled ? drawing->height : 8;
+        text_rect_t bounds = user_text_bounds(slot);
+        if (!text || width < 4 || width > 32 || height < 8 || height > 64 ||
+            drawing->x < 0 || drawing->y < bounds.top || drawing->x >= bounds.right ||
+            drawing->y > bounds.bottom - height) return -1;
+        user_surface_text(slot, drawing->x, drawing->y, text, drawing->color,
+                          USER_WINDOW_TEXT_MAX - 1u, bounds, width, height);
         return 0;
     }
 
@@ -1416,8 +1430,10 @@ static void handle_mouse_event(const os_input_event_t* event) {
                         queued.buttons = left;
                         user_window_enqueue(user_slot, &queued);
                     } else if (window->handle_mouse) {
+                        font_text_scope_t scope = font_text_scope_begin(window_text_bounds(window));
                         window->handle_mouse(window, mouse_x - window->x,
                                              mouse_y - window->y, left);
+                        font_text_scope_end(scope);
                     }
                     window_context_leave(previous);
                     break;
@@ -1481,7 +1497,9 @@ static void handle_key_event(const os_input_event_t* event) {
                 queued.key = (uint8_t)key;
                 user_window_enqueue(user_slot, &queued);
             } else if (window->handle_key) {
+                font_text_scope_t scope = font_text_scope_begin(window_text_bounds(window));
                 window->handle_key(window, key);
+                font_text_scope_end(scope);
             } else {
                 window_context_leave(previous);
                 continue;

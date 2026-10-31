@@ -88,7 +88,7 @@ KERNEL_C := \
   src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
-  src/system/graphics/widgets.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
+  src/system/graphics/widgets.c src/system/graphics/text_layout.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/services/audio/mixer.c src/system/loader/app_loader.c \
   src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
@@ -387,3 +387,15 @@ test-privileges:
 	sh src/kernel/tests/run_privilege_tests.sh "$(PYTHON)"
 
 src/system/graphics/dialog/shutdown.o src/system/graphics/session.o src/system/graphics/wm/start.o: src/system/graphics/dialog/shutdown.h
+
+src/kernel/drivers/display/font.o src/kernel/drivers/power.o src/system/graphics/fonts/univers85ebo_16.o src/system/graphics/widgets.o src/system/graphics/wm/wm.o src/system/graphics/wm/presentation.o src/system/graphics/text_layout.o: src/system/graphics/text_layout.h src/kernel/drivers/display/font.h
+
+.PHONY: test-text
+test-text:
+	@set -eu; text_test_dir=$$(mktemp -d /tmp/nixel-text-test.XXXXXX); \
+	trap 'rm -rf "$$text_test_dir"' EXIT HUP INT TERM; \
+	$(CC) -O2 -flto -Wall -Wextra -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
+	-DNIXEL_KERNEL=1 -ffunction-sections -fdata-sections -no-pie -Wl,--gc-sections \
+	src/system/graphics/tests/text_test.c src/system/graphics/text_layout.c \
+	src/kernel/drivers/display/font.c src/system/graphics/fonts/univers85ebo_16.c \
+	-o "$$text_test_dir/text-test"; "$$text_test_dir/text-test"
