@@ -95,6 +95,9 @@ def main(output):
             names.add(destination.lower())
             shutil.copyfile(path, root / destination)
             (root / destination).chmod(0o755 if suffix == ".bin" else 0o644)
+        (root / "etc/time.cfg").write_bytes(
+            struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
+        (root / "etc/time.cfg").chmod(0o777)
         (root / "etc/hostname").write_text("nixel\n")
         (root / "etc/os-release").write_text('NAME=NixelOS\nID=nixel\nPRETTY_NAME="NixelOS"\n')
         (root / "var/log/quark.log").write_text("")
@@ -114,6 +117,8 @@ def main(output):
             owner, mode = directories.get(name, (1000 if name.startswith("var/www/") or
                                                  name == "var/log/quark.log" else 0,
                                                  0o755 if path.suffix == ".bin" else 0o644))
+            if name == "etc/time.cfg":
+                mode = 0o777
             kind = 0o40000 if path.is_dir() else 0o100000
             metadata += [f'set_inode_field "/{name}" uid {owner}',
                          f'set_inode_field "/{name}" gid {owner}',

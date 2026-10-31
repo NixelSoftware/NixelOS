@@ -1,3 +1,4 @@
+#include "net/ntp.h"
 #include "../system/services/audio/mixer.h"
 #include "../system/services/audio/system_sound.h"
 #include "types.h"
@@ -300,6 +301,7 @@ static void kernel_configure_network(void) {
 static void kernel_mount_filesystem(void) {
     debug_print("[INIT] FS init...\n");
     fs_init();
+    time_init();
 }
 
 static void kernel_initialize_tasking(void) {
@@ -354,7 +356,7 @@ static void kernel_finish_boot(void) {
 
 static void network_service(void* arg) {
     (void)arg;
-    for (;;) { sys_net_poll(); task_sleep_ms(2); }
+    for (;;) { sys_net_poll(); ntp_poll(); task_sleep_ms(2); }
 }
 static void audio_task(void* arg) {
     (void)arg;

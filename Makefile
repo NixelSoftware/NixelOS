@@ -103,7 +103,7 @@ KERNEL_C := \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
   src/kernel/net/ipv4.c src/kernel/net/etherframe.c src/kernel/net/arp.c \
   src/kernel/net/tcp.c src/kernel/net/udp.c src/kernel/net/icmp.c \
-  src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
+  src/kernel/net/ntp.c src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
   src/system/graphics/wm/cursor.c src/kernel/drivers/display/font.c \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
   src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c \

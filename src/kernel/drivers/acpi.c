@@ -77,6 +77,9 @@ typedef struct {
 } acpi_fadt_t;
 #pragma pack(pop)
 
+static uint8_t rtc_century_register;
+uint8_t acpi_rtc_century_register(void) { return rtc_century_register; }
+
 static uint32_t pm1a_cnt = 0;
 static uint32_t pm1b_cnt = 0;
 static uint16_t slp_typa = 0;
@@ -235,6 +238,7 @@ int acpi_init(void) {
         power_error = "ACPI FADT too short";
         return 0;
     }
+    rtc_century_register = fadt->century < 0x80 ? fadt->century : 0;
     pm1a_cnt = fadt->pm1a_cnt_blk;
     pm1b_cnt = fadt->pm1b_cnt_blk;
 
