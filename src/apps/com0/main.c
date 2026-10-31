@@ -21,7 +21,11 @@ void user_main(const char* arguments) {
     while (!seconds || (uint32_t)(sys_get_ticks() - started) < seconds * 100u) {
         uint32_t previous_lost = cursor.lost;
         int32_t count = sys_serial_log_read(bytes, sizeof(bytes), &cursor);
-        if (count < 0) { print("Serial log unavailable\n"); return; }
+        if (count < 0) {
+            print(count == SYS_ERR_PERMISSION ?
+                "com0: permission denied; run sudo com0.\n" : "Serial log unavailable\n");
+            return;
+        }
         if (cursor.lost != previous_lost) print("\n[COM0] Log overrun: older output lost.\n");
         uint32_t n = 0;
         for (int32_t i = 0; i < count; ++i) {

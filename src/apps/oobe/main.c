@@ -1,114 +1,55 @@
 #include "../../system/graphics/wm/theme.h"
-#include "../../kernel/os_api.h"
-#include "../../kernel/window.h"
+#include "../../system/user/sys_api.h"
 
-int app_main(os_api_t* api) {
-    if (!api) return -1;
-
-    int mouse_x = SCREEN_WIDTH / 2;
-    int mouse_y = SCREEN_HEIGHT / 2;
-    uint8_t prev_buttons = 0;
-    int needs_full_draw = 1;
-
-    
-    const int card_x = 100;
-    const int card_y = 120;
-    const int card_w = 600;
-    const int card_h = 360;
-
-    
-    const int btn_x = card_x + 430;
-    const int btn_y = card_y + 290;
-    const int btn_w = 140;
-    const int btn_h = 36;
-
-    while (1) {
-        if (api->network.net_poll) {
-            api->network.net_poll();
-        }
-
-        
-        if (needs_full_draw) {
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_MODERN_BG);
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 56, COLOR_TITLEBAR_ACTIVE);
-            api->graphics.draw_string(24, 20, "NixelOS Out-of-Box Experience", COLOR_TEXT_PRIMARY);
-
-            api->graphics.fill_rect(card_x, card_y, card_w, card_h, COLOR_SURFACE);
-
-            
-            api->graphics.fill_rect(card_x, card_y, card_w, 2, COLOR_SURFACE_BORDER);
-            api->graphics.fill_rect(card_x, card_y, 2, card_h, COLOR_SURFACE_BORDER);
-            api->graphics.fill_rect(card_x + card_w - 2, card_y, 2, card_h, COLOR_SURFACE_BORDER);
-            api->graphics.fill_rect(card_x, card_y + card_h - 2, card_w, 2, COLOR_SURFACE_BORDER);
-
-            
-            api->graphics.draw_string(card_x + 30, card_y + 40, "Welcome to your new NixelOS installation!", COLOR_TEXT_PRIMARY);
-            api->graphics.draw_string(card_x + 30, card_y + 80, "[PLACEHOLDER]", COLOR_TEXT_MUTED);
-            api->graphics.draw_string(card_x + 30, card_y + 110, "[PLACEHOLDER]", COLOR_TEXT_MUTED);
-            api->graphics.draw_string(card_x + 30, card_y + 150, "[PLACEHOLDER]", COLOR_TEXT_MUTED);
-
-            
-            api->graphics.draw_button(btn_x, btn_y, btn_w, btn_h, "Finish Setup", 0);
-
-            api->graphics.blit_all();
-            needs_full_draw = 0;
-        }
-
-        
-        os_input_event_t ev;
-        while (api->input.poll_input && api->input.poll_input(&ev)) {
-            if (ev.type == OS_INPUT_MOUSE) {
-                mouse_x += ev.mouse_dx;
-                mouse_y -= ev.mouse_dy;
-
-                if (mouse_x < 0) mouse_x = 0;
-                if (mouse_x >= SCREEN_WIDTH) mouse_x = SCREEN_WIDTH - 1;
-                if (mouse_y < 0) mouse_y = 0;
-                if (mouse_y >= SCREEN_HEIGHT) mouse_y = SCREEN_HEIGHT - 1;
-
-                if (api->input.move_cursor) {
-                    api->input.move_cursor(mouse_x, mouse_y, 1);
-                }
-
-                uint8_t left_click = (ev.mouse_buttons & 1) && !(prev_buttons & 1);
-                prev_buttons = ev.mouse_buttons;
-
-                if (left_click) {
-                    if (mouse_x >= btn_x && mouse_x <= (btn_x + btn_w) &&
-                        mouse_y >= btn_y && mouse_y <= (btn_y + btn_h)) {
-
-                        
-                        const char marker = '1';
-                        api->fs.write("/var/lib/nixel/oobe.done", (const uint8_t*)&marker, 1);
-
-                        
-                        api->graphics.fill_rect(card_x + 30, card_y + 200, 400, 20, COLOR_SURFACE);
-                        api->graphics.draw_string(card_x + 30, card_y + 200, "Restarting computer...", COLOR_TEXT_PRIMARY);
-                        api->graphics.blit_all();
-
-                        
-                        if (api->system.reboot) {
-                            api->system.reboot();
-                        }
-                        return 0;
-                    }
-                }
-            } else if (ev.type == OS_INPUT_KEY) {
-                char ch = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
-                if (ch == '\n' || ch == ' ') {
-                    const char marker = '1';
-                    api->fs.write("/var/lib/nixel/oobe.done", (const uint8_t*)&marker, 1);
-
-                    if (api->system.reboot) {
-                        api->system.reboot();
-                    }
-                    return 0;
-                }
-            }
-        }
-
-        __asm__ volatile ("pause");
+static uint32_t window;
+static const char* status = "Press Enter or click Finish Setup.";
+static void draw(uint32_t op, int x, int y, int w, int h, const char* text, uint32_t color) {
+    user_window_draw_t d = {0};
+    d.operation = op; d.x = x; d.y = y; d.width = w; d.height = h;
+    d.text = text; d.color = color;
+    sys_window_draw(window, &d);
+}
+static void redraw(void) {
+    draw(USER_WINDOW_DRAW_FILL, 0, 0, 600, 300, 0, COLOR_SURFACE);
+    draw(USER_WINDOW_DRAW_TEXT, 28, 40, 0, 0, "Welcome to your new NixelOS installation!", COLOR_TEXT_PRIMARY);
+    draw(USER_WINDOW_DRAW_TEXT, 28, 90, 0, 0, "Setup is ready to finish and restart the computer.", COLOR_TEXT_PRIMARY);
+    draw(USER_WINDOW_DRAW_TEXT, 28, 140, 0, 0, status, COLOR_TEXT_PRIMARY);
+    draw(USER_WINDOW_DRAW_BUTTON, 400, 230, 160, 36, "Finish Setup", COLOR_SURFACE);
+    sys_window_present(window);
+}
+static void finish_setup(void) {
+    const char marker = '1';
+    if (sys_fs_write("/var/lib/nixel/oobe.done", &marker, 1) < 0) {
+        status = "Cannot save setup state.";
+    } else {
+        int32_t result = sys_reboot();
+        status = result == SYS_ERR_PERMISSION ?
+            "Restart requires root. Run sudo reboot when ready." : "Restart failed.";
     }
-
-    return 0;
+    redraw();
+}
+void user_main(const char* arguments) {
+    (void)arguments;
+    user_window_desc_t desc = {100, 100, 600, 300, "NixelOS Setup"};
+    int32_t handle = sys_window_create(&desc);
+    if (handle < 0) return;
+    window = (uint32_t)handle;
+    redraw();
+    int closed = 0;
+    while (!closed) {
+        user_window_event_t event;
+        while (sys_window_poll(window, &event) == 1) {
+            if (event.type == USER_WINDOW_EVENT_CLOSE) closed = 1;
+            else if (event.type == USER_WINDOW_EVENT_REDRAW) redraw();
+            else if (event.type == USER_WINDOW_EVENT_KEY) {
+                if (event.key == 27 || event.key == 1) closed = 1;
+                else if (event.key == '\n' || event.key == '\r' || event.key == ' ') finish_setup();
+            } else if (event.type == USER_WINDOW_EVENT_MOUSE && (event.buttons & 1) &&
+                       event.x >= 400 && event.x < 560 && event.y >= 230 && event.y < 266)
+                finish_setup();
+            if (closed) break;
+        }
+        if (!closed) sys_yield();
+    }
+    sys_window_close(window);
 }

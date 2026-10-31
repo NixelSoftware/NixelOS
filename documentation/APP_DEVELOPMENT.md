@@ -1,207 +1,106 @@
 # Writing an App
 
-This page describes both app interfaces. Legacy apps run in ring 0 and receive an `os_api_t*` in `main_app`; ring-3 apps export `user_main` and use `src/system/user/sys_api.h`. Include the public headers for the interface the app uses.
+Applications export `user_main(const char* arguments)` and use
+`src/system/user/sys_api.h`. Every loaded executable runs in ring 3, including
+applications started by root or sudo. Kernel callbacks in `os_api_t` are an
+internal interface; an application does not receive them.
 
 ```c
-#include "../../kernel/os_api.h"
+#include "../../system/user/sys_api.h"
 
-int main_app(os_api_t* os) {
-    if (!os) return -1;
-    os->shell.term_print("Hello from my app!\n");
-    return 0;
+void user_main(const char* arguments) {
+    (void)arguments;
+    static const char message[] = "Hello from my app!\n";
+    sys_write(message, sizeof(message) - 1);
 }
 ```
 
-Each executable starts with the app header expected by the loader. The first eight bytes are the magic value and app type; the assembly entry point then calls `main_app(os_api)`. Existing apps have an `entry.asm` showing the format:
+Copy an existing app's `entry.asm` (for example `src/apps/userhello/entry.asm`).
+The eight-byte executable header must contain `APP_HEADER_MAGIC` followed by
+`APP_TYPE_USER`:
 
 ```asm
-dd 0x31505041 ; APP_HEADER_MAGIC
-db 1, 0, 0, 0 ; APP_TYPE_GUI (use 2 for APP_TYPE_CONSOLE)
+dd 0x31505041
+db 3, 0, 0, 0
 ```
 
-Keep the header and entry stub consistent with the app type and the build setup. See `src/apps/mines` or `src/apps/files` for legacy GUI examples, `src/apps/curl` for a legacy console example, and `src/apps/ping` or `src/apps/calc` for ring-3 examples. Ring-3 apps do not receive `os_api_t`.
+The entry stub calls `user_main` with the argument string, then issues
+`SYS_EXIT`. Headers 1 and 2 are rejected even for root; an executable cannot
+request kernel execution. Link at `0x00C00000` using the existing Makefile app
+rules. The loader provides the private app mapping and zeroed BSS space.
 
-## Ring-3 windows
+## Permissions
 
-Ring-3 windows are registered with `sys_window_create`, which takes a
-`user_window_desc_t`. Apps draw using `sys_window_draw` for fills, text, buttons,
-and PNG images, then present using `sys_window_present`. `sys_window_poll`
-returns queued key, mouse, redraw, and close events. Call `sys_yield` between
-polls so the kernel can run the window manager. It does not invoke user
-callbacks from ring 0. See
-`src/apps/calc` for a complete example using this interface.
+The kernel checks the calling task's UID before performing sensitive ABI calls.
+UID 0 is privileged. Membership in group 0 and the `system` account (UID 1) do
+not grant these privileges. There is no executable-header flag or syscall
+argument that grants elevation.
 
-## Console apps
+| Service | Required privilege |
+| --- | --- |
+| `sys_shutdown`, `sys_reboot` | UID 0 |
+| `sys_floppy_init`, `sys_floppy_read`, `sys_floppy_write_test_pattern` | UID 0; raw media bypass filesystem permissions |
+| `sys_serial_log_read` | UID 0; reads shared kernel logs |
+| `sys_tcp_listen` on ports 1–1023 | UID 0 |
+| `sys_tcp_listen` on ports 1024–65535 | Any user |
+| Filesystem reads/writes/listing/mkdir/delete | Normal filesystem ownership, directory and mode checks |
+| Windows, mixed audio, outgoing TCP, DNS, ping, read-only diagnostic snapshots | Any user, with existing buffer and resource ownership checks |
 
-A console app writes output with `shell.term_print`. The shell supplies command arguments through `shell.command_args`; parse that string in the app. `main_app` returns an integer status, though the current shell loader does not present a rich process or error model.
+Unauthorized protected calls return `SYS_ERR_PERMISSION` (-2), without touching
+hardware, user buffers or allocating service resources. Other errors keep their
+existing ABI return values. Authorized callers still undergo normal parameter,
+buffer and ownership validation.
+
+Use `sudo shutdown`, `sudo reboot`, `sudo floppy_debug`, `sudo com0`, or
+`sudo qkftp` in the terminal; sudo authenticates with the root password.
+The system menu's shutdown dialog is a built-in window-manager component,
+linked into the kernel. It can shut down or restart without a sudo prompt.
+It loads no executable from disk and does not elevate the desktop session or
+any application. App power syscalls still require UID 0.
+
+`sudo -i` starts a root shell. Child apps inherit the launching task's UID and
+GID, including detached children. Returning the shell to its ordinary UID does
+not revoke an already launched root child's privileges. There is no setuid
+executable support.
+
+Power wrappers now return a signed result on failure. Always handle it:
 
 ```c
-#include "../../kernel/os_api.h"
-
-int main_app(os_api_t* os) {
-    if (!os) return -1;
-
-    const char* args = os->shell.command_args();
-    if (!args || !args[0]) {
-        os->shell.term_print("Usage: greet <name>\n");
-        return 1;
-    }
-
-    os->shell.term_print("Hello, ");
-    os->shell.term_print(args);
-    os->shell.term_print("\n");
-    return 0;
+int32_t result = sys_shutdown();
+if (result == SYS_ERR_PERMISSION) {
+    static const char denied[] = "Run sudo shutdown.\n";
+    sys_write(denied, sizeof(denied) - 1);
 }
 ```
 
-For apps that need to redirect shell output, `shell_set_output` accepts an output callback (pass `NULL` to restore the default). `term_print` writes to the active shell output; it is not a formatted `printf`, so build strings yourself when you need numbers or formatting. `shell_open_viewer` opens a file in the system viewer, and `launch_app` starts another app.
+Raw floppy calls return 1 on success. Compare against 1 explicitly; a negative
+permission error is not a successful boolean result. `sys_fs_delete(path)`
+removes a regular file and returns 0 on success or -1 on failure.
 
-## GUI apps
+## Windows and events
 
-GUI apps create a `Window`, provide drawing and input callbacks, then register it. Use static storage for the window and its displayed data so they remain valid after `main_app` returns. Window coordinates and drawing API coordinates are screen coordinates; mouse callback coordinates are local to the window.
+Create a window with `sys_window_create`, draw using `sys_window_draw`, then
+submit it with `sys_window_present`. Receive input, redraw and close events
+through `sys_window_poll`; call `sys_yield` while waiting. Applications own only
+their window surfaces and never install kernel callbacks. Drawing and mouse
+event coordinates are local to the window. See `src/apps/calc` or
+`src/apps/oobe` for examples.
 
-```c
-#include "../../kernel/os_api.h"
-#include "../../kernel/window.h"
+The window manager composites surfaces independently. Drawing operations
+include fills, text, buttons, PNG images, packed pixels, and bounded triangle
+batches. See `window_api.h` for operations and bounds.
 
-static os_api_t* api;
-static Window window;
-static int clicks;
+## Files, networking and audio
 
-static void draw(Window* win) {
-    api->graphics.fill_rect(win->x + 4, win->y + 24, win->w - 8, win->h - 28,
-                            0x00FFFFFF);
-    api->graphics.draw_string(win->x + 12, win->y + 36,
-                              "Click anywhere", 0x00000000);
-}
+File paths resolve relative to the inherited working directory. Use
+`sys_fs_home` for the caller's home. Check every result; file reads do not add
+a string terminator. `sys_fs_read_at` supports bounded offset reads.
 
-static void key(Window* win, char c) {
-    if ((uint8_t)c == 27 || (uint8_t)c == 0x01)
-        api->windows.unregister_window(win);
-}
+TCP handles, DNS requests, windows and audio streams are scoped to the creating
+address space. They are released when the app exits. Prefer asynchronous DNS
+and yield while polling sockets or waiting for input. Network services on
+privileged ports must be launched through sudo or a root shell.
 
-static void mouse(Window* win, int32_t x, int32_t y, uint8_t button) {
-    (void)x; (void)y;
-    if (button == 1) {
-        clicks++;
-        draw(win);
-        api->graphics.blit_all();
-    }
-}
-
-int main_app(os_api_t* os) {
-    if (!os) return -1;
-    api = os;
-    window.x = 100; window.y = 80; window.w = 240; window.h = 140;
-    window.title = "Example";
-    window.visible = 1; window.focused = 1;
-    window.draw_content = draw;
-    window.handle_key = key;
-    window.handle_mouse = mouse;
-    if (api->windows.register_window(&window) < 0) return -1;
-    return 0;
-}
-```
-
-Callbacks may be called after `main_app` returns, so do not register a pointer to a stack-local `Window` or callback data. Redraw after changing state, then call `graphics.blit_all` (or `graphics.blit_rect` for a changed region). The keyboard callback receives a character for printable input and may also receive special key codes; existing GUI apps show the codes used for navigation and close handling. Use `graphics.draw_button` for the system's standard button appearance and `handle_mouse` to detect clicks.
-
-## System API (`os_api_t`)
-
-The API is defined in `src/kernel/os_api.h`. The table currently provides these calls:
-
-### Drawing and windows
-
-| Call | Purpose |
-| --- | --- |
-| `graphics.fill_rect(x, y, w, h, color)` | Fill a screen rectangle. Colors use `0x00RRGGBB`. |
-| `graphics.put_pixel(x, y, color)` | Draw one pixel. |
-| `graphics.draw_string(x, y, text, color)` | Draw text at screen coordinates. |
-| `graphics.draw_button(x, y, w, h, label, pressed)` | Draw a standard button. |
-| `graphics.render_screen()` | Render the current window state to the back buffer. |
-| `graphics.take_redraw_request()` | Consume and return the pending redraw flag. |
-| `graphics.capture_screenshot()` | Capture a screenshot using the system handler. |
-| `graphics.blit_rect(x, y, w, h)` | Copy a screen rectangle to the display. |
-| `graphics.blit_all()` | Copy the full screen to the display. |
-| `windows.register_window(Window*)` | Register a GUI window; returns a status integer. |
-| `windows.unregister_window(Window*)` | Remove a registered window. |
-| `windows.show_info_dialog(title, message)` | Show the system information dialog. |
-
-`Window` and its callback signatures are in `src/kernel/window.h`. A window has position and size, title, visibility/focus flags, a draw callback, and optional key and mouse callbacks.
-
-### PNG images
-
-| Call | Purpose |
-| --- | --- |
-| `graphics.png_decode_and_resize(data, len, pixels)` | Decode and resize a PNG to `PNG_TARGET_W` by `PNG_TARGET_H` pixels; returns success status. |
-| `graphics.png_render(data, len, x, y, w, h)` | Decode and draw a PNG in the requested rectangle. |
-
-The fixed output dimensions are declared in `src/system/graphics/image/png.h`.
-
-### Filesystem
-
-| Call | Purpose |
-| --- | --- |
-| `fs.list(output)` | Fill a `FS_MAX_FILES` by `FS_MAX_FILENAME` filename array; returns the number of entries/status. |
-| `fs.read(name, dest, max_bytes)` | Read a file into the caller's buffer; returns bytes read or a negative error. |
-| `fs.write(name, data, size_bytes)` | Write bytes to a file; returns a status/byte count. |
-| `fs.delete_file(name)` | Delete a file; returns status. |
-
-Filename and file-count limits are defined in `src/kernel/fs.h`. Check return values and reserve space for a trailing zero byte yourself when treating file data as a C string.
-
-### Shell
-
-| Call | Purpose |
-| --- | --- |
-| `shell.term_print(text)` | Write a null-terminated string to shell output. |
-| `shell.command_args()` | Get the current command's argument string. |
-| `shell.shell_set_output(output)` | Redirect shell output; pass `NULL` to restore the default. |
-| `shell.shell_open_viewer(filename)` | Open a file in the system viewer; returns status. |
-| `shell.launch_app(name, arguments)` | Launch another app; returns status. |
-
-### Input and timing
-
-| Call | Purpose |
-| --- | --- |
-| `input.ps2_status()` | Read the PS/2 controller status. |
-| `input.ps2_read_data()` | Read one byte from the PS/2 data port. |
-| `input.ps2_initialize_mouse()` | Initialize the PS/2 mouse. |
-| `input.poll_input(event)` | Poll for a keyboard or mouse event. |
-| `input.translate_scancode(scancode)` | Translate a keyboard scancode to a character. |
-| `input.move_cursor(x, y, fast_update)` | Move the mouse cursor. |
-| `network.get_ticks()` | Read the kernel frame/tick counter. |
-
-### Networking
-
-| Call | Purpose |
-| --- | --- |
-| `network.net_poll()` | Poll network processing. |
-| `network.net_is_ready()` | Return whether the network is ready. |
-| `network.net_get_diagnostics(out)` | Fill a `net_diagnostics_t` structure (declared in `src/kernel/hal/net_types.h`). |
-| `network.get_mac_address()` | Return the interface MAC address as a `uint64_t`. |
-| `network.get_configuration(mask, gateway, leased)` | Return network configuration values. |
-| `network.icmp_request_echo(ip, id, seq, payload, len)` | Send an ICMP echo request; IPv4 addresses are represented as a `uint32_t`. |
-| `network.icmp_set_echo_reply_handler(callback)` | Set the ICMP echo reply callback. |
-| `network.ipv4_send(ip, protocol, payload, len)` | Send an IPv4 payload for the protocol number. |
-| `network.ipv4_set_handler(protocol, callback)` | Register a receive callback for an IPv4 protocol. |
-| `network.ipv4_get_local_ip()` | Return the local IPv4 address as a `uint32_t`. |
-| `network.dns_resolve(hostname, address_out)` | Resolve a hostname into an IPv4 address; returns success status. |
-
-Callback and packet types are declared in `src/kernel/net/icmp.h`, `src/kernel/net/ipv4.h`, and `src/kernel/net/dns.h`. A protocol handler should validate packet lengths before reading fields. Network callbacks are invoked from network polling, so keep them short and avoid blocking there. Always yield to the kernel and WM using `sys_yield` when involving networking in your application!
-
-### Floppy and power
-
-| Call | Purpose |
-| --- | --- |
-| `devices.floppy_init()` | Initialize the floppy device. |
-| `devices.floppy_read(lba, count, buffer)` | Read sectors into the caller's buffer. |
-| `devices.floppy_write(lba, count, buffer)` | Write sectors from the caller's buffer. |
-| `system.shutdown()` | Request system shutdown. |
-| `system.reboot()` | Request system reboot. |
-
-## Headers and building
-
-At minimum, include `os_api.h`. GUI apps should also include `window.h`; filesystem and network structures are available through headers included by `os_api.h`, or can be included directly when their constants/types are needed. Build the project with `make` on Linux or Windows. Follow the existing app directory and Makefile patterns when adding a new app.
-
-## Unincluded apps
-
-In the future, we will provide the developers an SDK to build apps without needing to compile the entire OS.
+PCM audio uses a caller-owned stream through the shared kernel mixer. Handle
+partial writes and queue backpressure; drain before shutdown when the final
+samples must finish. See [USERSPACE.md](USERSPACE.md) for ABI and audio details.

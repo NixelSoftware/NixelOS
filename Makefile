@@ -108,7 +108,7 @@ KERNEL_C := \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
   src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c \
   src/kernel/sched_policy.c src/kernel/sched_wide.c src/kernel/mutex.c \
-  src/system/graphics/dialog/dialog.c src/apps/notepad/notepad.c \
+  src/system/graphics/dialog/dialog.c src/system/graphics/dialog/shutdown.c src/apps/notepad/notepad.c \
   src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
   src/system/icons/network.h src/kernel/hal/audio.c \
@@ -132,7 +132,7 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
-                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall shutdlg \
+                 crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
                  lspci demo3d irc
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
@@ -374,6 +374,16 @@ test-ext4:
 	$(PYTHON) tools/tests/test_ext4.py
 
 # Shared native UI palette dependencies.
-src/kernel/login.o src/apps/notepad/notepad.o src/apps/viewer/viewer.o src/apps/calc/main.o src/apps/mines/main.o src/apps/hexview/main.o src/apps/files/main.o src/apps/floppy_debug/main.o src/apps/shutdlg/main.o src/apps/sound/main.o src/apps/chess/main.o src/apps/irc/main.o src/apps/oobe/main.o src/apps/sysdiag/main.o src/apps/nixplorer/browser/main.o: src/system/graphics/wm/theme.h
+src/kernel/login.o src/apps/notepad/notepad.o src/apps/viewer/viewer.o src/apps/calc/main.o src/apps/mines/main.o src/apps/hexview/main.o src/apps/files/main.o src/apps/floppy_debug/main.o src/system/graphics/dialog/shutdown.o src/apps/sound/main.o src/apps/chess/main.o src/apps/irc/main.o src/apps/oobe/main.o src/apps/sysdiag/main.o src/apps/nixplorer/browser/main.o: src/system/graphics/wm/theme.h
 
 src/system/graphics/terminal/terminal.o: src/system/graphics/wm/theme.h
+
+# Public ABI headers affect every application, including compatibility wrappers.
+$(KERNEL_C:.c=.o) $(STANDARD_APPS:%=src/apps/%/main.o) $(BROWSER_OBJ) $(SYNDIG_OBJ) $(QUARK_OBJ) $(FTP_OBJ) $(DOOM_OBJ): src/system/user/sys_api.h
+src/kernel/syscall.o: src/kernel/syscall_policy.h src/kernel/users.h
+
+.PHONY: test-privileges
+test-privileges:
+	sh src/kernel/tests/run_privilege_tests.sh "$(PYTHON)"
+
+src/system/graphics/dialog/shutdown.o src/system/graphics/session.o src/system/graphics/wm/start.o: src/system/graphics/dialog/shutdown.h

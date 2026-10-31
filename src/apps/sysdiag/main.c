@@ -1,460 +1,128 @@
 #include "../../system/graphics/wm/theme.h"
-#include "../../kernel/os_api.h"
-#include "../../kernel/window.h"
-#include "../../kernel/drivers/serial.h"
+#include "../../system/user/sys_api.h"
 
-typedef enum {
-    TEST_STATE_IDLE = 0,
-    TEST_STATE_RUNNING = 1,
-    TEST_STATE_WAIT_COLORS = 2,
-    TEST_STATE_WAIT_KEYBOARD = 2,
-    TEST_STATE_WAIT_MOUSE = 3,
-    TEST_STATE_COMPLETE = 4
-} diag_state_t;
-
-typedef enum {
-    RESULT_NONE = 0,
-    RESULT_RUNNING = 1,
-    RESULT_PASS = 2,
-    RESULT_FAIL = 3,
-    RESULT_WAIT_INPUT = 4
-} test_result_t;
-
-typedef struct {
-    const char* name;
-    test_result_t result;
-    char detail[64];
-} test_item_t;
-
-typedef struct {
-    const char* name;
-    uint32_t color;
-    uint32_t text_color;
-} diag_color_step_t;
-
-#define NUM_TESTS 7
-static test_item_t tests[NUM_TESTS] = {
-    { "ext4 Storage (R/W/Verify/Delete)", RESULT_NONE, "Pending" },
-    { "Network Hardware & Stack",          RESULT_NONE, "Pending" },
-    { "Floppy Disk Controller",            RESULT_NONE, "Pending" },
-    { "VBE Color Cycle (Interactive)",     RESULT_NONE, "Pending" },
-    { "VBE Framebuffer & Blit",            RESULT_NONE, "Pending" },
-    { "PS/2 Keyboard (Interactive)",       RESULT_NONE, "Pending" },
-    { "PS/2 Mouse (Interactive)",          RESULT_NONE, "Pending" }
+typedef struct { const char* name; const char* result; } test_t;
+static test_t tests[] = {
+    {"ext4 write/read/delete", "Pending"}, {"Network controller", "Pending"},
+    {"Raw floppy read", "Pending (requires sudo)"}, {"Window drawing", "Pending"},
+    {"Display colors", "Pending"}, {"Keyboard input", "Pending"}, {"Mouse input", "Pending"}
 };
-
-static void str_copy(char* dst, const char* src, int max) {
-    int i = 0;
-    while (src && src[i] && i < max - 1) {
-        dst[i] = src[i];
-        i++;
-    }
-    dst[i] = '\0';
+static const uint32_t colors[] = {0xff0000, 0x00ff00, 0x0000ff, 0xffffff,
+                                 0x000000, 0xffff00, 0x00ffff, 0xff00ff};
+static uint32_t window;
+static int color_step = -1, input_step = -1;
+static void draw(uint32_t op, int x, int y, int w, int h, const char* text, uint32_t color) {
+    user_window_draw_t d = {0};
+    d.operation = op; d.x = x; d.y = y; d.width = w; d.height = h;
+    d.text = text; d.color = color;
+    sys_window_draw(window, &d);
 }
-
-static void run_ext4_test(os_api_t* api) {
-    tests[0].result = RESULT_RUNNING;
-    str_copy(tests[0].detail, "Writing test pattern...", sizeof(tests[0].detail));
-
-    const char* test_data = "NIXELOS_STORAGE_VERIFY_PATTERN_12345678";
-    uint32_t len = 39;
-    char read_buf[64];
-
-
-    if (api->fs.write("/tmp/sysdiag.tmp", (const uint8_t*)test_data, len) < 0) {
-        tests[0].result = RESULT_FAIL;
-        str_copy(tests[0].detail, "Write failed at LBA cluster allocate", sizeof(tests[0].detail));
-        return;
-    }
-
-
-    int bytes = api->fs.read("/tmp/sysdiag.tmp", (uint8_t*)read_buf, sizeof(read_buf) - 1);
-    if (bytes != (int)len) {
-        tests[0].result = RESULT_FAIL;
-        str_copy(tests[0].detail, "Read failed: byte count mismatch", sizeof(tests[0].detail));
-        api->fs.delete_file("/tmp/sysdiag.tmp");
-        return;
-    }
-    read_buf[len] = '\0';
-
-
-    for (uint32_t i = 0; i < len; i++) {
-        if (read_buf[i] != test_data[i]) {
-            tests[0].result = RESULT_FAIL;
-            str_copy(tests[0].detail, "Integrity failure: corrupted payload", sizeof(tests[0].detail));
-            api->fs.delete_file("/tmp/sysdiag.tmp");
-            return;
-        }
-    }
-
-
-    api->fs.delete_file("/tmp/sysdiag.tmp");
-    tests[0].result = RESULT_PASS;
-    str_copy(tests[0].detail, "OK", sizeof(tests[0].detail));
-}
-
-static void run_net_test(os_api_t* api) {
-    tests[1].result = RESULT_RUNNING;
-    str_copy(tests[1].detail, "Probing network status...", sizeof(tests[1].detail));
-
-    uint16_t vendor = 0, device = 0;
-    const char* dev_name = "None";
-    api->network.get_device_info(&vendor, &device, &dev_name);
-
-    uint64_t mac = api->network.get_mac_address();
-    uint8_t ready = api->network.net_is_ready();
-
-    if (mac == 0 && !ready) {
-        tests[1].result = RESULT_FAIL;
-        str_copy(tests[1].detail, "No active network controller ready", sizeof(tests[1].detail));
+static void redraw(void) {
+    draw(USER_WINDOW_DRAW_FILL, 0, 0, 740, 500, 0, COLOR_SURFACE);
+    if (color_step >= 0) {
+        draw(USER_WINDOW_DRAW_FILL, 0, 0, 740, 500, 0, colors[color_step]);
+        draw(USER_WINDOW_DRAW_FILL, 15, 25, 620, 44, 0, COLOR_SURFACE);
+        draw(USER_WINDOW_DRAW_TEXT, 25, 40, 0, 0, "Color test: P = next/pass, F = fail, Esc = exit", COLOR_TEXT_PRIMARY);
     } else {
-        tests[1].result = RESULT_PASS;
-        str_copy(tests[1].detail, dev_name ? dev_name : "Active NIC verified", sizeof(tests[1].detail));
+        for (unsigned i = 0; i < sizeof(tests)/sizeof(tests[0]); i++) {
+            draw(USER_WINDOW_DRAW_TEXT, 20, 40 + i*52, 0, 0, tests[i].name, COLOR_TEXT_PRIMARY);
+            draw(USER_WINDOW_DRAW_TEXT, 250, 40 + i*52, 0, 0, tests[i].result, COLOR_TEXT_PRIMARY);
+        }
+        const char* prompt = input_step == 5 ? "Keyboard: press P to pass or F to fail." :
+            input_step == 6 ? "Mouse: click here to pass or press F to fail." :
+            "Enter runs tests. Escape closes this window.";
+        draw(USER_WINDOW_DRAW_TEXT, 20, 410, 0, 0, prompt, COLOR_ACCENT);
+        draw(USER_WINDOW_DRAW_BUTTON, 20, 450, 140, 30, "Run Tests", COLOR_SURFACE);
+        draw(USER_WINDOW_DRAW_BUTTON, 180, 450, 120, 30, "Exit", COLOR_SURFACE);
     }
+    sys_window_present(window);
 }
-
-static void run_floppy_test(os_api_t* api) {
-    tests[2].result = RESULT_RUNNING;
-    str_copy(tests[2].detail, "Calibrating drive 0...", sizeof(tests[2].detail));
-
-    if (!api->devices.floppy_init()) {
-        tests[2].result = RESULT_FAIL;
-        str_copy(tests[2].detail, "FDC not detected or failed calibration", sizeof(tests[2].detail));
-        return;
-    }
-
+static void storage_test(void) {
+    /* Keep tests in the user's configuration directory, with a distinct file
+     * for each concurrent diagnostic process. */
+    char directory[FS_MAX_PATH], path[FS_MAX_PATH];
+    int n = sys_fs_home(directory, sizeof(directory));
+    if (n < 0 || n > FS_MAX_PATH - 40) { tests[0].result = "FAIL: home unavailable"; return; }
+    const char* prefix = "/.config/sysdiag";
+    while (*prefix) directory[n++] = *prefix++;
+    directory[n] = 0;
+    if (sys_fs_mkdir(directory) < 0) { tests[0].result = "FAIL: cannot create test directory"; return; }
+    for (int i = 0; i <= n; i++) path[i] = directory[i];
+    path[n++] = '/';
+    uint32_t pid = (uint32_t)sys_getpid();
+    for (int shift = 28; shift >= 0; shift -= 4) path[n++] = "0123456789abcdef"[(pid >> shift)&15];
+    path[n] = 0;
+    static const char pattern[] = "NIXELOS_STORAGE_VERIFY_PATTERN_12345678";
+    char readback[sizeof(pattern)];
+    int ok = sys_fs_write(path, pattern, sizeof(pattern)) >= 0 &&
+        sys_fs_read(path, readback, sizeof(readback)) == sizeof(pattern);
+    for (unsigned i = 0; ok && i < sizeof(pattern); i++) ok = readback[i] == pattern[i];
+    int removed = sys_fs_delete(path);
+    tests[0].result = ok && removed == 0 ? "PASS" : "FAIL: storage operation";
+}
+static void run_tests(void) {
+    storage_test();
+    net_diagnostics_t network;
+    int ready = sys_net_diagnostics(&network);
+    tests[1].result = ready >= 0 && network.initialized ? "PASS: controller initialized" : "FAIL: no initialized controller";
+    int floppy = sys_floppy_init();
     uint8_t sector[512];
-    if (api->devices.floppy_read(0, 1, sector)) {
-        if (sector[510] == 0x55 && sector[511] == 0xAA) {
-            tests[2].result = RESULT_PASS;
-            str_copy(tests[2].detail, "OK - Sector 0 boot signature 0x55AA matched", sizeof(tests[2].detail));
-        } else {
-            tests[2].result = RESULT_PASS;
-            str_copy(tests[2].detail, "OK - Track 0 Read successful (Unformatted disk)", sizeof(tests[2].detail));
-        }
-    } else {
-        tests[2].result = RESULT_FAIL;
-        str_copy(tests[2].detail, "Floppy seek/read failed on DMA Channel 2", sizeof(tests[2].detail));
-    }
+    tests[2].result = floppy == SYS_ERR_PERMISSION ? "Requires sudo sysdiag" :
+        floppy == 1 && sys_floppy_read(0, 1, sector) == 1 ? "PASS" : "FAIL: drive unavailable";
+    user_window_draw_t d = {0};
+    d.operation = USER_WINDOW_DRAW_FILL; d.x = 700; d.y = 400;
+    d.width = d.height = 10; d.color = 0xff0000;
+    tests[3].result = sys_window_draw(window, &d) == 0 ? "PASS: drawing request accepted" : "FAIL: drawing request";
+    tests[4].result = "In progress";
+    tests[5].result = tests[6].result = "Pending";
+    input_step = -1; color_step = 0;
+    redraw();
 }
-
-static void run_vbe_test(os_api_t* api) {
-    tests[3].result = RESULT_RUNNING;
-    str_copy(tests[3].detail, "Testing backbuffer blit...", sizeof(tests[3].detail));
-
-
-    api->graphics.fill_rect(780, 580, 10, 10, 0x00FF0000);
-    api->graphics.fill_rect(780, 580, 10, 10, 0x00003366);
-
-    tests[3].result = RESULT_PASS;
-    str_copy(tests[3].detail, "OK - 800x600 linear framebuffer verified", sizeof(tests[3].detail));
+static void key(uint32_t c) {
+    if (color_step >= 0) {
+        if (c == 'f' || c == 'F') {
+            tests[4].result = "FAIL: user assessment"; color_step = -1;
+        } else if ((c == 'p' || c == 'P') && ++color_step == 8) {
+            tests[4].result = "PASS: user assessment"; color_step = -1;
+        }
+        if (color_step < 0) { input_step = 5; tests[5].result = "Press P or F"; }
+    } else if (input_step >= 0 && (c == 'p' || c == 'P' || c == 'f' || c == 'F')) {
+        /* Mouse passes only on a mouse event, never a keyboard confirmation. */
+        if (input_step == 5 || c == 'f' || c == 'F') {
+            tests[input_step].result = c == 'f' || c == 'F' ? "FAIL: user assessment" : "PASS";
+            if (++input_step > 6) input_step = -1;
+            else tests[6].result = "Click prompt to pass";
+        }
+    } else if (c == '\n' || c == '\r') run_tests();
+    redraw();
 }
-
-static int run_fullscreen_color_test(os_api_t* api) {
-    if (!api) return 0;
-
-    static const diag_color_step_t color_steps[] = {
-        { "RED",     0x00FF0000, 0x00FFFFFF },
-        { "GREEN",   0x0000FF00, 0x00000000 },
-        { "BLUE",    0x000000FF, 0x00FFFFFF },
-        { "WHITE",   0x00FFFFFF, 0x00000000 },
-        { "BLACK",   0x00000000, 0x00FFFFFF },
-        { "YELLOW",  0x00FFFF00, 0x00000000 },
-        { "CYAN",    0x0000FFFF, 0x00000000 },
-        { "MAGENTA", 0x00FF00FF, 0x00FFFFFF }
-    };
-    const int step_count = sizeof(color_steps) / sizeof(color_steps[0]);
-
-    for (int step = 0; step < step_count; step++) {
-
-        api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, color_steps[step].color);
-
-
-        api->graphics.fill_rect(16, 16, 360, 48, COLOR_TITLEBAR_ACTIVE);
-        api->graphics.fill_rect(16, 16, 360, 2, COLOR_SURFACE_BORDER);
-        api->graphics.fill_rect(16, 16, 2, 48, COLOR_SURFACE_BORDER);
-        api->graphics.fill_rect(374, 16, 2, 48, COLOR_SURFACE_BORDER);
-        api->graphics.fill_rect(16, 62, 360, 2, COLOR_SURFACE_BORDER);
-
-
-        char label[64];
-        char step_buf[16];
-        step_buf[0] = '1' + step;
-        step_buf[1] = '/';
-        step_buf[2] = '0' + step_count;
-        step_buf[3] = '\0';
-
-        api->graphics.draw_string(28, 24, "COLOR: ", COLOR_TEXT_PRIMARY);
-        api->graphics.draw_string(84, 24, color_steps[step].name, COLOR_ACCENT);
-        api->graphics.draw_string(200, 24, step_buf, COLOR_TEXT_MUTED);
-        api->graphics.draw_string(28, 44, "Press 'P' for Next, 'F' to Fail", COLOR_TEXT_PRIMARY);
-
-
-        api->graphics.blit_all();
-
-
-        int step_decided = 0;
-        while (!step_decided) {
-            if (api->network.net_poll) {
-                api->network.net_poll();
-            }
-
-            os_input_event_t ev;
-            while (api->input.poll_input && api->input.poll_input(&ev)) {
-                if (ev.type == OS_INPUT_KEY) {
-                    char c = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
-                    if (c == 'p' || c == 'P') {
-                        step_decided = 1;
-                    } else if (c == 'f' || c == 'F') {
-                        return 0;
-                    } else if (c == 27) {
-                        return 0;
-                    }
+void user_main(const char* arguments) {
+    (void)arguments;
+    user_window_desc_t desc = {30, 40, 740, 500, "System Diagnostics"};
+    int32_t handle = sys_window_create(&desc);
+    if (handle < 0) return;
+    window = (uint32_t)handle;
+    redraw();
+    int closed = 0;
+    while (!closed) {
+        user_window_event_t event;
+        while (sys_window_poll(window, &event) == 1) {
+            if (event.type == USER_WINDOW_EVENT_CLOSE) closed = 1;
+            else if (event.type == USER_WINDOW_EVENT_REDRAW) redraw();
+            else if (event.type == USER_WINDOW_EVENT_KEY) {
+                if (event.key == 27 || event.key == 1) closed = 1;
+                else key(event.key);
+            } else if (event.type == USER_WINDOW_EVENT_MOUSE && (event.buttons & 1) && color_step < 0) {
+                if (input_step == 6 && event.y >= 400 && event.y < 440) {
+                    tests[6].result = "PASS: click received"; input_step = -1; redraw();
+                } else if (event.y >= 450 && event.y < 480) {
+                    if (event.x >= 20 && event.x < 160) run_tests();
+                    else if (event.x >= 180 && event.x < 300) closed = 1;
                 }
             }
-            __asm__ volatile ("pause");
+            if (closed) break;
         }
+        if (!closed) sys_yield();
     }
-
-    return 1;
-}
-
-int app_main(os_api_t* api) {
-    if (!api) return -1;
-
-    diag_state_t state = TEST_STATE_IDLE;
-    int mouse_x = SCREEN_WIDTH / 2;
-    int mouse_y = SCREEN_HEIGHT / 2;
-    uint8_t prev_buttons = 0;
-    int needs_draw = 1;
-
-    const int start_btn_x = 40;
-    const int start_btn_y = 520;
-    const int start_btn_w = 140;
-    const int start_btn_h = 36;
-
-    const int exit_btn_x = 200;
-    const int exit_btn_y = 520;
-    const int exit_btn_w = 120;
-    const int exit_btn_h = 36;
-
-    while (1) {
-        if (api->network.net_poll) {
-            api->network.net_poll();
-        }
-
-
-        if (needs_draw) {
-
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_MODERN_BG);
-
-
-            api->graphics.fill_rect(0, 0, SCREEN_WIDTH, 50, COLOR_TITLEBAR_ACTIVE);
-            api->graphics.draw_string(24, 16, "NixelOS All-in-One System Diagnostics", COLOR_TEXT_PRIMARY);
-
-
-            api->graphics.fill_rect(30, 70, 740, 420, COLOR_SURFACE);
-            api->graphics.fill_rect(30, 70, 740, 2, COLOR_SURFACE_BORDER);
-            api->graphics.fill_rect(30, 70, 2, 420, COLOR_SURFACE_BORDER);
-            api->graphics.fill_rect(768, 70, 2, 420, COLOR_SURFACE_BORDER);
-            api->graphics.fill_rect(30, 488, 740, 2, COLOR_SURFACE_BORDER);
-
-
-            for (int i = 0; i < NUM_TESTS; i++) {
-                int row_y = 90 + (i * 54);
-
-                api->graphics.draw_string(50, row_y, tests[i].name, COLOR_TEXT_PRIMARY);
-
-
-                uint32_t tag_col;
-                const char* tag_txt;
-                if (tests[i].result == RESULT_PASS) {
-                    tag_col = COLOR_BTN_MAX;
-                    tag_txt = "[ PASS ]";
-                } else if (tests[i].result == RESULT_FAIL) {
-                    tag_col = COLOR_BTN_CLOSE;
-                    tag_txt = "[ FAIL ]";
-                } else if (tests[i].result == RESULT_RUNNING) {
-                    tag_col = COLOR_BTN_MIN;
-                    tag_txt = "[ RUN  ]";
-                } else if (tests[i].result == RESULT_WAIT_INPUT) {
-                    tag_col = COLOR_ACCENT;
-                    tag_txt = "[ P / F ]";
-                } else {
-                    tag_col = COLOR_TEXT_MUTED;
-                    tag_txt = "[ IDLE ]";
-                }
-
-                api->graphics.draw_string(340, row_y, tag_txt, tag_col);
-                api->graphics.draw_string(430, row_y, tests[i].detail, COLOR_TEXT_PRIMARY);
-
-
-                if (i < NUM_TESTS - 1) {
-                    api->graphics.fill_rect(50, row_y + 36, 700, 1, COLOR_SURFACE_BORDER);
-                }
-            }
-
-            if (state == TEST_STATE_WAIT_KEYBOARD) {
-                api->graphics.fill_rect(340, 520, 430, 36, COLOR_SURFACE);
-                api->graphics.draw_string(350, 530, "Testing Keyboard: Press 'P' (Pass) or 'F' (Fail)", COLOR_ACCENT);
-            } else if (state == TEST_STATE_WAIT_MOUSE) {
-                api->graphics.fill_rect(340, 520, 430, 36, COLOR_SURFACE);
-                api->graphics.draw_string(350, 530, "Testing Mouse: Move cursor, then press 'P' or 'F'", COLOR_ACCENT);
-            }
-
-
-            api->graphics.draw_button(start_btn_x, start_btn_y, start_btn_w, start_btn_h, "Run Tests", 0);
-            api->graphics.draw_button(exit_btn_x, exit_btn_y, exit_btn_w, exit_btn_h, "Exit", 0);
-
-            api->graphics.blit_all();
-            needs_draw = 0;
-        }
-
-        if (state == TEST_STATE_RUNNING) {
-            run_ext4_test(api);
-            needs_draw = 1;
-            api->graphics.blit_all();
-
-            run_net_test(api);
-            needs_draw = 1;
-            api->graphics.blit_all();
-
-            run_floppy_test(api);
-            needs_draw = 1;
-            api->graphics.blit_all();
-
-            run_vbe_test(api);
-            needs_draw = 1;
-            api->graphics.blit_all();
-
-
-            tests[4].result = RESULT_RUNNING;
-            str_copy(tests[4].detail, "Cycling colors fullscreen...", sizeof(tests[4].detail));
-
-            if (run_fullscreen_color_test(api)) {
-                tests[4].result = RESULT_PASS;
-                str_copy(tests[4].detail, "OK - 8 color primaries verified", sizeof(tests[4].detail));
-            } else {
-                tests[4].result = RESULT_FAIL;
-                str_copy(tests[4].detail, "User marked color reproduction failed", sizeof(tests[4].detail));
-            }
-
-            os_input_event_t drain_ev;
-            while (api->input.poll_input && api->input.poll_input(&drain_ev)) {
-
-            }
-
-
-            tests[5].result = RESULT_WAIT_INPUT;
-            //str_copy(tests[5].detail, "Press P to Pass, F to Fail", sizeof(tests[5].detail));
-            str_copy(tests[5].detail, "Input tests are currently unavailable", sizeof(tests[5].detail));
-            // zainabm: i'm not too sure why the input tests are broken, we'll skip them for now.
-            state = TEST_STATE_WAIT_KEYBOARD;
-            //state = TEST_STATE_COMPLETE;
-            needs_draw = 1;
-            //return 0;
-        }
-
-
-        os_input_event_t ev;
-        while (api->input.poll_input && api->input.poll_input(&ev)) {
-            if (ev.type == OS_INPUT_MOUSE) {
-                mouse_x += ev.mouse_dx;
-                mouse_y -= ev.mouse_dy;
-
-                if (mouse_x < 0) mouse_x = 0;
-                if (mouse_x >= SCREEN_WIDTH) mouse_x = SCREEN_WIDTH - 1;
-                if (mouse_y < 0) mouse_y = 0;
-                if (mouse_y >= SCREEN_HEIGHT) mouse_y = SCREEN_HEIGHT - 1;
-
-                if (api->input.move_cursor) {
-                    api->input.move_cursor(mouse_x, mouse_y, 1);
-                }
-
-                uint8_t left_click = (ev.mouse_buttons & 1) && !(prev_buttons & 1);
-                prev_buttons = ev.mouse_buttons;
-
-                if (left_click) {
-
-                    if (mouse_x >= start_btn_x && mouse_x <= (start_btn_x + start_btn_w) &&
-                        mouse_y >= start_btn_y && mouse_y <= (start_btn_y + start_btn_h)) {
-                        for (int i = 0; i < NUM_TESTS; i++) {
-                            tests[i].result = RESULT_NONE;
-                            str_copy(tests[i].detail, "Pending", sizeof(tests[i].detail));
-                        }
-                        state = TEST_STATE_RUNNING;
-                        needs_draw = 1;
-                    }
-
-                    else if (mouse_x >= exit_btn_x && mouse_x <= (exit_btn_x + exit_btn_w) &&
-                             mouse_y >= exit_btn_y && mouse_y <= (exit_btn_y + exit_btn_h)) {
-                        return 0;
-                    }
-                }
-            } else if (ev.type == OS_INPUT_KEY) {
-                char c = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
-
-
-                } else if (ev.type == OS_INPUT_KEY) {
-
-                if (ev.scancode & 0x80) {
-                    continue;
-                }
-
-                char c = api->input.translate_scancode ? api->input.translate_scancode(ev.scancode) : 0;
-                uint8_t is_p = (c == 'p' || c == 'P' || ev.scancode == 0x19);
-                uint8_t is_f = (c == 'f' || c == 'F' || ev.scancode == 0x21);
-
-
-                if (state == TEST_STATE_WAIT_KEYBOARD) {
-                    /*
-                    if (is_p) {
-                        tests[5].result = RESULT_PASS;
-                        str_copy(tests[5].detail, "Manual keyboard response confirmed", sizeof(tests[4].detail));
-                        tests[6].result = RESULT_WAIT_INPUT;
-                        str_copy(tests[6].detail, "Move mouse, then press P or F", sizeof(tests[5].detail));
-                        state = TEST_STATE_WAIT_MOUSE;
-                        needs_draw = 1;
-                    } else if (is_f) {
-                        tests[5].result = RESULT_FAIL;
-                        str_copy(tests[5].detail, "Manual keyboard test marked failed", sizeof(tests[5].detail));
-                        tests[6].result = RESULT_WAIT_INPUT;
-                        str_copy(tests[6].detail, "Move mouse, then press P or F", sizeof(tests[6].detail));
-                        state = TEST_STATE_WAIT_MOUSE;
-                        needs_draw = 1;
-                    }
-                        */
-                    // zainabm: we pass both tests prematurely here
-                    tests[5].result = RESULT_PASS;
-                    state = TEST_STATE_WAIT_MOUSE;
-                    needs_draw = 1;
-                } else if (state == TEST_STATE_WAIT_MOUSE) {
-                    /*
-                    if (is_p) {
-                        tests[6].result = RESULT_PASS;
-                        str_copy(tests[6].detail, "Manual mouse tracking confirmed", sizeof(tests[6].detail));
-                        state = TEST_STATE_COMPLETE;
-                        needs_draw = 1;
-                    } else if (is_f) {
-                        tests[6].result = RESULT_FAIL;
-                        str_copy(tests[6].detail, "Manual mouse test marked failed", sizeof(tests[6].detail));
-                        state = TEST_STATE_COMPLETE;
-                        needs_draw = 1;
-                    }
-                        */
-                    tests[6].result = RESULT_PASS;
-                    state = TEST_STATE_COMPLETE;
-                    needs_draw = 1;
-                }
-
-                if (c == 27 || ev.scancode == 0x01) {
-                    return 0;
-                }
-            }
-        }
-
-        __asm__ volatile ("pause");
-    }
-
-    return 0;
+    sys_window_close(window);
 }

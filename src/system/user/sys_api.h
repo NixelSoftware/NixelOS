@@ -8,12 +8,16 @@
 #include "memory_api.h"
 #include "audio_api.h"
 
+/* Sensitive calls return this value without performing the operation when
+ * the calling task is not root. Other failures retain their existing -1 ABI. */
+#define SYS_ERR_PERMISSION (-2)
+
 /* i386 ABI: call number in EAX, arguments in EBX/ECX/EDX, result in EAX. */
 enum {
     SYS_WRITE = 1,     /* EBX: buffer, ECX: length; returns bytes written or -1 */
     SYS_GET_TICKS = 2, /* returns the timer tick count */
     SYS_EXIT = 3,      /* EBX: process status; does not return */
-    SYS_SHUTDOWN = 4,  /* requests a kernel-managed system shutdown */
+    SYS_SHUTDOWN = 4,  /* UID 0: shutdown; SYS_ERR_PERMISSION otherwise */
     SYS_NET_DIAGNOSTICS = 5, /* EBX: output snapshot; returns ready state */
     SYS_DNS_RESOLVE = 6,     /* EBX: hostname, ECX: writable IPv4 output */
     SYS_PING_START = 7,      /* EBX: destination IPv4, ECX: sequence; returns request handle */
@@ -26,9 +30,9 @@ enum {
     SYS_WINDOW_CLOSE = 14,   /* EBX: handle */
     SYS_FS_READ = 15,        /* EBX: filename, ECX: writable buffer or null, EDX: capacity (max 16 KiB; zero queries size) */
     SYS_FS_LIST = 16,        /* EBX: writable [FS_MAX_FILES][FS_MAX_FILENAME] output */
-    SYS_FLOPPY_INIT = 17,    /* initializes the floppy controller */
-    SYS_FLOPPY_READ = 18,    /* EBX: LBA, ECX: sector count (1..18), EDX: writable data */
-    SYS_FLOPPY_TEST_WRITE = 19, /* writes the built-in test pattern to reserved LBA 2879 */
+    SYS_FLOPPY_INIT = 17,    /* UID 0: initializes the raw floppy controller */
+    SYS_FLOPPY_READ = 18,    /* UID 0: EBX LBA, ECX count (1..18), EDX writable data */
+    SYS_FLOPPY_TEST_WRITE = 19, /* UID 0: writes the test pattern to reserved LBA 2879 */
     SYS_FS_WRITE = 20,       /* EBX: filename, ECX: readable buffer, EDX: length (max 64 KiB) */
     SYS_TCP_CONNECT = 21,    /* EBX: remote IPv4, ECX: remote port; returns owned socket handle */
     SYS_TCP_STATE = 22,      /* EBX: socket handle; returns USER_TCP_* state */
@@ -44,9 +48,9 @@ enum {
     SYS_AUDIO_SHUTDOWN = 32, /* closes only the caller audio stream */
     SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
     SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
-    SYS_REBOOT = 35, /* requests a kernel managed reboot */
+    SYS_REBOOT = 35, /* UID 0: reboot; SYS_ERR_PERMISSION otherwise */
     SYS_DETACH = 36, /* reparent current process to PID 0; releases terminal wait */
-    SYS_SERIAL_LOG_READ = 44, /* EBX: output, ECX: capacity (1..256), EDX: cursor */
+    SYS_SERIAL_LOG_READ = 44, /* UID 0: EBX output, ECX capacity (1..256), EDX cursor */
     SYS_AUDIO_DEVICE_NAME = 43, /* EBX: output string, ECX: capacity (1..64); selected HAL device */
     SYS_AUDIO_OPL = 42, /* legacy hardware OPL returns -1; synthesize PCM into the shared mixer */
     SYS_GETPID = 37,
@@ -54,7 +58,7 @@ enum {
     SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FS type bits */
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
     SYS_APP_LAUNCH = 40, /* EBX: executable path, ECX: arguments; starts detached */
-    SYS_TCP_LISTEN = 45, /* EBX: local port; returns listener handle or -1 */
+    SYS_TCP_LISTEN = 45, /* EBX: local port; ports below 1024 require UID 0 */
     SYS_TCP_ACCEPT = 46, /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
     SYS_TCP_REMOTE_IP = 47, /* EBX: socket handle; returns uint32_t IPv4 address */
     SYS_RTC_TIME = 48, /* EBX: writable user_rtc_time_t* */
@@ -62,6 +66,7 @@ enum {
     SYS_FS_GETCWD = 51, /* EBX: output path, ECX: capacity */
     SYS_FS_HOME = 52, /* EBX: output home path, ECX: capacity */
     SYS_FS_MKDIR = 53, /* EBX: directory path; 0 success, -1 failure */
+    SYS_FS_DELETE = 54, /* EBX: path; filesystem permissions apply */
     SYS_PCI_DEVICE_INFO = 49 /* EBX: index, ECX: writable user_pci_device_t* */
 };
 
@@ -75,6 +80,12 @@ static inline int32_t sys_fs_home(char* out, uint32_t capacity) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result)
         : "0"(SYS_FS_HOME), "b"(out), "c"(capacity) : "memory", "cc");
+    return result;
+}
+static inline int32_t sys_fs_delete(const char* path) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_DELETE), "b"(path) : "memory", "cc");
     return result;
 }
 static inline int32_t sys_fs_mkdir(const char* path) {
@@ -343,20 +354,20 @@ static inline void sys_exit(uint32_t status) {
     for (;;) { }
 }
 
-static inline void sys_shutdown(void) {
-    __asm__ volatile ("int $0x80"
-                      :
-                      : "a"((uint32_t)SYS_SHUTDOWN)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    for (;;) { }
+static inline int32_t sys_shutdown(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"((uint32_t)SYS_SHUTDOWN)
+        : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
 }
 
-static inline void sys_reboot(void) {
-    __asm__ volatile ("int $0x80"
-                      :
-                      : "a"((uint32_t)SYS_REBOOT)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    for (;;) { }
+static inline int32_t sys_reboot(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"((uint32_t)SYS_REBOOT)
+        : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
 }
 
 static inline int32_t sys_net_diagnostics(net_diagnostics_t* diagnostics) {

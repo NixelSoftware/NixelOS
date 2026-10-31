@@ -3,6 +3,7 @@
 #include "hal/audio.h"
 #include "syscall.h"
 #include "users.h"
+#include "syscall_policy.h"
 #include "task.h"
 #include "mutex.h"
 #include "idt.h"
@@ -409,6 +410,12 @@ static void syscall_dispatch_impl(registers_t* regs) {
             }
             for (uint32_t i = 0; i <= length; i++) ((char*)regs->ebx)[i] = path[i];
             regs->eax = length; return;
+        }
+        case SYS_FS_DELETE: {
+            char path[FS_MAX_PATH];
+            regs->eax = copy_user_text(regs->ebx, path, sizeof(path)) ?
+                (fs_delete_file(path) ? 0u : (uint32_t)-1) : (uint32_t)-1;
+            return;
         }
         case SYS_FS_MKDIR: {
             char path[FS_MAX_PATH];
@@ -999,9 +1006,20 @@ static void syscall_dispatch_impl(registers_t* regs) {
  * the compositor or network worker from progressing while a device is busy. */
 void syscall_dispatch(registers_t* regs) {
     if (!regs) return;
+    /* Authorize before taking locks, touching user pointers or hardware.
+     * Credentials belong to this task, inherited at task_create (including
+     * sudo launches), and are never supplied by an executable or ABI argument. */
+    if (!current_task || (regs->cs & 3u) != 3u) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    if (!syscall_allowed(current_task->uid, regs->eax, regs->ebx)) {
+        regs->eax = (uint32_t)SYS_ERR_PERMISSION;
+        return;
+    }
     switch (regs->eax) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
-        case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
+        case SYS_FS_DELETE: case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
             syscall_dispatch_impl(regs);
             return;

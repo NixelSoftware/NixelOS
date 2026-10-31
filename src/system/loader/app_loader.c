@@ -15,16 +15,12 @@
 #define APP_INSTANCE_MAX 8
 #define APP_MAPPED_PAGES ((APP_BSS_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE)
 
-typedef int (*app_entry_fn)(os_api_t* api);
-
 typedef struct {
     address_space_t address_space;
     uint8_t active;
     uint8_t pending_release;
     uint8_t running;
-    uint8_t type;
     uint32_t entry, user_stack;
-    os_api_t* api;
     uint16_t window_references;
     uint32_t context_references;
 } app_instance_t;
@@ -134,23 +130,9 @@ static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
 static void app_run(void* argument) {
     app_instance_t* instance = argument;
     paging_activate(&instance->address_space);
-    if (instance->type == APP_TYPE_USER) {
-        arch_i386_enter_user(instance->entry, instance->user_stack);
-        wm_user_close_address_space((uint32_t)instance->address_space.directory);
-    } else {
-        ((app_entry_fn)instance->entry)(instance->api);
-        /* Legacy GUI entry points return after registering callbacks. Keep
-         * their process alive for the windows' lifetime as well. */
-        for (;;) {
-            mutex_lock(&kernel_mutex);
-            int alive = instance->window_references != 0;
-            mutex_unlock(&kernel_mutex);
-            if (!alive || current_task->terminate_requested) break;
-            task_sleep_ms(1);
-        }
-        if (current_task->terminate_requested)
-            wm_user_close_address_space((uint32_t)instance->address_space.directory);
-    }
+    /* Root changes service authorization. */
+    arch_i386_enter_user(instance->entry, instance->user_stack);
+    wm_user_close_address_space((uint32_t)instance->address_space.directory);
     debug_print("[APP] executable returned\n");
     paging_activate_kernel();
     mutex_lock(&kernel_mutex);
@@ -204,19 +186,15 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
 
     app_header_t* header = (app_header_t*)APP_VIRTUAL_BASE;
     if (header->magic != APP_HEADER_MAGIC ||
-        (header->type != APP_TYPE_GUI && header->type != APP_TYPE_CONSOLE &&
-         header->type != APP_TYPE_USER)) {
+        header->type != APP_TYPE_USER) {
         app_loader_context_leave(previous_directory);
         instance->pending_release = 1;
         app_loader_collect();
         return -2;
     }
 
-    app_entry_fn entry = (app_entry_fn)(APP_VIRTUAL_BASE + sizeof(app_header_t));
-    instance->entry = (uint32_t)entry;
-    instance->type = header->type;
-    instance->api = api;
-    if (header->type == APP_TYPE_USER) {
+    instance->entry = APP_VIRTUAL_BASE + sizeof(app_header_t);
+    {
         uint32_t argument_length = 0;
         const char* source = arguments ? arguments : "";
         while (source[argument_length] && argument_length < APP_ARGUMENT_MAX - 1u)
@@ -264,7 +242,7 @@ static void app_load_worker(void* argument) {
     launch_request_t* request = argument;
     int result = app_loader_prepare(request->api, request->name, request->arguments);
     if (result < 0) {
-        static const char message[] = "Cannot launch application (missing, invalid, or resources exhausted).\n";
+        static const char message[] = "Cannot launch application (missing, invalid/ring-0 executable, or resources exhausted).\n";
         kernel_user_write(message, sizeof(message)-1u);
     }
     mutex_lock(&kernel_mutex);

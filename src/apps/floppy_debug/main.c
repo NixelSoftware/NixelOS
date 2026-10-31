@@ -14,6 +14,7 @@ static uint8_t sector_data[512];
 static char status_msg[64] = "FDC Ready. Click 'Read Boot (0)'.";
 static uint32_t current_lba = 0;
 static uint8_t data_valid = 0;
+static uint8_t permission_denied;
 
 
 static int user_register_window(Window* window) {
@@ -186,14 +187,19 @@ static void refresh_window(Window* w) {
 }
 
 static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t btn) {
-    if (btn != 1) return; 
+    if (btn != 1) return;
+    if (permission_denied) {
+        str_copy(status_msg, "Permission denied. Run sudo floppy_debug.");
+        refresh_window(w);
+        return;
+    }
 
     
     if (local_y >= 50 && local_y <= 74 && local_x >= 10 && local_x <= 115) {
         str_copy(status_msg, "Reading sector 0 (Boot Sector)...");
         refresh_window(w);
 
-        if (sys_floppy_read(0, 1, sector_data)) {
+        if (sys_floppy_read(0, 1, sector_data) == 1) {
             data_valid = 1;
             current_lba = 0;
             if (sector_data[510] == 0x55 && sector_data[511] == 0xAA) {
@@ -216,7 +222,7 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
 
         int ok = 1;
         for (uint32_t sec = 0; sec < 18; sec++) {
-            if (!sys_floppy_read(sec, 1, sector_data)) {
+            if (sys_floppy_read(sec, 1, sector_data) != 1) {
                 ok = 0;
                 char err[48] = "Failed reading track 0, sector: ";
                 char num[8];
@@ -247,9 +253,9 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
             write_pattern[i] = (uint8_t)(i ^ 0xA5);
         }
 
-        if (sys_floppy_write_test_pattern()) {
+        if (sys_floppy_write_test_pattern() == 1) {
             uint8_t read_back[512];
-            if (sys_floppy_read(2879, 1, read_back)) {
+            if (sys_floppy_read(2879, 1, read_back) == 1) {
                 int matched = 1;
                 for (int i = 0; i < 512; i++) {
                     if (read_back[i] != write_pattern[i]) {
@@ -296,9 +302,12 @@ void user_main(const char* arguments) {
     win.handle_mouse = handle_mouse;
     win.handle_key = 0;
 
-    if (!sys_floppy_init()) {
+    int32_t initialized = sys_floppy_init();
+    permission_denied = initialized == SYS_ERR_PERMISSION;
+    if (permission_denied)
+        str_copy(status_msg, "Permission denied. Run sudo floppy_debug.");
+    else if (initialized != 1)
         str_copy(status_msg, "Floppy drive not detected or not ready.");
-    }
 
     if (os->windows.register_window(&win) < 0) {
         static const char error[] = "floppy_debug: unable to create window\n";

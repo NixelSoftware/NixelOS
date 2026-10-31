@@ -193,14 +193,16 @@ void user_main(const char* arguments) {
     logger_init();
 
     print("[QuarkServe] Starting daemon...\n");
-    sys_detach();
 
     int32_t listener = sys_tcp_listen(config.port);
     if (listener < 0) {
-        print("[QuarkServe] Failed to bind port.\n");
+        print(listener == SYS_ERR_PERMISSION ?
+            "qksrv: permission denied; run sudo qksrv for ports below 1024.\n" :
+            "[QuarkServe] Failed to bind port.\n");
         sys_exit(1);
     }
 
+    sys_detach();
     print("[QuarkServe] Listening in background.\n");
 
     for (;;) {
