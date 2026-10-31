@@ -290,7 +290,7 @@ RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join
 
 DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
 
-os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py
+os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
 	$(PYTHON) mkext4.py os.img.new
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build

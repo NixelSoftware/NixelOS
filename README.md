@@ -50,13 +50,8 @@ Add Make and the cross-toolchain's `bin` directory to your Windows `PATH`,
 along with Python 3.8+, NASM, and QEMU. The compiler must produce ELF objects
 for NixelOS.
 
-For image creation, install WSL and a Linux distribution (for example Ubuntu).
-Inside the default WSL distribution, run:
-
-```sh
-sudo apt update
-sudo apt install python3 e2fsprogs
-```
+For image creation, no extra tools are needed: when `mke2fs` and `debugfs`
+are unavailable, `mkext4.py` writes the ext4 filesystem directly in Python.
 
 Then build from PowerShell or Command Prompt in the checkout:
 
@@ -65,16 +60,14 @@ mingw32-make
 mingw32-make run
 ```
 
-Compilation uses the Windows tools. `mkext4.py` automatically runs image
-creation in the default WSL distribution when `mke2fs` or `debugfs` is missing
-from the Windows `PATH`. Keep the checkout on a drive accessible to WSL.
-Native Windows e2fsprogs tools on `PATH` are also supported. Tool choices can
-be overridden, for example `mingw32-make PYTHON=python CC=i686-elf-gcc`.
+Compilation uses the Windows tools. Native Windows e2fsprogs tools on `PATH`
+are used when present, but they are optional. Tool choices can be overridden,
+for example `mingw32-make PYTHON=python CC=i686-elf-gcc`.
 
 # Building
-Install GNU Make, GCC, NASM, binutils, Python, e2fsprogs, and QEMU, then run `make` to build
-`os.img` or `make run` to build and start it in QEMU. Set
-`DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
+Install GNU Make, GCC, NASM, binutils, Python, and QEMU (e2fsprogs is optional),
+then run `make` to build `os.img` or `make run` to build and start it in QEMU.
+Set `DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
 remove generated build artifacts.
 
 `make run` automatically prefers KVM hardware acceleration on Linux/x86 when
@@ -87,9 +80,9 @@ application needs more than the default 128 MiB.
 
 ## Filesystem layout
 
-The image uses ext4, built without root access by `mkext4.py` using `mke2fs`
-and `debugfs` from e2fsprogs. On Windows, image creation automatically uses
-WSL when those tools are unavailable natively; see the Windows setup above.
+The image uses ext4, built without root access by `mkext4.py`. It uses
+`mke2fs` and `debugfs` from e2fsprogs when available, and otherwise writes the
+filesystem directly, so Windows builds need no extra filesystem tools.
 
 | Path | Contents |
 | :--- | :--- |

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build the raw BIOS boot area and a journal-free ext4 data partition.
 
-Requires e2fsprogs (mke2fs/debugfs); no root privileges or loop mount needed.
-Windows hosts without native e2fsprogs delegate image creation to WSL.
-The deliberately small feature set is shared with src/kernel/fs.c.
+Uses e2fsprogs (mke2fs/debugfs) when available and otherwise falls back to the
+dependency-free writer in tools/ext4_builder.py, so Windows builds need no
+external filesystem tools. The deliberately small feature set is shared with
+src/kernel/fs.c.
 """
 import os
 from pathlib import Path
@@ -30,36 +31,21 @@ BUNDLED_FILES = [
 ]
 
 
-def build_in_wsl(output):
-    """Run against the same checkout and output using WSL's Linux tools."""
-    if not shutil.which("wsl.exe"):
-        raise RuntimeError(
-            "Image creation requires mke2fs and debugfs. Install WSL with a Linux "
-            "distribution, then install python3 and e2fsprogs inside it "
-            "(Ubuntu/Debian: sudo apt install python3 e2fsprogs).")
-
-    def linux_path(path):
-        return subprocess.check_output(
-            ["wsl.exe", "--exec", "wslpath", "-a", "-u", str(Path(path).resolve())],
-            text=True, encoding="utf-8").strip()
-
-    # Keep the cwd for relative resource paths; translate output separately so
-    # absolute Windows paths and paths containing spaces also work.
-    cwd = linux_path(Path.cwd())
-    script = linux_path(__file__)
-    destination = linux_path(output)
-    subprocess.run(["wsl.exe", "--cd", cwd, "--exec", "python3", script, destination],
-                   check=True)
+def inode_metadata(path, name, directories):
+    owner, mode = directories.get(name, (
+        1000 if name.startswith("var/www/") or name == "var/log/quark.log" else 0,
+        0o755 if path.suffix == ".bin" else 0o644))
+    if name == "etc/time.cfg":
+        mode = 0o777
+    kind = 0o40000 if path.is_dir() else 0o100000
+    return owner, kind | mode
 
 
 def main(output):
     missing = [tool for tool in ("mke2fs", "debugfs") if not shutil.which(tool)]
     if missing:
-        if sys.platform == "win32":
-            build_in_wsl(output)
-            return
-        raise RuntimeError("Missing " + ", ".join(missing) +
-                           "; install e2fsprogs in the build environment.")
+        print("[INFO] " + ", ".join(missing) +
+              " not found; using the built-in ext4 writer.")
     disk = bytearray(TOTAL_SECTORS * SECTOR_SIZE)
     for name, lba, exact in (("src/boot.bin", 0, 512),
                              ("src/boot_stage2.bin", STAGE2_LBA, STAGE2_SECTORS * 512),
@@ -135,28 +121,29 @@ def main(output):
         fs = work / "ext4.img"
         with fs.open("wb") as stream:
             stream.truncate(sectors * 512)
-        subprocess.run(["mke2fs", "-q", "-t", "ext4", "-F", "-b", "4096", "-I", "256",
-                        "-N", "2048", "-m", "0", "-O", "none,extent,filetype,sparse_super,large_file",
-                        "-E", "lazy_itable_init=0,root_owner=0:0", "-L", "NIXELOS",
-                        "-d", str(root), str(fs)], check=True)
-        commands = work / "metadata"
-        # Normalize every inode's ownership independently of the build host.
-        metadata = ["set_inode_field / mode 040755"]
+        entries = {}
         for path in sorted(root.rglob("*")):
             name = path.relative_to(root).as_posix()
-            owner, mode = directories.get(name, (1000 if name.startswith("var/www/") or
-                                                 name == "var/log/quark.log" else 0,
-                                                 0o755 if path.suffix == ".bin" else 0o644))
-            if name == "etc/time.cfg":
-                mode = 0o777
-            kind = 0o40000 if path.is_dir() else 0o100000
-            metadata += [f'set_inode_field "/{name}" uid {owner}',
-                         f'set_inode_field "/{name}" gid {owner}',
-                         f'set_inode_field "/{name}" mode 0{kind | mode:o}']
-        metadata += ["set_inode_field /lost+found uid 0", "set_inode_field /lost+found gid 0"]
-        commands.write_bytes(("\n".join(metadata) + "\n").encode("utf-8"))
-        subprocess.run(["debugfs", "-w", "-f", str(commands), str(fs)],
-                       check=True, stdout=subprocess.DEVNULL)
+            entries[name] = inode_metadata(path, name, directories)
+        if missing:
+            from tools.ext4_builder import build_ext4
+            build_ext4(root, entries, fs, sectors)
+        else:
+            subprocess.run(["mke2fs", "-q", "-t", "ext4", "-F", "-b", "4096", "-I", "256",
+                            "-N", "2048", "-m", "0", "-O", "none,extent,filetype,sparse_super,large_file",
+                            "-E", "lazy_itable_init=0,root_owner=0:0", "-L", "NIXELOS",
+                            "-d", str(root), str(fs)], check=True)
+            commands = work / "metadata"
+            # Normalize every inode's ownership independently of the build host.
+            metadata = ["set_inode_field / mode 040755"]
+            for name, (owner, mode) in entries.items():
+                metadata += [f'set_inode_field "/{name}" uid {owner}',
+                             f'set_inode_field "/{name}" gid {owner}',
+                             f'set_inode_field "/{name}" mode 0{mode:o}']
+            metadata += ["set_inode_field /lost+found uid 0", "set_inode_field /lost+found gid 0"]
+            commands.write_bytes(("\n".join(metadata) + "\n").encode("utf-8"))
+            subprocess.run(["debugfs", "-w", "-f", str(commands), str(fs)],
+                           check=True, stdout=subprocess.DEVNULL)
         disk[FILESYSTEM_LBA * 512:] = fs.read_bytes()
     Path(output).write_bytes(disk)
     print(f"[SUCCESS] Wrote bootable ext4 disk to {output}")
