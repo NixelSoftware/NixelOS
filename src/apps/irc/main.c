@@ -14,7 +14,7 @@
 #define ACCENT COLOR_ACCENT
 static uint32_t window, socket_handle, resolver, started;
 static int phase, running = 1, dirty = 1; /* idle, DNS, TCP, registration, ready */
-static char server[128] = "irc.libera.chat", nick[32] = "nixel", channel[64] = "#nixel";
+static char server[128] = "irc.nixelos.org", nick[32] = "nixel", channel[64] = "#main";
 static uint16_t port = 6667;
 static char lines[HISTORY][COLS + 1], input[384], incoming[512];
 static uint32_t colors[HISTORY], count, first, scroll, input_len, cursor, receive_len;
@@ -346,7 +346,7 @@ void user_main(const char* arguments) {
     window = (uint32_t)result;
     user_window_draw_t raw = {0}; raw.operation = USER_WINDOW_RAW_KEYS; raw.pressed = 1;
     sys_window_draw(window, &raw); sys_detach(); help();
-    log_line("Set /nick NAME, then /server irc.libera.chat to connect.", ACCENT);
+    log_line("Set /nick NAME, then /server irc.nixelos.org to connect.", ACCENT);
     while (running) {
         user_window_event_t e;
         for (unsigned n = 0; n < 32 && sys_window_poll(window, &e) == 1; n++) {
