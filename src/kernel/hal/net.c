@@ -167,6 +167,7 @@ void sys_net_shutdown(void) {
     else if (net_driver_type == 1) e1000_shutdown();
     else if (net_driver_type == 0) net_shutdown();
     dhcp_clear_lease();
+    tcp_init();
     ipv4_set_configuration(0, 0, 0);
 }
 
@@ -178,6 +179,7 @@ void sys_net_poll(void) {
     else if (net_driver_type == 1) e1000_poll();
     else if (net_driver_type == 0) net_poll();
     ipv4_poll();
+    tcp_poll();
 }
 
 uint8_t sys_net_send(const uint8_t* data, uint32_t length) {

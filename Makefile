@@ -407,3 +407,12 @@ test-text:
 	src/system/graphics/tests/text_test.c src/system/graphics/text_layout.c \
 	src/kernel/drivers/display/font.c src/system/graphics/fonts/univers85ebo_16.c \
 	-o "$$text_test_dir/text-test"; "$$text_test_dir/text-test"
+
+src/kernel/net/tcp.o src/kernel/hal/net.o src/kernel/syscall.o: src/kernel/net/tcp.h
+
+.PHONY: test-tcp
+test-tcp:
+	@set -eu; tcp_test_dir=$$(mktemp -d /tmp/nixel-tcp-test.XXXXXX); \
+	trap 'rm -rf "$$tcp_test_dir"' EXIT HUP INT TERM; \
+	$(CC) -O2 -Wall -Wextra -Werror src/kernel/net/tests/tcp_test.c \
+	-o "$$tcp_test_dir/tcp-test"; "$$tcp_test_dir/tcp-test"

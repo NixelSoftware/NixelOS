@@ -101,6 +101,12 @@ address space. They are released when the app exits. Prefer asynchronous DNS
 and yield while polling sockets or waiting for input. Network services on
 privileged ports must be launched through sudo or a root shell.
 
+`sys_tcp_send` copies an entire chunk into a bounded transport queue on success;
+zero can mean temporary backpressure. Check connection state, yield and retry
+the same bytes. Closing a handle lets already accepted bytes drain before FIN.
+The peer may close its sending half while the app still sends a response.
+See [TCP implementation and tests](tcp.md) for limits and recovery behavior.
+
 PCM audio uses a caller-owned stream through the shared kernel mixer. Handle
 partial writes and queue backpressure; drain before shutdown when the final
 samples must finish. See [USERSPACE.md](USERSPACE.md) for ABI and audio details.
