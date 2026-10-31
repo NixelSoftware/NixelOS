@@ -36,7 +36,7 @@ enum {
     SYS_FS_WRITE = 20,       /* EBX: filename, ECX: readable buffer, EDX: length (max 64 KiB) */
     SYS_TCP_CONNECT = 21,    /* EBX: remote IPv4, ECX: remote port; returns owned socket handle */
     SYS_TCP_STATE = 22,      /* EBX: socket handle; returns USER_TCP_* state */
-    SYS_TCP_SEND = 23,       /* EBX: handle, ECX: readable data, EDX: length (max 1448) */
+    SYS_TCP_SEND = 23,       /* EBX: handle, ECX: data, EDX: length <=1448; 1 queued, 0 retry/error */
     SYS_TCP_READ = 24,       /* EBX: handle, ECX: writable output, EDX: capacity */
     SYS_TCP_CLOSE = 25,      /* EBX: socket handle */
     SYS_DNS_START = 26,      /* EBX: hostname; returns resolver handle */
