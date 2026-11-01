@@ -8,6 +8,7 @@
 #include "emergency.h"
 #include "users.h"
 #include "drivers/ata.h"
+#include "drivers/nvme.h"
 #include "drivers/serial.h"
 
 #define BLOCK_SIZE 4096u
@@ -46,19 +47,36 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
     }
     return 1;
 }
+
+static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
+    if (nvme_is_ready()) {
+        return nvme_read_sectors(lba, count, buf);
+    }
+    return ata_read_sectors(lba, count, buf);
+}
+
+static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf) {
+    if (nvme_is_ready()) {
+        return nvme_write_sectors(lba, count, buf);
+    }
+    return ata_write_sectors(lba, count, buf);
+}
+
 static int read_block(uint32_t n, uint8_t* data) {
-    int ok=n<blocks && ata_read_sectors(base+n*8, 8, data);
-    if (!ok) io_failed=1;
+    int ok = n < blocks && storage_read_sectors(base + n * 8, 8, data);
+    if (!ok) io_failed = 1;
     return ok;
 }
+
 static int write_block(uint32_t n, const uint8_t* data) {
-    int ok=n<blocks && ata_write_sectors(base+n*8, 8, data);
-    if (!ok) io_failed=1;
+    int ok = n < blocks && storage_write_sectors(base + n * 8, 8, data);
+    if (!ok) io_failed = 1;
     return ok;
 }
+
 static int write_super(void) {
-    int ok=ata_write_sectors(base+2, 2, super);
-    if (!ok) io_failed=1;
+    int ok = storage_write_sectors(base + 2, 2, super);
+    if (!ok) io_failed = 1;
     return ok;
 }
 static int sync_counts(void) {
@@ -405,11 +423,74 @@ static void mount_boot_disk(const volatile uint8_t* boot) {
 }
 void fs_init(void) {
     MUTEX_GUARD(filesystem_mutex);
-    ready=0;
-    if (*(const volatile uint32_t*)0x6000!=0x5642584e) {
-        debug_print("[ext4] Boot disk handoff unavailable.\n"); return;
+    ready = 0;
+
+    debug_print("[FS] Initializing filesystem...\n");
+
+    if (nvme_is_ready()) {
+        debug_print("[FS] Probing NVMe namespace for ext4...\n");
+        static const uint32_t partitions[] = { 0, 500, 2048 };
+
+        for (unsigned p = 0; p < sizeof(partitions)/sizeof(partitions[0]); p++) {
+            uint32_t cand_base = partitions[p];
+
+            /* Read ext4 superblock at offset 1024 bytes (cand_base + 2 sectors) */
+            if (storage_read_sectors(cand_base + 2, 2, super)) {
+                uint16_t magic = u16(super + 56);
+                if (magic == 0xEF53) {
+                    base = cand_base;
+                    blocks = u32(super + 4);
+                    inodes = u32(super + 0);
+
+                    /* Load Block Group 0 descriptor from block 1 (block size = 4096) */
+                    if (read_block(1, group)) {
+                        block_bitmap = u32(group + 0);
+                        inode_bitmap = u32(group + 4);
+                        inode_table  = u32(group + 8);
+                        ready = 1;
+                        debug_print("[FS] Mounted ext4 volume from NVMe at LBA: ");
+                        debug_hex(base);
+                        debug_print("\n");
+                        return;
+                    }
+                }
+            }
+        }
+        debug_print("[FS] No ext4 found on NVMe, falling back to ATA...\n");
     }
-    mount_boot_disk((const volatile uint8_t*)0x6004);
+
+    unsigned found = ATA_DRIVE_COUNT;
+    for (unsigned d = 0; d < ATA_DRIVE_COUNT; d++) {
+        if (!ata_select_drive(d) || !ata_read_sectors(0, 1, io)) continue;
+        if (found != ATA_DRIVE_COUNT) {
+            ata_select_drive(ATA_DRIVE_COUNT);
+            return;
+        }
+        found = d;
+    }
+    if (found == ATA_DRIVE_COUNT || !ata_select_drive(found)) return;
+
+    static const uint32_t ata_partitions[] = { 0, 500, 2048 };
+    for (unsigned p = 0; p < sizeof(ata_partitions)/sizeof(ata_partitions[0]); p++) {
+        uint32_t cand_base = ata_partitions[p];
+        if (ata_read_sectors(cand_base + 2, 2, super)) {
+            if (u16(super + 56) == 0xEF53) {
+                base = cand_base;
+                blocks = u32(super + 4);
+                inodes = u32(super + 0);
+                if (read_block(1, group)) {
+                    block_bitmap = u32(group + 0);
+                    inode_bitmap = u32(group + 4);
+                    inode_table  = u32(group + 8);
+                    ready = 1;
+                    debug_print("[FS] Mounted ext4 volume from ATA at LBA: ");
+                    debug_hex(base);
+                    debug_print("\n");
+                    return;
+                }
+            }
+        }
+    }
 }
 int fs_stat(const char* path, fs_stat_t* out) {
     MUTEX_GUARD(filesystem_mutex);
