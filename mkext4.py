@@ -85,7 +85,8 @@ def main(output):
             "usr/share/nixel/images": (0, 0o755), "usr/share/games": (0, 0o755),
             "usr/share/games/doom": (0, 0o755), "var": (0, 0o755),
             "var/log": (0, 0o755), "var/cache": (0, 0o755), "var/lib": (0, 0o755),
-            "var/lib/nixel": (1000, 0o755), "var/www": (1000, 0o755),
+            "var/lib/nixel": (1000, 0o755), "var/www": (1000, 0o755), "sbin": (0, 0o755),
+            "bin": (0, 0o755)
         }
         for home, owner in (("home/user", 1000), ("root", 0)):
             for child in ("Desktop", "Documents", "Downloads", "Pictures", "Music",
