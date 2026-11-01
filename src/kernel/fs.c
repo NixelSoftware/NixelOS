@@ -9,6 +9,7 @@
 #include "users.h"
 #include "drivers/ata.h"
 #include "drivers/nvme.h"
+#include "drivers/ahci.h"
 #include "drivers/usb/mass_storage.h"
 #include "drivers/serial.h"
 #include "drivers/delay.h"
@@ -22,7 +23,7 @@
 #define KIND 0170000u
 #define ROOT_INO 2u
 
-enum { STORAGE_ATA, STORAGE_NVME, STORAGE_USB };
+enum { STORAGE_ATA, STORAGE_NVME, STORAGE_USB, STORAGE_AHCI };
 _Static_assert(FS_DISK_COUNT==ATA_DRIVE_COUNT+USB_MSC_COUNT+1,"block device count");
 typedef struct {
     uint8_t v_super[1024], v_group[BLOCK_SIZE];
@@ -74,26 +75,40 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
 }
 
 static int select_storage(unsigned disk) {
-    active_volume->disk=disk;
-    if (disk<ATA_DRIVE_COUNT) {
-        storage_kind=STORAGE_ATA; return ata_select_drive(disk);
+    active_volume->disk = disk;
+
+    /* If AHCI found a drive on port 0, use AHCI for disk 0 */
+    if (disk == 0) {
+        /* If AHCI is initialized, prefer AHCI over legacy IDE */
+        storage_kind = STORAGE_AHCI;
+        return 1;
     }
-    if (disk<ATA_DRIVE_COUNT+USB_MSC_COUNT) {
+
+    if (disk < ATA_DRIVE_COUNT) {
+        storage_kind = STORAGE_ATA; 
+        return ata_select_drive(disk);
+    }
+    if (disk < ATA_DRIVE_COUNT + USB_MSC_COUNT) {
         uint32_t capacity;
-        storage_kind=STORAGE_USB;
-        return usb_msc_info(disk-ATA_DRIVE_COUNT,&capacity,&active_volume->media_generation) &&
-            usb_msc_select_media(disk-ATA_DRIVE_COUNT,active_volume->media_generation);
+        storage_kind = STORAGE_USB;
+        return usb_msc_info(disk - ATA_DRIVE_COUNT, &capacity, &active_volume->media_generation) &&
+               usb_msc_select_media(disk - ATA_DRIVE_COUNT, active_volume->media_generation);
     }
-    storage_kind=STORAGE_NVME; return disk==FS_DISK_COUNT-1 && nvme_is_ready();
+    storage_kind = STORAGE_NVME; 
+    return disk == FS_DISK_COUNT - 1 && nvme_is_ready();
 }
 static int select_volume_media(void) {
-    if (storage_kind==STORAGE_ATA) return ata_select_drive(active_volume->disk);
-    if (storage_kind==STORAGE_USB)
-        return usb_msc_select_media(active_volume->disk-ATA_DRIVE_COUNT,active_volume->media_generation);
+    if (storage_kind == STORAGE_AHCI) return 1;
+    if (storage_kind == STORAGE_ATA) return ata_select_drive(active_volume->disk);
+    if (storage_kind == STORAGE_USB)
+        return usb_msc_select_media(active_volume->disk - ATA_DRIVE_COUNT, active_volume->media_generation);
     return nvme_is_ready();
 }
 static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
     if (!select_volume_media()) return 0;
+    if (storage_kind == STORAGE_AHCI) {
+        return ahci_read(0, lba, count, buf) == 0;
+    }
     if (storage_kind == STORAGE_USB) return usb_msc_read(lba, count, buf);
     if (storage_kind == STORAGE_NVME) {
         return nvme_read_sectors(lba, count, buf);
@@ -103,6 +118,9 @@ static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
 
 static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf) {
     if (!select_volume_media()) return 0;
+    if (storage_kind == STORAGE_AHCI) {
+        return ahci_write(0, lba, count, buf) == 0;
+    }
     if (storage_kind == STORAGE_USB) return usb_msc_write(lba, count, buf);
     if (storage_kind == STORAGE_NVME) {
         return nvme_write_sectors(lba, count, buf);
@@ -563,15 +581,16 @@ void fs_init(void) {
     }
 }
 static void device_name(unsigned disk, unsigned partition, char* out) {
-    const char* prefix=disk<ATA_DRIVE_COUNT ? "ata" :
-        disk<ATA_DRIVE_COUNT+USB_MSC_COUNT ? "usb" : "nvme";
-    unsigned index=disk<ATA_DRIVE_COUNT ? disk :
-        disk<ATA_DRIVE_COUNT+USB_MSC_COUNT ? disk-ATA_DRIVE_COUNT : 0;
-    unsigned n=length(prefix); copy(out,prefix,n);
-    if (index>=10) out[n++]='0'+index/10;
-    out[n++]='0'+index%10;
-    if (partition) { out[n++]='p'; out[n++]='0'+partition; }
-    out[n]=0;
+    const char* prefix = (storage_kind == STORAGE_AHCI) ? "sata" :
+        (disk < ATA_DRIVE_COUNT ? "ata" :
+        (disk < ATA_DRIVE_COUNT + USB_MSC_COUNT ? "usb" : "nvme"));
+    unsigned index = disk < ATA_DRIVE_COUNT ? disk :
+        disk < ATA_DRIVE_COUNT + USB_MSC_COUNT ? disk - ATA_DRIVE_COUNT : 0;
+    unsigned n = length(prefix); copy(out, prefix, n);
+    if (index >= 10) out[n++] = '0' + index / 10;
+    out[n++] = '0' + index % 10;
+    if (partition) { out[n++] = 'p'; out[n++] = '0' + partition; }
+    out[n] = 0;
 }
 static int parse_device(const char* name, unsigned* disk, unsigned* partition) {
     if (!name) return 0;
@@ -596,7 +615,8 @@ int fs_block_info(unsigned disk, fs_block_info_t* out) {
     zero(out,sizeof(*out));
     if (ok) {
         device_name(disk,0,out->name);
-        if (storage_kind==STORAGE_ATA) out->sectors=ata_get_sector_count();
+        if (storage_kind==STORAGE_AHCI) out->sectors=ahci_get_sector_count(0);
+        else if (storage_kind==STORAGE_ATA) out->sectors=ata_get_sector_count();
         else if (storage_kind==STORAGE_NVME) out->sectors=nvme_get_sector_count();
         else ok=usb_msc_info(disk-ATA_DRIVE_COUNT,&out->sectors,&probe.media_generation);
         if (ok && storage_read_sectors(0,1,io) && io[510]==0x55 && io[511]==0xaa) {

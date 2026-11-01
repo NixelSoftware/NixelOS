@@ -125,7 +125,7 @@ KERNEL_C := \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
   src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/mass_storage.c \
   src/kernel/login.c src/kernel/emergency.c \
-  src/kernel/drivers/nvme.c
+  src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c
 
 KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
               src/kernel/task_switch.asm src/kernel/gdt_asm.asm

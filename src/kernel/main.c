@@ -15,6 +15,7 @@
 #include "drivers/acpi.h"
 #include "drivers/ps2.h"
 #include "drivers/nvme.h"
+#include "drivers/ahci.h"
 #include "drivers/usb/uhci.h"
 //#include "drivers/sb16_driver.h"
 #include "idt.h"
@@ -296,11 +297,13 @@ static void kernel_init_network_stack(void) {
 }
 
 static void kernel_mount_filesystem(void) {
+    debug_print("[INIT] AHCI init...\n");
+    ahci_init();
     debug_print("[INIT] NVMe init...\n");
     nvme_init();
     debug_print("[INIT] FS init...\n");
     usb_poll(); /* Enumerate boot media before the root filesystem probe. */
-    fs_init();
+    fs_init();  
     time_init();
 }
 
