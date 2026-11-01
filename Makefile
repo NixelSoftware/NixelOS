@@ -8,7 +8,7 @@ OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
 
 # Customizable QEMU settings
-QEMU_DRIVE ?= "-drive file=os.img,format=raw,index=0,media=disk"
+QEMU_DRIVE ?= "-drive file=os.img,format=raw,index=0,media=disk" # -drive file=os.img,format=raw,if=none,id=nvm0 -device nvme,serial=NIXELNVME01,drive=nvm0 <-- can be used for nvme
 QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 512M
