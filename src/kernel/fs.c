@@ -5,6 +5,7 @@
  */
 #include "mutex.h"
 #include "fs.h"
+#include "emergency.h"
 #include "users.h"
 #include "drivers/ata.h"
 #include "drivers/serial.h"
@@ -388,7 +389,9 @@ static void mount_boot_disk(const volatile uint8_t* boot) {
         !blocks || blocks>32768 || blocks>sectors/8 || blocks>u32(super+32) ||
         !inodes || inodes>32768 || inodes!=u32(super+40) || u32(super+84)<11 ||
         u32(super+84)>inodes || !read_block(1,group)) {
-        debug_print("[ext4] Unsupported or dirty filesystem; use mkext4.py / e2fsck.\n"); return;
+        debug_print("[ext4] Unsupported or dirty filesystem; use mkext4.py / e2fsck.\n"); 
+        emergency_panic("EXT4 DRVIER PANIC", "Unsupported or dirty filesystem");
+        return;
     }
     block_bitmap=u32(group); inode_bitmap=u32(group+4); inode_table=u32(group+8);
     if (block_bitmap<2 || block_bitmap>=blocks || inode_bitmap<2 || inode_bitmap>=blocks ||
