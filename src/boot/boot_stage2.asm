@@ -268,9 +268,9 @@ msg_thx  db "R.I.P Sudaox, 2001 - 2025", 13, 10, 0
 msg_stage2  db "Stage 2 OK", 13, 10, 0
 msg_a20     db "A20 OK", 13, 10, 0
 msg_kok     db "Kernel Loaded", 13, 10, 0
-msg_kerr    db "Kernel Read Failed! Contact nixelos@seznam.cz", 13, 10, 0
-msg_verr    db "VBE Call Failed! Contact nixelos@seznam.cz", 13, 10, 0
-msg_nomode  db "No 800x600 LFB Mode Found! Contact nixelos@seznam.cz", 13, 10, 0
+msg_kerr    db "Kernel Read Failed! Contact support@nixelos.org", 13, 10, 0
+msg_verr    db "VBE Call Failed! Contact support@nixelos.org", 13, 10, 0
+msg_nomode  db "No 800x600 LFB Mode Found! Contact support@nixelos.org", 13, 10, 0
 
 fallback_mode dw 0xFFFF
 selected_mode dw 0
