@@ -9,6 +9,7 @@
 #include "users.h"
 #include "drivers/ata.h"
 #include "drivers/nvme.h"
+#include "drivers/usb/mass_storage.h"
 #include "drivers/serial.h"
 
 #define BLOCK_SIZE 4096u
@@ -22,6 +23,8 @@
 static uint8_t super[1024], group[BLOCK_SIZE], io[BLOCK_SIZE], bitmap[BLOCK_SIZE];
 static uint32_t base, blocks, inodes, inode_table, block_bitmap, inode_bitmap;
 static uint8_t ready, io_failed;
+enum { STORAGE_ATA, STORAGE_NVME, STORAGE_USB };
+static uint8_t storage_kind;
 static volatile uint32_t change_generation;
 typedef struct { uint8_t raw[INODE_SIZE]; } inode_t;
 typedef struct { uint32_t block, offset, ino; } dir_location_t;
@@ -49,14 +52,16 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
 }
 
 static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
-    if (nvme_is_ready()) {
+    if (storage_kind == STORAGE_USB) return usb_msc_read(lba, count, buf);
+    if (storage_kind == STORAGE_NVME) {
         return nvme_read_sectors(lba, count, buf);
     }
     return ata_read_sectors(lba, count, buf);
 }
 
 static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf) {
-    if (nvme_is_ready()) {
+    if (storage_kind == STORAGE_USB) return usb_msc_write(lba, count, buf);
+    if (storage_kind == STORAGE_NVME) {
         return nvme_write_sectors(lba, count, buf);
     }
     return ata_write_sectors(lba, count, buf);
@@ -384,21 +389,36 @@ static void mount_boot_disk(const volatile uint8_t* boot) {
     if (boot[510]!=0x55 || boot[511]!=0xaa || boot[450]!=0x83) {
         debug_print("[ext4] Invalid boot disk handoff.\n"); return;
     }
-    unsigned found=ATA_DRIVE_COUNT;
-    for (unsigned d=0; d<ATA_DRIVE_COUNT; d++) {
-        if (!ata_select_drive(d) || !ata_read_sectors(0,1,io)) continue;
+    const unsigned total = ATA_DRIVE_COUNT + USB_MSC_COUNT + 1;
+    unsigned found=total;
+    for (unsigned d=0; d<total; d++) {
+        if (d<ATA_DRIVE_COUNT) {
+            storage_kind=STORAGE_ATA;
+            if (!ata_select_drive(d)) continue;
+        } else if (d<ATA_DRIVE_COUNT+USB_MSC_COUNT) {
+            storage_kind=STORAGE_USB;
+            if (!usb_msc_select(d-ATA_DRIVE_COUNT)) continue;
+        } else {
+            storage_kind=STORAGE_NVME;
+            if (!nvme_is_ready()) continue;
+        }
+        if (!storage_read_sectors(0,1,io)) continue;
         unsigned i=0; while (i<512 && io[i]==boot[i]) i++;
         if (i!=512) continue;
-        if (found!=ATA_DRIVE_COUNT) {
-            ata_select_drive(ATA_DRIVE_COUNT);
+        if (found!=total) {
             debug_print("[ext4] Ambiguous boot disk; mount refused.\n"); return;
         }
         found=d;
     }
-    if (found==ATA_DRIVE_COUNT || !ata_select_drive(found) || !ata_read_sectors(0,1,io)) return;
+    if (found==total) return;
+    if (found<ATA_DRIVE_COUNT) { storage_kind=STORAGE_ATA; if (!ata_select_drive(found)) return; }
+    else if (found<ATA_DRIVE_COUNT+USB_MSC_COUNT) {
+        storage_kind=STORAGE_USB; if (!usb_msc_select(found-ATA_DRIVE_COUNT)) return;
+    } else storage_kind=STORAGE_NVME;
+    if (!storage_read_sectors(0,1,io)) return;
     base=u32(io+454); uint32_t sectors=u32(io+458);
     if (!base || sectors<16 || sectors>0x0fffffffu || base>0x0fffffffu-sectors ||
-        !ata_read_sectors(base+2,2,super)) return;
+        !storage_read_sectors(base+2,2,super)) return;
     blocks=u32(super+4); inodes=u32(super);
     /* Only the feature profile we can safely update is writable. */
     if (u16(super+56)!=0xef53 || u16(super+58)!=1 || u32(super+24)!=2 ||
@@ -426,8 +446,15 @@ void fs_init(void) {
     ready = 0;
 
     debug_print("[FS] Initializing filesystem...\n");
+    /* Stage 2 preserves the BIOS boot disk MBR independently of BIOS drive IDs. */
+    if (*(volatile uint32_t*)0x6000 == 0x5642584e) {
+        mount_boot_disk((const volatile uint8_t*)0x6004);
+        return;
+    }
+    storage_kind=STORAGE_ATA;
 
     if (nvme_is_ready()) {
+        storage_kind=STORAGE_NVME;
         debug_print("[FS] Probing NVMe namespace for ext4...\n");
         static const uint32_t partitions[] = { 0, 500, 2048 };
 
@@ -459,6 +486,7 @@ void fs_init(void) {
         debug_print("[FS] No ext4 found on NVMe, falling back to ATA...\n");
     }
 
+    storage_kind=STORAGE_ATA;
     unsigned found = ATA_DRIVE_COUNT;
     for (unsigned d = 0; d < ATA_DRIVE_COUNT; d++) {
         if (!ata_select_drive(d) || !ata_read_sectors(0, 1, io)) continue;

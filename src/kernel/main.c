@@ -303,6 +303,7 @@ static void kernel_mount_filesystem(void) {
     debug_print("[INIT] NVMe init...\n");
     nvme_init();
     debug_print("[INIT] FS init...\n");
+    usb_poll(); /* Enumerate boot media before the root filesystem probe. */
     fs_init();
     time_init();
 }

@@ -10,19 +10,26 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def check_boot(image, qemu, vga, timeout):
+def check_boot(image, qemu, vga, timeout, storage="ata"):
     with tempfile.TemporaryDirectory(prefix="nixel-boot-") as directory:
         work = Path(directory)
         disk, serial = work / "test.img", work / "serial.log"
         shutil.copyfile(image, disk)
         command = [
             qemu, "-accel", "tcg", "-smp", "1", "-m", "512M",
-            "-drive", f"file={disk},format=raw", "-vga", vga,
+            "-vga", vga,
             "-display", "none", "-monitor", "none", "-serial", f"file:{serial}",
             "-no-reboot", "-netdev", "user,id=net0", "-device", "e1000,netdev=net0",
             "-audiodev", "none,id=a", "-machine", "pcspk-audiodev=a",
             "-device", "sb16,audiodev=a", "-device", "adlib,audiodev=a",
         ]
+        if storage == "usb":
+            command += ["-drive", f"file={disk},format=raw,if=none,id=stick",
+                        "-device", "piix3-usb-uhci,id=uhci",
+                        "-device", "usb-storage,bus=uhci.0,drive=stick,bootindex=1",
+                        "-device", "usb-mouse,bus=uhci.0"]
+        else:
+            command += ["-drive", f"file={disk},format=raw"]
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         deadline, ready_at = time.monotonic() + timeout, None
         log = ""
@@ -35,7 +42,8 @@ def check_boot(image, qemu, vga, timeout):
                 if log.count("=== SYSTEM BOOTING ===") > 1:
                     raise RuntimeError(f"{vga}: boot restarted")
                 if ("[ext4] Mounted successfully!" in log and
-                        "[INIT] EEVDF scheduler started" in log):
+                        "[INIT] EEVDF scheduler started" in log and
+                        (storage != "usb" or "[USB MSC] 512-byte sector disk ready." in log)):
                     if ready_at is None:
                         ready_at = time.monotonic()
                     elif time.monotonic() - ready_at >= 1:
@@ -59,11 +67,12 @@ def main():
     parser.add_argument("--image", type=Path, default=ROOT / "os.img")
     parser.add_argument("--qemu", default="qemu-system-i386")
     parser.add_argument("--vga", action="append", help="default: test both virtio and std")
+    parser.add_argument("--storage", choices=["ata", "usb"], default="ata")
     parser.add_argument("--timeout", type=float, default=30)
     args = parser.parse_args()
     try:
         for vga in args.vga or ["virtio", "std"]:
-            check_boot(args.image, args.qemu, vga, args.timeout)
+            check_boot(args.image, args.qemu, vga, args.timeout, args.storage)
     except (RuntimeError, OSError) as error:
         parser.exit(1, f"Boot test failed: {error}\n")
 

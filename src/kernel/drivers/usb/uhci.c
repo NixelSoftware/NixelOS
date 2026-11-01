@@ -1,6 +1,8 @@
 #include "../pci.h"
 #include "uhci.h"
 #include "../serial.h"
+#include "../delay.h"
+#include "mass_storage.h"
 #include "../../mutex.h"
 #include "../../../system/services/input/input.h"
 
@@ -41,9 +43,15 @@ static mutex_t transfer_mutex;
 typedef struct {
     uint8_t address, low_speed, ep0_size, mouse_ep, mouse_size, toggle, interval;
     uint8_t connected, buttons;
+    uint8_t storage_iface, bulk_in, bulk_out, in_size, out_size, in_toggle, out_toggle;
     uint64_t next_poll;
 } usb_port_t;
 static usb_port_t ports[2];
+
+static void usb_wait(uint32_t ms) {
+    if (scheduler_running()) task_sleep_ms(ms);
+    else driver_delay_us(ms * 1000);
+}
 
 static uint64_t uhci_now(void) {
     uint32_t flags = task_irq_save();
@@ -120,7 +128,7 @@ int32_t uhci_init(void) {
  * so later stages can never overtake an unfinished SETUP or DATA packet. */
 static int packet(uint8_t addr, uint8_t ls, uint8_t ep, uint8_t pid,
                   uint8_t toggle, void* buffer, uint16_t size, uint8_t interrupt) {
-    if (!uhci_ready || !scheduler_running() || size > sizeof(dma_buffer)) return -1;
+    if (!uhci_ready || size > sizeof(dma_buffer)) return -1;
     if (pid != USB_PID_IN)
         for (unsigned i = 0; i < size; ++i) dma_buffer[i] = ((uint8_t*)buffer)[i];
     td.link_pointer = 1;
@@ -132,10 +140,11 @@ static int packet(uint8_t addr, uint8_t ls, uint8_t ep, uint8_t pid,
     outw(uhci_io_base + UHCI_USBSTS, 0x1F);
     outw(uhci_io_base + UHCI_USBCMD, 0x81);
     uint64_t deadline = uhci_now() + 500000000ull;
+    uint32_t budget = 500;
     while (td.status & TD_ACTIVE) {
         if ((td.status & TD_ERRORS) || (interrupt && (td.status & TD_NAK)) ||
-            uhci_now() >= deadline) break;
-        task_sleep_ms(1);
+            (scheduler_running() ? uhci_now() >= deadline : !budget--)) break;
+        usb_wait(1);
     }
     if (stop_schedule() < 0) return -1;
     uint32_t status = td.status;
@@ -190,11 +199,11 @@ static void port_write(uint8_t port, uint16_t set, uint16_t clear) {
 int32_t uhci_reset_port(uint8_t port) {
     if (!uhci_ready || port > 1) return -1;
     port_write(port, PORTSC_PR, PORTSC_PE);
-    task_sleep_ms(50);
+    usb_wait(50);
     port_write(port, 0, PORTSC_PR);
-    task_sleep_ms(10);
+    usb_wait(10);
     port_write(port, PORTSC_PE, 0);
-    task_sleep_ms(10);
+    usb_wait(10);
     return (inw(uhci_io_base + UHCI_PORTSC1 + port * 2) &
             (PORTSC_CCS | PORTSC_PE)) == (PORTSC_CCS | PORTSC_PE) ? 0 : -1;
 }
@@ -211,7 +220,7 @@ static int enumerate_device(uint8_t index) {
     uint8_t addr = index + 1;
     req = (usb_device_request_t){0, 5, addr, 0, 0};
     if (control(0, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return -1;
-    task_sleep_ms(2);
+    usb_wait(2);
     p->address = addr;
     req = (usb_device_request_t){0x80, 6, 0x100, 0, 18};
     if (control(addr, p->low_speed, p->ep0_size, &req, desc, 18) != 18) return -1;
@@ -223,6 +232,35 @@ static int enumerate_device(uint8_t index) {
         if (total < 9 || total > sizeof(config)) continue;
         req.wLength = total;
         if (control(addr, p->low_speed, p->ep0_size, &req, config, total) != total) return -1;
+        /* SCSI transparent command set, Bulk-Only Transport, alternate 0. */
+        uint8_t storage = 0, sin = 0, sout = 0, insz = 0, outsz = 0, sif = 0;
+        for (unsigned off = 0; off + 2 <= total;) {
+            uint8_t* d = config + off;
+            unsigned len = d[0];
+            if (len < 2 || off + len > total) return -1;
+            if (d[1] == 4 && len >= 9) {
+                if (sin && sout) break;
+                storage = !p->low_speed && !d[3] && d[5] == 8 && d[6] == 6 && d[7] == 0x50;
+                sin = sout = 0; sif = d[2];
+            }
+            if (storage && d[1] == 5 && len >= 7 && (d[3] & 3) == 2 && (d[2] & 15)) {
+                unsigned mps = d[4] | (d[5] << 8);
+                if (mps == 8 || mps == 16 || mps == 32 || mps == 64) {
+                    if (d[2] & 0x80) { sin = d[2] & 15; insz = mps; }
+                    else { sout = d[2] & 15; outsz = mps; }
+                }
+            }
+            off += len;
+        }
+        if (sin && sout) {
+            req = (usb_device_request_t){0, 9, config[5], 0, 0};
+            if (control(addr, 0, p->ep0_size, &req, 0, 0) < 0) return -1;
+            p->storage_iface = sif; p->bulk_in = sin; p->bulk_out = sout;
+            p->in_size = insz; p->out_size = outsz;
+            p->in_toggle = p->out_toggle = 0;
+            debug_print("[UHCI] Mass storage interface ready.\n");
+            return 0;
+        }
         uint8_t match = 0, iface = 0, ep = 0, size = 0, interval = 0;
         for (unsigned off = 0; off + 2 <= total;) {
             uint8_t len = config[off], type = config[off + 1];
@@ -261,6 +299,27 @@ static int enumerate_device(uint8_t index) {
 int32_t uhci_submit_transfer(uint8_t addr, uint8_t ep, usb_transfer_type_t type,
                             usb_direction_t dir, void* buffer, uint32_t length) {
     MUTEX_GUARD(transfer_mutex);
+    if (type == USB_TRANSFER_BULK && buffer) {
+        for (int i = 0; i < 2; ++i) {
+            usb_port_t* p = &ports[i];
+            if (!p->connected || p->address != addr ||
+                ep != (dir == USB_DIR_IN ? p->bulk_in : p->bulk_out) || !ep) continue;
+            uint8_t* toggle = dir == USB_DIR_IN ? &p->in_toggle : &p->out_toggle;
+            uint8_t mps = dir == USB_DIR_IN ? p->in_size : p->out_size;
+            uint32_t done = 0;
+            while (done < length) {
+                unsigned n = length - done;
+                if (n > mps) n = mps;
+                int actual = packet(addr, 0, ep, dir == USB_DIR_IN ? USB_PID_IN : USB_PID_OUT,
+                                    *toggle, (uint8_t*)buffer + done, n, 0);
+                if (actual < 0) return -1;
+                *toggle ^= 1; done += actual;
+                if ((unsigned)actual < n) break;
+            }
+            return done;
+        }
+        return -1;
+    }
     if (type != USB_TRANSFER_INTERRUPT || dir != USB_DIR_IN || !buffer) return -1;
     for (int i = 0; i < 2; ++i) {
         usb_port_t* p = &ports[i];
@@ -283,11 +342,12 @@ void uhci_poll(void) {
             outw(reg, sc & ~PORTSC_PR);
         if (!(sc & PORTSC_CCS) || (sc & PORTSC_CSC)) {
             if (p->buttons) uhci_handle_mouse_packet(0, 0, 0);
+            usb_msc_detach(p->address);
             *p = (usb_port_t){0};
         }
         if (!(sc & PORTSC_CCS)) continue;
         if (!p->connected) {
-            task_sleep_ms(100);
+            usb_wait(100);
             p->low_speed = (inw(reg) & PORTSC_LSDA) != 0;
             if (uhci_reset_port(i) < 0 || enumerate_device(i) < 0) {
                 p->address = p->mouse_ep = 0;
@@ -308,6 +368,7 @@ void uhci_poll(void) {
                 uhci_handle_mouse_packet((int8_t)report[1], (int8_t)report[2], p->buttons);
             } else if (count == -1) {
                 if (p->buttons) uhci_handle_mouse_packet(0, 0, 0);
+                usb_msc_detach(p->address);
                 *p = (usb_port_t){0};
                 port_write(i, 0, PORTSC_PE);
             }
@@ -342,3 +403,24 @@ static const usb_hci_ops_t uhci_ops = {
     .poll = uhci_poll, .shutdown = uhci_shutdown
 };
 const usb_hci_ops_t* uhci_get_ops(void) { return &uhci_ops; }
+
+/* Called outside enumeration: class commands may submit transfers recursively. */
+int uhci_storage_info(unsigned port, uint8_t* addr, uint8_t* iface, uint8_t* in, uint8_t* out) {
+    MUTEX_GUARD(transfer_mutex);
+    if (port >= 2 || !ports[port].connected || !ports[port].bulk_in) return 0;
+    usb_port_t* p = &ports[port];
+    *addr = p->address; *iface = p->storage_iface; *in = p->bulk_in; *out = p->bulk_out;
+    return 1;
+}
+int uhci_storage_reset(uint8_t addr, uint8_t iface, uint8_t in, uint8_t out) {
+    MUTEX_GUARD(transfer_mutex);
+    usb_device_request_t req = {0x21, 0xff, 0, iface, 0};
+    if (uhci_control_transfer(addr, 0, &req, 0, 0) < 0) return 0;
+    req = (usb_device_request_t){2, 1, 0, in | 0x80, 0};
+    if (uhci_control_transfer(addr, 0, &req, 0, 0) < 0) return 0;
+    req.wIndex = out;
+    if (uhci_control_transfer(addr, 0, &req, 0, 0) < 0) return 0;
+    for (unsigned i = 0; i < 2; i++) if (ports[i].address == addr)
+        ports[i].in_toggle = ports[i].out_toggle = 0;
+    return 1;
+}

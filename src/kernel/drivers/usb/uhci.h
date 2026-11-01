@@ -29,6 +29,9 @@ void    uhci_poll(void);
 void    uhci_shutdown(void);
 void    uhci_handle_mouse_packet(int8_t dx, int8_t dy, uint8_t buttons);
 
+int uhci_storage_info(unsigned port, uint8_t* addr, uint8_t* iface, uint8_t* in, uint8_t* out);
+int uhci_storage_reset(uint8_t addr, uint8_t iface, uint8_t in, uint8_t out);
+
 const usb_hci_ops_t* uhci_get_ops(void);
 
 #endif

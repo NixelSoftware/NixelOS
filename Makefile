@@ -8,12 +8,13 @@ OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
 
 # Customizable QEMU settings
-QEMU_DRIVE ?= "-drive file=os.img,format=raw,index=0,media=disk" # -drive file=os.img,format=raw,if=none,id=nvm0 -device nvme,serial=NIXELNVME01,drive=nvm0 <-- can be used for nvme
+# NVMe alternative: -drive file=os.img,format=raw,if=none,id=nvm0 -device nvme,serial=NIXELNVME01,drive=nvm0
+QEMU_DRIVE ?= -drive file=os.img,format=raw,index=0,media=disk
 QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 512M
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
-QEMU_FORWARD ?= ",hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000"
+QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000
 QEMU_DISPLAY ?= sdl
 QEMU_VGA ?= virtio
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
@@ -122,7 +123,7 @@ KERNEL_C := \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
   src/system/icons/network.h src/kernel/hal/audio.c \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
-  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c \
+  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/mass_storage.c \
   src/kernel/login.c src/kernel/emergency.c \
   src/kernel/drivers/nvme.c
 
@@ -418,3 +419,8 @@ test-tcp:
 	trap 'rm -rf "$$tcp_test_dir"' EXIT HUP INT TERM; \
 	$(CC) -O2 -Wall -Wextra -Werror src/kernel/net/tests/tcp_test.c \
 	-o "$$tcp_test_dir/tcp-test"; "$$tcp_test_dir/tcp-test"
+
+.PHONY: test-usb-storage
+test-usb-storage:
+	$(CC) -O2 -Isrc/include src/kernel/tests/usb_storage_test.c -o /tmp/nixel-usb-storage-test
+	/tmp/nixel-usb-storage-test

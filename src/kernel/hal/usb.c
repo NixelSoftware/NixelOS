@@ -1,4 +1,5 @@
 #include "usb.h"
+#include "../drivers/usb/mass_storage.h"
 #include "../drivers/serial.h"
 
 /* 
@@ -40,6 +41,7 @@ int32_t usb_submit_transfer(uint8_t dev_addr, uint8_t ep, usb_transfer_type_t ty
 void usb_poll(void) {
     if (active_controller && active_controller->poll) {
         active_controller->poll();
+        usb_msc_probe();
     }
 }
 
