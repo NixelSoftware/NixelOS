@@ -31,7 +31,7 @@ endif
 ENABLE_OOBE ?= 0
 DEBUG_SUBSYSTEMS ?= 0
 # Suppress audio HAL, driver, and audio syscall debug logs.
-NO_AUDIO_DEBUG ?= 0
+NO_AUDIO_DEBUG ?= 1
 STARTUP_TRACE ?= 0
 # 0=normal, 1=input-only runtime, 2=normal without audio, 3=idle runtime.
 STARTUP_PROFILE ?= 0
