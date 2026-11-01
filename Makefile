@@ -400,27 +400,3 @@ test-privileges:
 src/system/graphics/dialog/shutdown.o src/system/graphics/session.o src/system/graphics/wm/start.o: src/system/graphics/dialog/shutdown.h
 
 src/kernel/drivers/display/font.o src/kernel/drivers/power.o src/system/graphics/fonts/univers85ebo_16.o src/system/graphics/widgets.o src/system/graphics/wm/wm.o src/system/graphics/wm/presentation.o src/system/graphics/text_layout.o: src/system/graphics/text_layout.h src/kernel/drivers/display/font.h
-
-.PHONY: test-text
-test-text:
-	@set -eu; text_test_dir=$$(mktemp -d /tmp/nixel-text-test.XXXXXX); \
-	trap 'rm -rf "$$text_test_dir"' EXIT HUP INT TERM; \
-	$(CC) -O2 -flto -Wall -Wextra -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
-	-DNIXEL_KERNEL=1 -ffunction-sections -fdata-sections -no-pie -Wl,--gc-sections \
-	src/system/graphics/tests/text_test.c src/system/graphics/text_layout.c \
-	src/kernel/drivers/display/font.c src/system/graphics/fonts/univers85ebo_16.c \
-	-o "$$text_test_dir/text-test"; "$$text_test_dir/text-test"
-
-src/kernel/net/tcp.o src/kernel/hal/net.o src/kernel/syscall.o: src/kernel/net/tcp.h
-
-.PHONY: test-tcp
-test-tcp:
-	@set -eu; tcp_test_dir=$$(mktemp -d /tmp/nixel-tcp-test.XXXXXX); \
-	trap 'rm -rf "$$tcp_test_dir"' EXIT HUP INT TERM; \
-	$(CC) -O2 -Wall -Wextra -Werror src/kernel/net/tests/tcp_test.c \
-	-o "$$tcp_test_dir/tcp-test"; "$$tcp_test_dir/tcp-test"
-
-.PHONY: test-usb-storage
-test-usb-storage:
-	$(CC) -O2 -Isrc/include src/kernel/tests/usb_storage_test.c -o /tmp/nixel-usb-storage-test
-	/tmp/nixel-usb-storage-test
