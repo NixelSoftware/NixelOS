@@ -14,7 +14,7 @@ QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 512M
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
-QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000
+QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000,hostfwd=tcp::2323-:2323
 QEMU_DISPLAY ?= sdl
 QEMU_VGA ?= virtio
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
@@ -144,7 +144,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
-                 lspci demo3d irc
+                 lspci demo3d irc telnetd
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 
