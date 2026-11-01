@@ -61,7 +61,9 @@ void usb_msc_probe(void) {
     for (unsigned i=0; i<USB_MSC_COUNT; i++) {
         disk_t* d=&disks[i];
         uint8_t addr, iface, in, out;
-        if (!uhci_storage_info(i,&addr,&iface,&in,&out) || d->present) continue;
+        if (!uhci_storage_info(i,&addr,&iface,&in,&out) || d->ready) continue;
+        /* A connected disk can fail INQUIRY or still be spinning up. Keep
+         * probing it on later polls instead of treating presence as readiness. */
         d->address=addr; d->iface=iface; d->in=in; d->out=out; d->present=1;
         d->ready=0;
         uint8_t inquiry[36], sense[18], capacity[8];
@@ -90,6 +92,18 @@ int usb_msc_select(unsigned index) {
     selected=index;
     if (index>=USB_MSC_COUNT || !disks[index].ready) return 0;
     selected_generation=disks[index].generation;
+    return 1;
+}
+int usb_msc_info(unsigned index, uint32_t* sectors, uint32_t* generation) {
+    MUTEX_GUARD(command_mutex);
+    if (index>=USB_MSC_COUNT || !disks[index].ready) return 0;
+    *sectors=disks[index].sectors; *generation=disks[index].generation;
+    return 1;
+}
+int usb_msc_select_media(unsigned index, uint32_t generation) {
+    MUTEX_GUARD(command_mutex);
+    if (index>=USB_MSC_COUNT || !disks[index].ready || disks[index].generation!=generation) return 0;
+    selected=index; selected_generation=generation;
     return 1;
 }
 static int sectors(uint32_t lba, uint8_t count, void* buffer, int in) {

@@ -29,6 +29,24 @@ int fs_home_path(const char* suffix, char out[FS_MAX_PATH]);
 int fs_mkdir(const char* path);
 int fs_is_directory(const char* path);
 void fs_init(void);
+
+#define FS_MAX_MOUNTS 8
+#define FS_DISK_COUNT 35u /* 32 ATA disks, 2 USB ports, one NVMe namespace. */
+typedef struct { uint32_t start, sectors; uint8_t type; } fs_partition_t;
+typedef struct {
+    char name[16];
+    uint32_t sectors;
+    fs_partition_t partitions[4];
+} fs_block_info_t;
+typedef struct {
+    char device[20], target[FS_MAX_PATH];
+} fs_mount_info_t;
+/* Device names: ata0, usb0, nvme0; append p1..p4 for MBR partitions. */
+int fs_block_info(unsigned disk, fs_block_info_t* out);
+int fs_mount_snapshot(fs_mount_info_t out[FS_MAX_MOUNTS]);
+/* Return NULL on success, otherwise an explanatory error. Root only. */
+const char* fs_mount(const char* device, const char* target);
+const char* fs_unmount(const char* target);
 int  fs_list(char file_list_out[FS_MAX_FILES][FS_MAX_FILENAME]);
 int  fs_read_file(const char* filename, uint8_t* dest, uint32_t max_bytes);
 int  fs_write_file(const char* filename, const uint8_t* src, uint32_t size_bytes);

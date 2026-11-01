@@ -3,6 +3,7 @@
 #include "commands.h"
 #include "../../kernel/users.h"
 #include "../../kernel/fs.h"
+#include "../../kernel/hal/usb.h"
 #include "network_commands.h"
 #include "../loader/app_loader.h"
 #include "../graphics/terminal/terminal.h"
@@ -146,6 +147,73 @@ const char* shell_command_args(void) {
     return shell_args;
 }
 
+static const char* storage_argument(const char* arg, char* out, unsigned capacity) {
+    while (*arg==' ') arg++;
+    unsigned n=0;
+    while (*arg && *arg!=' ') {
+        if (n+1>=capacity) return 0;
+        out[n++]=*arg++;
+    }
+    out[n]=0;
+    while (*arg==' ') arg++;
+    return arg;
+}
+static void print_mount_point(const char* device, fs_mount_info_t* mounts, int count) {
+    for (int m=0; m<count; m++) if (equal(device,mounts[m].device)) print(mounts[m].target);
+}
+static int storage_command(const char* command) {
+    if (has_prefix(command,"lsblk") && (!command[5] || command[5]==' ')) {
+        const char* arg=command+5; while (*arg==' ') arg++;
+        if (*arg) { print("Usage: lsblk\n"); return 1; }
+        usb_poll();
+        fs_mount_info_t mounts[FS_MAX_MOUNTS]; int count=fs_mount_snapshot(mounts);
+        print("NAME  TYPE  SIZE(MiB)  MOUNTPOINT\n");
+        for (unsigned d=0; d<FS_DISK_COUNT; d++) {
+            fs_block_info_t info;
+            if (!fs_block_info(d,&info)) continue;
+            print(info.name); print("  disk  "); print_u32(info.sectors/2048); print("  ");
+            print_mount_point(info.name,mounts,count); print("\n");
+            for (unsigned p=0; p<4; p++) if (info.partitions[p].sectors) {
+                char name[20]; copy_text(name,info.name,sizeof(name));
+                unsigned n=0; while (name[n]) n++;
+                name[n++]='p'; name[n++]='1'+p; name[n]=0;
+                print("  "); print(name); print("  part  "); print_u32(info.partitions[p].sectors/2048); print("  ");
+                print_mount_point(name,mounts,count); print("\n");
+            }
+        }
+    } else if (has_prefix(command,"mount") && (!command[5] || command[5]==' ')) {
+        char device[32], target[FS_MAX_PATH];
+        const char* rest=storage_argument(command+5,device,sizeof(device));
+        if (rest && !device[0]) {
+            fs_mount_info_t mounts[FS_MAX_MOUNTS]; int count=fs_mount_snapshot(mounts);
+            for (int m=0; m<count; m++) {
+                print(mounts[m].device); print(" on "); print(mounts[m].target); print(" type ext4\n");
+            }
+            if (!count) print("No mounted filesystems.\n");
+            return 1;
+        }
+        rest=rest ? storage_argument(rest,target,sizeof(target)) : 0;
+        if (!rest || *rest || !target[0]) print("Usage: mount <device> <absolute-directory>\n");
+        else {
+            usb_poll();
+            const char* error=fs_mount(device,target);
+            if (error) { print("mount: "); print(error); print("\n"); }
+            else { print("Mounted "); print(device); print(" on "); print(target); print("\n"); }
+        }
+    } else if ((has_prefix(command,"unmount") && (!command[7] || command[7]==' ')) ||
+               (has_prefix(command,"umount") && (!command[6] || command[6]==' '))) {
+        char target[FS_MAX_PATH];
+        const char* rest=storage_argument(command+(command[1]=='n' ? 7 : 6),target,sizeof(target));
+        if (!rest || *rest || !target[0]) print("Usage: unmount <absolute-directory>\n");
+        else {
+            const char* error=fs_unmount(target);
+            if (error) { print("unmount: "); print(error); print("\n"); }
+            else { print("Unmounted "); print(target); print("\n"); }
+        }
+    } else return 0;
+    return 1;
+}
+
 static int account_command(const char* command) {
     if (has_prefix(command, "whoami") && !command[6]) {
         const user_t* u = user_by_id(user_uid());
@@ -248,6 +316,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         return;
     }
     if (account_command(command)) return;
+    if (storage_command(command)) return;
     if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
         print("Commands:\n"
                     " ver             Show OS version and build ID\n"
@@ -262,6 +331,9 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ls [path]       List directory or file (exact case)\n"
                     " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"
+                    " lsblk           List disks, partitions and mount points\n"
+                    " mount [dev dir] List mounts or mount ext4 (root)\n"
+                    " unmount <dir>   Unmount a volume (root; also umount)\n"
                     " pwd             Show current directory\n"
                     " rm              Remove files\n"
                     " cat <file>      Read file\n"

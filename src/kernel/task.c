@@ -8,6 +8,27 @@ task_t* current_task;
 static arch_fpu_state_t initial_fpu_state;
 static uint32_t next_generation;
 
+/* Mount changes hold filesystem_mutex; cwd updates use that same lock. */
+int task_cwd_in_use(const char* path) {
+    uint32_t flags=task_irq_save();
+    int used=0;
+    for (unsigned t=0; t<MAX_TASKS && !used; t++) {
+        const task_t* task=&task_list[t];
+        if (task->state==TASK_STATE_UNUSED || task->state==TASK_STATE_TERMINATED) continue;
+        unsigned i=0;
+        while (path[i] && task->cwd[i]) {
+            char a=path[i], b=task->cwd[i];
+            if (a>='A' && a<='Z') a+=32;
+            if (b>='A' && b<='Z') b+=32;
+            if (a!=b) break;
+            i++;
+        }
+        if (!path[i] && (!task->cwd[i] || task->cwd[i]=='/')) used=1;
+    }
+    task_irq_restore(flags);
+    return used;
+}
+
 int task_address_space_in_use(uint32_t directory) {
     if (!directory) return 0;
     uint32_t flags = task_irq_save();

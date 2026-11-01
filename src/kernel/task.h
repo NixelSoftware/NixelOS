@@ -74,6 +74,7 @@ typedef struct {
     char name[16];
 } task_info_t;
 int task_snapshot(task_info_t* output, int capacity);
+int task_cwd_in_use(const char* path);
 void task_sleep(uint32_t legacy_ticks);
 void task_sleep_ms(uint32_t milliseconds);
 void task_preempt_disable(void);

@@ -212,6 +212,11 @@ int ata_select_drive(unsigned drive) {
     return 1;
 }
 
+uint32_t ata_get_sector_count(void) {
+    MUTEX_GUARD(filesystem_mutex);
+    return ata_selected ? drive_sectors[ata_drive] : 0;
+}
+
 static int ata_prepare(uint32_t lba, uint8_t sector_count) {
     if (!ata_selected || !sector_count || lba > 0x0FFFFFFFu ||
         sector_count - 1u > 0x0FFFFFFFu - lba ||
