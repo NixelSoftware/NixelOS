@@ -453,6 +453,7 @@ static void load_volume(uint32_t start, uint32_t sectors) {
         !inodes || inodes>32768 || inodes!=u32(super+40) || u32(super+84)<11 ||
         u32(super+84)>inodes || !read_block(1,group)) {
         debug_print("[ext4] Unsupported or dirty filesystem; use mkext4.py / e2fsck.\n"); 
+        emergency_panic("EXT4 DRVIER PANIC", "Unsupported or dirty filesystem");
         return;
     }
     block_bitmap=u32(group); inode_bitmap=u32(group+4); inode_table=u32(group+8);
