@@ -28,14 +28,10 @@ void nixinit_start(const nixinit_services_t* services) {
     trace_step("before network device init");
     if (services->initialize_network_device) services->initialize_network_device();
     trace_step("after network device init");
-    if (services->show_status) services->show_status("Configuring IPv4", 35);
+    if (services->show_status) services->show_status("Initializing Network Stack...", 35);
     trace_step("before network stack init");
     if (services->initialize_network_stack) services->initialize_network_stack();
     trace_step("after network stack init");
-    if (services->show_status) services->show_status("Requesting DHCP Lease...", 50);
-    trace_step("before network configuration");
-    if (services->configure_network) services->configure_network();
-    trace_step("after network configuration");
     if (services->show_status) services->show_status("Mounting ext4 Filesystem...", 65);
     trace_step("before filesystem mount");
     if (services->mount_filesystem) services->mount_filesystem();

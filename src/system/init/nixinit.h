@@ -8,7 +8,6 @@ typedef struct {
     void (*initialize_acpi)(void);
     void (*initialize_network_device)(void);
     void (*initialize_network_stack)(void);
-    void (*configure_network)(void);
     void (*mount_filesystem)(void);
     void (*initialize_tasking)(void);
     void (*initialize_system_apps)(void);

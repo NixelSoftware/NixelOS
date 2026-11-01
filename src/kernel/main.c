@@ -295,10 +295,6 @@ static void kernel_init_network_stack(void) {
     debug_print("[INIT] Net stack init returned.\n");
 }
 
-static void kernel_configure_network(void) {
-    sys_net_configure_address();
-}
-
 static void kernel_mount_filesystem(void) {
     debug_print("[INIT] NVMe init...\n");
     nvme_init();
@@ -360,6 +356,9 @@ static void kernel_finish_boot(void) {
 
 static void network_service(void* arg) {
     (void)arg;
+    /* DHCP polls the adapter and sleeps between replies once scheduled, so
+     * lease acquisition can run alongside login and the other services. */
+    sys_net_configure_address();
     for (;;) { sys_net_poll(); ntp_poll(); task_sleep_ms(2); }
 }
 static void audio_task(void* arg) {
@@ -437,7 +436,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         .initialize_acpi = kernel_init_acpi,
         .initialize_network_device = kernel_init_network_device,
         .initialize_network_stack = kernel_init_network_stack,
-        .configure_network = kernel_configure_network,
         .mount_filesystem = kernel_mount_filesystem,
         .initialize_tasking = kernel_initialize_tasking,
         .initialize_system_apps = kernel_initialize_system_apps,
