@@ -114,7 +114,8 @@ def main(output):
             shutil.copyfile(path, root / destination)
             (root / destination).chmod(0o755 if suffix == ".bin" else 0o644)
         (root / "etc/time.cfg").write_bytes(
-            struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
+            #struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
+            struct.pack("<Iii128s", 0x31504e54, 1, 0, b"ntp.nixelos.org"))
         (root / "etc/time.cfg").chmod(0o777)
         (root / "etc/hostname").write_bytes(b"nixel\n")
         (root / "etc/os-release").write_bytes(b'NAME=NixelOS\nID=nixel\nPRETTY_NAME="NixelOS"\n')
