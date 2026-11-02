@@ -284,3 +284,8 @@ uint64_t ahci_get_sector_count(uint8_t port_no) {
     if (port_no >= 32) return 0;
     return port_sector_counts[port_no];
 }
+
+int ahci_is_drive_available(uint8_t port_no) {
+    if (port_no >= 32) return 0;
+    return (ports_active_mask & (1 << port_no)) != 0;
+}

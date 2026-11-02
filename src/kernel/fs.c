@@ -77,9 +77,8 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
 static int select_storage(unsigned disk) {
     active_volume->disk = disk;
 
-    /* If AHCI found a drive on port 0, use AHCI for disk 0 */
-    if (disk == 0) {
-        /* If AHCI is initialized, prefer AHCI over legacy IDE */
+    /* If disk 0 and an AHCI drive was actually discovered on port 0 */
+    if (disk == 0 && ahci_is_drive_available(0)) {
         storage_kind = STORAGE_AHCI;
         return 1;
     }

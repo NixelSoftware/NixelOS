@@ -129,5 +129,6 @@ void ahci_init(void);
 int  ahci_read(uint8_t port_no, uint64_t lba, uint32_t count, void* buf);
 int  ahci_write(uint8_t port_no, uint64_t lba, uint32_t count, const void* buf);
 uint64_t ahci_get_sector_count(uint8_t port_no);
+int ahci_is_drive_available(uint8_t port_no);
 
 #endif
