@@ -67,7 +67,9 @@ enum {
     SYS_FS_HOME = 52, /* EBX: output home path, ECX: capacity */
     SYS_FS_MKDIR = 53, /* EBX: directory path; 0 success, -1 failure */
     SYS_FS_DELETE = 54, /* EBX: path; filesystem permissions apply */
-    SYS_PCI_DEVICE_INFO = 49 /* EBX: index, ECX: writable user_pci_device_t* */
+    SYS_PCI_DEVICE_INFO = 49, /* EBX: index, ECX: writable user_pci_device_t* */
+    SYS_TASK_LIST = 55,   /* EBX: writable user_task_info_t*, ECX: capacity */
+    SYS_TASK_KILL = 56    /* EBX: PID to kill */
 };
 
 static inline int32_t sys_fs_getcwd(char* out, uint32_t capacity) {
@@ -537,6 +539,27 @@ static inline int32_t sys_pci_device_info(uint32_t index, user_pci_device_t* out
                       : "=a"(result)
                       : "0"((uint32_t)SYS_PCI_DEVICE_INFO), "b"(index), "c"(out)
                       : "edx", "memory", "cc");
+    return result;
+}
+
+typedef struct {
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t state;
+    char name[16];
+} user_task_info_t;
+
+static inline int32_t sys_task_list(user_task_info_t* out, uint32_t capacity) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_TASK_LIST), "b"(out), "c"(capacity) : "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_task_kill(uint32_t pid) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_TASK_KILL), "b"(pid) : "memory", "cc");
     return result;
 }
 

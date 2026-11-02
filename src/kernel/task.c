@@ -300,3 +300,17 @@ int task_snapshot(task_info_t* output, int capacity) {
     task_irq_restore(flags);
     return count;
 }
+
+int task_kill(uint32_t pid) {
+    if (!pid || pid >= MAX_TASKS - 1) return -1;
+    uint32_t flags = task_irq_save();
+    int res = -1;
+    task_t* target = &task_list[pid];
+    if (target->id == pid && target->state != TASK_STATE_UNUSED && target->state != TASK_STATE_TERMINATED) {
+        target->terminate_requested = 1;
+        task_terminate_children(target->id);
+        res = 0;
+    }
+    task_irq_restore(flags);
+    return res;
+}

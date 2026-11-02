@@ -364,6 +364,25 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
             return;
         }
+        case SYS_TASK_LIST: {
+            task_info_t* buf = (task_info_t*)regs->ebx;
+            uint32_t cap = regs->ecx;
+            if (!buf || cap > 64 || !user_writable((uint32_t)buf, cap * sizeof(task_info_t))) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
+            regs->eax = (uint32_t)task_snapshot(buf, (int)cap);
+            break;
+        }
+        case SYS_TASK_KILL: {
+            uint32_t pid = regs->ebx;
+            if (pid == 0) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
+            regs->eax = (uint32_t)task_kill(pid);
+            break;
+        }
         case SYS_SERIAL_LOG_READ: {
             if (!regs->ecx || regs->ecx > 256 || !user_writable(regs->ebx, regs->ecx) ||
                 !user_writable(regs->edx, sizeof(user_serial_cursor_t))) {
