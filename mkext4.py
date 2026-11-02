@@ -22,7 +22,7 @@ TOTAL_SIZE_MB = 50
 TOTAL_SECTORS = TOTAL_SIZE_MB * 1024 * 1024 // SECTOR_SIZE
 BUNDLED_FILES = [
     "chess.bin", "calc.bin", "files.bin", "hexview.bin", "mines.bin",
-    "floppy_debug.bin", "ping.bin", "netdiag.bin", "com0.bin", "image.bmp",
+    "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",

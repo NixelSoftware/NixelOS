@@ -3,6 +3,7 @@
 #include "commands.h"
 #include "../../kernel/users.h"
 #include "../../kernel/fs.h"
+#include "../../kernel/drivers/serial.h"
 #include "../../kernel/hal/usb.h"
 #include "network_commands.h"
 #include "../loader/app_loader.h"
@@ -145,6 +146,44 @@ static void print_u32(uint32_t value) {
 
 const char* shell_command_args(void) {
     return shell_args;
+}
+
+static int serial_output_command(const char* command) {
+    if (!has_prefix(command,"srout") || (command[5] && command[5]!=' ')) return 0;
+    const char* arg=command+5;
+    while (*arg==' ') arg++;
+    unsigned port=0, digits=0;
+    while (*arg>='0' && *arg<='9') {
+        /* Bound the value before multiplying, including arbitrarily long input. */
+        if (port>6553 || (port==6553 && *arg>'5')) {
+            print("srout: invalid port number.\n"); return 1;
+        }
+        port=port*10+(*arg++-'0'); digits++;
+    }
+    while (*arg==' ') arg++;
+    if (!digits || *arg) { print("Usage: srout <port> (0 = first UART)\n"); return 1; }
+    if (user_uid()!=USER_ROOT) { print("srout: permission denied; use sudo srout <port>.\n"); return 1; }
+    if (port!=0) { print("srout: output capture is available only for port 0 (COM1/0x3F8).\n"); return 1; }
+    print("Following port 0 output (COM1/0x3F8). Press Ctrl+C to stop.\n");
+    uint32_t cursor=0, lost=0;
+    while (!current_task->terminate_requested) {
+        uint32_t previous_lost=lost;
+        char bytes[256], text[257];
+        int32_t count=serial_log_read(bytes,sizeof(bytes),&cursor,&lost);
+        if (count<0) { print("srout: serial output unavailable.\n"); break; }
+        if (lost!=previous_lost) print("\n[srout] Older output lost (capture overrun).\n");
+        unsigned n=0;
+        for (int32_t i=0; i<count; i++) if (bytes[i]!='\r') {
+            /* Shell output is a string; render embedded NULs visibly. */
+            text[n++]=bytes[i] ? bytes[i] : '.';
+        }
+        text[n]=0;
+        if (n) print(text);
+        if (count<(int32_t)sizeof(bytes)) task_sleep_ms(20);
+        else task_yield();
+    }
+    print("\n");
+    return 1;
 }
 
 static const char* storage_argument(const char* arg, char* out, unsigned capacity) {
@@ -316,6 +355,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         return;
     }
     if (account_command(command)) return;
+    if (serial_output_command(command)) return;
     if (storage_command(command)) return;
     if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
         print("Commands:\n"
@@ -327,7 +367,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " chmod <octal> <path>  Set permissions\n"
                     " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
-                    " com0            Follow kernel serial/audio logs\n"
+                    " srout <port>    Follow serial output (0 = first UART)\n"
                     " ls [path]       List directory or file (exact case)\n"
                     " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"

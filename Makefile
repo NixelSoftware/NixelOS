@@ -143,7 +143,7 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 
 src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
 
-STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag com0 http_test curl \
+STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
                  lspci demo3d irc telnetd taskmgr
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp

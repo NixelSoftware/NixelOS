@@ -51,7 +51,7 @@ hardware, user buffers or allocating service resources. Other errors keep their
 existing ABI return values. Authorized callers still undergo normal parameter,
 buffer and ownership validation.
 
-Use `sudo shutdown`, `sudo reboot`, `sudo floppy_debug`, `sudo com0`, or
+Use `sudo shutdown`, `sudo reboot`, `sudo floppy_debug`, `sudo srout 0`, or
 `sudo qkftp` in the terminal; sudo authenticates with the root password.
 The system menu's shutdown dialog is a built-in window-manager component,
 linked into the kernel. It can shut down or restart without a sudo prompt.
