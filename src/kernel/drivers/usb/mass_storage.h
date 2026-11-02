@@ -1,7 +1,8 @@
 #ifndef USB_MASS_STORAGE_H
 #define USB_MASS_STORAGE_H
 #include "../../types.h"
-#define USB_MSC_COUNT 2u
+#include "uhci.h"
+#define USB_MSC_COUNT UHCI_ROOT_PORT_COUNT
 void usb_msc_probe(void);
 void usb_msc_detach(uint8_t address);
 int usb_msc_select(unsigned index);

@@ -123,7 +123,7 @@ KERNEL_C := \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
   src/system/icons/network.h src/kernel/hal/audio.c \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
-  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/mass_storage.c \
+  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/ehci_handoff.c src/kernel/drivers/usb/mass_storage.c \
   src/kernel/login.c src/kernel/emergency.c \
   src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c \
   src/system/graphics/dialog/crash_dialog.c
@@ -376,6 +376,10 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/pc_speaker.o 
 test-audio:
 	sh src/system/services/audio/tests/run_mixer_tests.sh
 	sh src/apps/doom/tests/run_audio_tests.sh
+
+.PHONY: test-usb
+test-usb:
+	sh src/kernel/drivers/usb/tests/run_tests.sh
 
 .PHONY: test-boot-layout
 test-boot-layout:

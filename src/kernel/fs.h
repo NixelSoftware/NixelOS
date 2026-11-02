@@ -31,7 +31,7 @@ int fs_is_directory(const char* path);
 void fs_init(void);
 
 #define FS_MAX_MOUNTS 8
-#define FS_DISK_COUNT 35u /* 32 ATA disks, 2 USB ports, one NVMe namespace. */
+#define FS_DISK_COUNT 49u /* 32 ATA disks, 16 USB root ports, one NVMe namespace. */
 typedef struct { uint32_t start, sectors; uint8_t type; } fs_partition_t;
 typedef struct {
     char name[16];

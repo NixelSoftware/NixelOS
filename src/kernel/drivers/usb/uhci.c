@@ -3,6 +3,7 @@
 #include "../serial.h"
 #include "../delay.h"
 #include "mass_storage.h"
+#include "ehci_handoff.h"
 #include "../../mutex.h"
 #include "../../../system/services/input/input.h"
 
@@ -24,6 +25,7 @@
 #define USBCMD_HCRESET 2
 #define TD_ACTIVE (1u << 23)
 #define TD_NAK (1u << 19)
+#define TD_STALLED (1u << 22)
 #define TD_ERRORS ((1u << 22) | (1u << 21) | (1u << 20) | (1u << 18) | (1u << 17))
 #define USB_PID_SETUP 0x2D
 #define USB_PID_IN 0x69
@@ -32,21 +34,40 @@
     ((((uint32_t)(len) & 0x7FF) << 21) | ((uint32_t)(toggle) << 19) | \
     ((uint32_t)(ep) << 15) | ((uint32_t)(addr) << 8) | (pid))
 
-static uint16_t uhci_io_base;
-static uint8_t uhci_ready;
-/* Kernel static storage is identity mapped and coherent on x86. */
-static volatile uint32_t frame_list[1024] __attribute__((aligned(4096)));
-static volatile struct { uint32_t link, element, pad[2]; } queue __attribute__((aligned(16)));
-static volatile uhci_td_t td __attribute__((aligned(16)));
-static uint8_t dma_buffer[64] __attribute__((aligned(16)));
-static mutex_t transfer_mutex;
 typedef struct {
     uint8_t address, low_speed, ep0_size, mouse_ep, mouse_size, toggle, interval;
     uint8_t connected, buttons;
     uint8_t storage_iface, bulk_in, bulk_out, in_size, out_size, in_toggle, out_toggle;
     uint64_t next_poll;
 } usb_port_t;
-static usb_port_t ports[2];
+/* Each PCI controller owns an independent DMA schedule, ports and toggles.
+ * One mutex serializes controller selection across sleeping transfers. */
+typedef struct {
+    volatile uint32_t frames[1024] __attribute__((aligned(4096)));
+    volatile struct { uint32_t link, element, pad[2]; } qh __attribute__((aligned(16)));
+    volatile uhci_td_t descriptor __attribute__((aligned(16)));
+    uint8_t buffer[64] __attribute__((aligned(16)));
+    uint16_t io_base;
+    uint8_t initialized;
+    usb_port_t root_ports[2];
+} uhci_controller_t;
+static uhci_controller_t controllers[UHCI_MAX_CONTROLLERS];
+static uhci_controller_t* active=&controllers[0];
+static unsigned controller_count;
+static mutex_t transfer_mutex;
+#define uhci_io_base (active->io_base)
+#define uhci_ready (active->initialized)
+#define frame_list (active->frames)
+#define queue (active->qh)
+#define td (active->descriptor)
+#define dma_buffer (active->buffer)
+#define ports (active->root_ports)
+
+static int select_address(uint8_t address) {
+    if (!address || address>controller_count*2) return 0;
+    active=&controllers[(address-1)/2];
+    return uhci_ready;
+}
 
 static void usb_wait(uint32_t ms) {
     if (scheduler_running()) task_sleep_ms(ms);
@@ -60,34 +81,28 @@ static uint64_t uhci_now(void) {
     return now;
 }
 
-static uint16_t find_uhci_controller(void) {
-    for (uint32_t index = 0; index < pci_device_count(); index++) {
-        const pci_device_t* dev = pci_device_at(index);
-        uint8_t bus = dev->bus, slot = dev->slot, func = dev->function;
-        uint32_t id = pci_config_read32((uint8_t)bus, slot, func, 0);
-        uint16_t vendor = (uint16_t)id;
-        if (vendor == 0xFFFF) continue;
-
-        uint32_t class_reg = pci_config_read32((uint8_t)bus, slot, func, 0x08);
-        uint8_t base_class = (uint8_t)(class_reg >> 24);
-        uint8_t sub_class  = (uint8_t)(class_reg >> 16);
-        uint8_t prog_if    = (uint8_t)(class_reg >> 8);
-
-        if (base_class == 0x0C && sub_class == 0x03 && prog_if == 0x00) {
-            pci_config_write16((uint8_t)bus, slot, func, 0xC0, 0x8F00);
-
-            uint32_t cmd = pci_config_read32((uint8_t)bus, slot, func, 0x04);
-            cmd |= 0x0005;
-            pci_config_write16((uint8_t)bus, slot, func, 0x04, (uint16_t)cmd);
-
-            uint32_t bar4 = pci_config_read32((uint8_t)bus, slot, func, 0x20);
-            if (bar4 & 0x01) {
-                return (uint16_t)(bar4 & ~0x0000001F);
-            }
+static void find_uhci_controllers(void) {
+    controller_count=0;
+    for (uint32_t index=0; index<pci_device_count(); index++) {
+        const pci_device_t* dev=pci_device_at(index);
+        if (dev->class_code!=0x0c || dev->subclass!=3 || dev->prog_if!=0) continue;
+        if (controller_count==UHCI_MAX_CONTROLLERS) {
+            debug_print("[UHCI] Controller limit reached.\n"); break;
         }
-
+        pci_bar_t bar;
+        if (!pci_enable_device(dev,PCI_COMMAND_IO) || !pci_get_bar(dev,4,&bar) ||
+            !bar.io || !bar.address || bar.address>0xffe0 || (bar.address&31)) continue;
+        pci_prepare_polling(dev);
+        pci_set_master(dev,1);
+        /* Disable firmware legacy/SMI servicing; acknowledge legacy status. */
+        pci_write16(dev,0xc0,0x8f00);
+        controllers[controller_count].io_base=(uint16_t)bar.address;
+        controllers[controller_count].initialized=0;
+        debug_print("[UHCI] PCI controller at "); debug_hex(dev->bus);
+        debug_print(":"); debug_hex(dev->slot); debug_print("."); debug_hex(dev->function);
+        debug_print(" I/O "); debug_hex((uint32_t)bar.address); debug_print("\n");
+        controller_count++;
     }
-    return 0;
 }
 
 /* Stop before reclaiming DMA storage, including on timeout/NAK. */
@@ -102,9 +117,7 @@ static int stop_schedule(void) {
     return -1;
 }
 
-int32_t uhci_init(void) {
-    uhci_io_base = find_uhci_controller();
-    if (!uhci_io_base) return -1;
+static int init_controller(void) {
     outw(uhci_io_base + UHCI_USBCMD, 0);
     outw(uhci_io_base + UHCI_USBCMD, USBCMD_HCRESET);
     uint32_t n = 1000000;
@@ -122,6 +135,24 @@ int32_t uhci_init(void) {
     uhci_ready = 1;
     debug_print("[UHCI] Controller initialized.\n");
     return 0;
+}
+
+int32_t uhci_init(void) {
+    find_uhci_controllers();
+    if (!controller_count) {
+        debug_print("[UHCI] No supported controller; EHCI/xHCI-only ports are unavailable.\n");
+        return -1;
+    }
+    /* BIOS USB boot commonly leaves the stick on EHCI. Route it back to
+     * companion UHCI before resetting/enumerating all of those controllers. */
+    ehci_handoff_to_uhci();
+    unsigned initialized=0;
+    for (unsigned i=0; i<controller_count; i++) {
+        active=&controllers[i];
+        if (!init_controller()) initialized++;
+        else { debug_print("[UHCI] Controller initialization failed at index "); debug_hex(i); debug_print("\n"); }
+    }
+    return initialized ? 0 : -1;
 }
 
 /* One transaction at a time through a QH: NAK leaves the element in place,
@@ -152,6 +183,7 @@ static int packet(uint8_t addr, uint8_t ls, uint8_t ep, uint8_t pid,
     /* Keep SOFs running between requests so devices do not enter suspend. */
     __asm__ volatile ("" ::: "memory");
     outw(uhci_io_base + UHCI_USBCMD, 0x81);
+    if (status & TD_STALLED) return USB_TRANSFER_STALL;
     if (status & TD_ERRORS) return -1;
     if (status & TD_ACTIVE) return interrupt && (status & TD_NAK) ? -2 : -1;
     unsigned actual = ((status & 0x7FF) + 1) & 0x7FF;
@@ -185,6 +217,7 @@ static int control(uint8_t addr, uint8_t ls, uint8_t mps,
 int32_t uhci_control_transfer(uint8_t addr, uint8_t ls, usb_device_request_t* req,
                               void* data, uint16_t length) {
     MUTEX_GUARD(transfer_mutex);
+    if (!select_address(addr)) return -1;
     uint8_t mps = 8;
     for (int i = 0; i < 2; ++i) if (addr && ports[i].address == addr) mps = ports[i].ep0_size;
     return control(addr, ls, mps, req, data, length) < 0 ? -1 : 0;
@@ -217,7 +250,7 @@ static int enumerate_device(uint8_t index) {
     if (desc[1] != 1 || (desc[7] != 8 && desc[7] != 16 && desc[7] != 32 && desc[7] != 64) ||
         (p->low_speed && desc[7] != 8)) return -1;
     p->ep0_size = desc[7];
-    uint8_t addr = index + 1;
+    uint8_t addr = (uint8_t)((active-controllers)*2+index+1);
     req = (usb_device_request_t){0, 5, addr, 0, 0};
     if (control(0, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return -1;
     usb_wait(2);
@@ -299,6 +332,7 @@ static int enumerate_device(uint8_t index) {
 int32_t uhci_submit_transfer(uint8_t addr, uint8_t ep, usb_transfer_type_t type,
                             usb_direction_t dir, void* buffer, uint32_t length) {
     MUTEX_GUARD(transfer_mutex);
+    if (!select_address(addr)) return -1;
     if (type == USB_TRANSFER_BULK && buffer) {
         for (int i = 0; i < 2; ++i) {
             usb_port_t* p = &ports[i];
@@ -312,7 +346,7 @@ int32_t uhci_submit_transfer(uint8_t addr, uint8_t ep, usb_transfer_type_t type,
                 if (n > mps) n = mps;
                 int actual = packet(addr, 0, ep, dir == USB_DIR_IN ? USB_PID_IN : USB_PID_OUT,
                                     *toggle, (uint8_t*)buffer + done, n, 0);
-                if (actual < 0) return -1;
+                if (actual < 0) return actual;
                 *toggle ^= 1; done += actual;
                 if ((unsigned)actual < n) break;
             }
@@ -331,8 +365,7 @@ int32_t uhci_submit_transfer(uint8_t addr, uint8_t ep, usb_transfer_type_t type,
     return -1;
 }
 
-void uhci_poll(void) {
-    MUTEX_GUARD(transfer_mutex);
+static void poll_controller(void) {
     if (!uhci_ready) return;
     for (uint8_t i = 0; i < 2; ++i) {
         usb_port_t* p = &ports[i];
@@ -376,10 +409,19 @@ void uhci_poll(void) {
     }
 }
 
+void uhci_poll(void) {
+    MUTEX_GUARD(transfer_mutex);
+    for (unsigned i=0; i<controller_count; i++) {
+        active=&controllers[i]; poll_controller();
+    }
+}
 void uhci_shutdown(void) {
     MUTEX_GUARD(transfer_mutex);
-    if (uhci_ready) stop_schedule();
-    uhci_ready = 0;
+    for (unsigned i=0; i<controller_count; i++) {
+        active=&controllers[i];
+        if (uhci_ready) stop_schedule();
+        uhci_ready=0;
+    }
 }
 
 void uhci_handle_mouse_packet(int8_t dx, int8_t dy, uint8_t buttons) {
@@ -407,20 +449,36 @@ const usb_hci_ops_t* uhci_get_ops(void) { return &uhci_ops; }
 /* Called outside enumeration: class commands may submit transfers recursively. */
 int uhci_storage_info(unsigned port, uint8_t* addr, uint8_t* iface, uint8_t* in, uint8_t* out) {
     MUTEX_GUARD(transfer_mutex);
-    if (port >= 2 || !ports[port].connected || !ports[port].bulk_in) return 0;
-    usb_port_t* p = &ports[port];
+    if (port>=controller_count*2) return 0;
+    active=&controllers[port/2];
+    if (!uhci_ready || !ports[port%2].connected || !ports[port%2].bulk_in) return 0;
+    usb_port_t* p=&ports[port%2];
     *addr = p->address; *iface = p->storage_iface; *in = p->bulk_in; *out = p->bulk_out;
     return 1;
 }
+int uhci_storage_clear_halt(uint8_t addr, uint8_t ep, int in) {
+    MUTEX_GUARD(transfer_mutex);
+    if (!select_address(addr)) return 0;
+    for (unsigned i=0; i<2; i++) {
+        usb_port_t* p=&ports[i];
+        if (!p->connected || p->address!=addr || !ep ||
+            ep!=(in ? p->bulk_in : p->bulk_out)) continue;
+        usb_device_request_t req={2,1,0,ep | (in ? 0x80 : 0),0};
+        if (control(addr,0,p->ep0_size,&req,0,0)<0) return 0;
+        /* CLEAR_FEATURE(ENDPOINT_HALT) resets this endpoint to DATA0. */
+        if (in) p->in_toggle=0; else p->out_toggle=0;
+        return 1;
+    }
+    return 0;
+}
 int uhci_storage_reset(uint8_t addr, uint8_t iface, uint8_t in, uint8_t out) {
     MUTEX_GUARD(transfer_mutex);
+    if (!select_address(addr)) return 0;
     usb_device_request_t req = {0x21, 0xff, 0, iface, 0};
     if (uhci_control_transfer(addr, 0, &req, 0, 0) < 0) return 0;
-    req = (usb_device_request_t){2, 1, 0, in | 0x80, 0};
-    if (uhci_control_transfer(addr, 0, &req, 0, 0) < 0) return 0;
-    req.wIndex = out;
-    if (uhci_control_transfer(addr, 0, &req, 0, 0) < 0) return 0;
-    for (unsigned i = 0; i < 2; i++) if (ports[i].address == addr)
-        ports[i].in_toggle = ports[i].out_toggle = 0;
-    return 1;
+    /* Attempt both endpoint clears even if the first one fails, as in
+     * Linux usb_stor_reset_common(). Each successful clear resets its toggle. */
+    int cleared_in=uhci_storage_clear_halt(addr,in,1);
+    int cleared_out=uhci_storage_clear_halt(addr,out,0);
+    return cleared_in && cleared_out;
 }

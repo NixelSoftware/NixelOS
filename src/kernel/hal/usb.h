@@ -14,6 +14,10 @@ typedef enum {
     USB_DIR_OUT
 } usb_direction_t;
 
+/* Negative transfer results; successful transfers return their byte count. */
+#define USB_TRANSFER_ERROR (-1)
+#define USB_TRANSFER_STALL (-3)
+
 typedef struct {
     const char* name;
     int32_t (*init)(void);
