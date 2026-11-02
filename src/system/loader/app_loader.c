@@ -7,6 +7,7 @@
 #include "../../kernel/drivers/serial.h"
 #include "../../kernel/arch_i386.h"
 #include "../../kernel/syscall.h"
+#include "../graphics/dialog/crash_dialog.h"
 #include "../graphics/wm/wm.h"
 
 #define APP_LOAD_LIMIT   1048576u
@@ -26,6 +27,7 @@ typedef struct {
 } app_instance_t;
 
 static app_instance_t app_instances[APP_INSTANCE_MAX];
+extern user_crash_info_t last_user_crash;
 
 static int app_instance_find(uint32_t directory_address) {
     for (int i = 0; i < APP_INSTANCE_MAX; i++) {
@@ -135,6 +137,17 @@ static void app_run(void* argument) {
     wm_user_close_address_space((uint32_t)instance->address_space.directory);
     debug_print("[APP] executable returned\n");
     paging_activate_kernel();
+
+    if (last_user_crash.active) {
+        last_user_crash.active = 0;
+        crash_dialog_show(
+            current_task ? current_task->name : "Application",
+            last_user_crash.vector,
+            last_user_crash.eip,
+            last_user_crash.err_code
+        );
+    }
+
     mutex_lock(&kernel_mutex);
     instance->running = 0;
     if (!instance->window_references) instance->pending_release = 1;

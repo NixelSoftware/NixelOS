@@ -6,6 +6,7 @@
 #include "terminal/terminal.h"
 #include "dialog/dialog.h"
 #include "dialog/shutdown.h"
+#include "dialog/crash_dialog.h"
 #include "wm/desktop.h"
 #include "wm/wm.h"
 #include "../../kernel/drivers/serial.h"
@@ -27,6 +28,7 @@ void system_graphics_initialize(os_api_t* api, system_redraw_fn request_redraw) 
     debug_print("[APPS] viewer init done\n");
     debug_print("[APPS] dialog init...\n");
     dialog_init(api);
+    crash_dialog_init(api);
     shutdown_dialog_init(api);
 
     debug_print("[APPS] window manager init...\n");
