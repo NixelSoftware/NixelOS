@@ -23,6 +23,9 @@
 #define PORTSC_PR 0x200
 #define USBCMD_RS 1
 #define USBCMD_HCRESET 2
+#define USBCMD_GRESET 4
+#define USBCMD_CF 0x40
+#define USBCMD_MAXP 0x80
 #define TD_ACTIVE (1u << 23)
 #define TD_NAK (1u << 19)
 #define TD_STALLED (1u << 22)
@@ -39,6 +42,10 @@ typedef struct {
     uint8_t connected, buttons;
     uint8_t storage_iface, bulk_in, bulk_out, in_size, out_size, in_toggle, out_toggle;
     uint64_t next_poll;
+    uint64_t next_attempt;
+    uint32_t attempts;
+    uint16_t vendor, product;
+    uint8_t device_class;
 } usb_port_t;
 /* Each PCI controller owns an independent DMA schedule, ports and toggles.
  * One mutex serializes controller selection across sleeping transfers. */
@@ -49,12 +56,16 @@ typedef struct {
     uint8_t buffer[64] __attribute__((aligned(16)));
     uint16_t io_base;
     uint8_t initialized;
+    uint32_t last_status, last_token;
+    int last_count;
+    const char* control_phase;
     usb_port_t root_ports[2];
 } uhci_controller_t;
 static uhci_controller_t controllers[UHCI_MAX_CONTROLLERS];
 static uhci_controller_t* active=&controllers[0];
 static unsigned controller_count;
 static mutex_t transfer_mutex;
+static uint8_t config_descriptor[4096]; /* Enumeration holds transfer_mutex. */
 #define uhci_io_base (active->io_base)
 #define uhci_ready (active->initialized)
 #define frame_list (active->frames)
@@ -107,7 +118,7 @@ static void find_uhci_controllers(void) {
 
 /* Stop before reclaiming DMA storage, including on timeout/NAK. */
 static int stop_schedule(void) {
-    outw(uhci_io_base + UHCI_USBCMD, 0x80);
+    outw(uhci_io_base + UHCI_USBCMD, USBCMD_MAXP | (inw(uhci_io_base+UHCI_USBCMD)&USBCMD_CF));
     for (uint32_t i = 0; i < 1000000; ++i) {
         if (inw(uhci_io_base + UHCI_USBSTS) & 0x20) return 0;
         __asm__ volatile ("pause" ::: "memory");
@@ -118,12 +129,28 @@ static int stop_schedule(void) {
 }
 
 static int init_controller(void) {
-    outw(uhci_io_base + UHCI_USBCMD, 0);
+    if (stop_schedule()<0) return -1;
+    /* HCRESET resets controller registers, not downstream USB devices. After
+     * BIOS/EHCI handoff also assert the global bus reset, as Linux UHCI does,
+     * before constructing any schedule or exposing devices to storage. */
+    outw(uhci_io_base+UHCI_USBINTR,0);
+    outw(uhci_io_base+UHCI_USBCMD,USBCMD_GRESET);
+    usb_wait(50);
+    outw(uhci_io_base+UHCI_USBCMD,0);
+    usb_wait(10);
     outw(uhci_io_base + UHCI_USBCMD, USBCMD_HCRESET);
-    uint32_t n = 1000000;
-    while ((inw(uhci_io_base + UHCI_USBCMD) & USBCMD_HCRESET) && --n)
-        __asm__ volatile ("pause");
-    if (!n) return -1;
+    unsigned retry;
+    for (retry=0; retry<50; retry++) {
+        if (!(inw(uhci_io_base+UHCI_USBCMD)&USBCMD_HCRESET)) break;
+        usb_wait(1);
+    }
+    if (retry==50) return -1;
+    /* Do not leave two unaddressed devices enabled on the same bus. A host
+     * controller reset need not undo firmware's root-port enable state. */
+    for (unsigned port=0; port<2; port++) {
+        uint16_t reg=uhci_io_base+UHCI_PORTSC1+port*2;
+        outw(reg,inw(reg)&~(PORTSC_PE|PORTSC_PR|PORTSC_CSC|PORTSC_PEC));
+    }
     queue.link = queue.element = 1;
     for (int i = 0; i < 1024; ++i) frame_list[i] = (uint32_t)&queue | 2;
     outl(uhci_io_base + UHCI_FRBASEADD, (uint32_t)frame_list);
@@ -131,9 +158,12 @@ static int init_controller(void) {
     outb(uhci_io_base + UHCI_SOFMOD, 64);
     outw(uhci_io_base + UHCI_USBINTR, 0);
     outw(uhci_io_base + UHCI_USBSTS, 0x1F);
-    outw(uhci_io_base + UHCI_USBCMD, 0x81);
+    outw(uhci_io_base + UHCI_USBCMD, USBCMD_RS|USBCMD_CF|USBCMD_MAXP);
     uhci_ready = 1;
     debug_print("[UHCI] Controller initialized.\n");
+    debug_print("[UHCI] Global bus reset completed: io="); debug_hex(uhci_io_base);
+    debug_print(" cmd="); debug_hex(inw(uhci_io_base+UHCI_USBCMD));
+    debug_print(" sts="); debug_hex(inw(uhci_io_base+UHCI_USBSTS)); debug_print("\n");
     return 0;
 }
 
@@ -169,20 +199,24 @@ static int packet(uint8_t addr, uint8_t ls, uint8_t ep, uint8_t pid,
     __asm__ volatile ("" ::: "memory");
     queue.element = (uint32_t)&td;
     outw(uhci_io_base + UHCI_USBSTS, 0x1F);
-    outw(uhci_io_base + UHCI_USBCMD, 0x81);
+    outw(uhci_io_base + UHCI_USBCMD, USBCMD_RS|USBCMD_CF|USBCMD_MAXP);
     uint64_t deadline = uhci_now() + 500000000ull;
     uint32_t budget = 500;
     while (td.status & TD_ACTIVE) {
-        if ((td.status & TD_ERRORS) || (interrupt && (td.status & TD_NAK)) ||
+        /* CRC/timeout status can be set while the hardware error counter
+         * still permits retries. ACTIVE, not the error bits, owns completion. */
+        if ((interrupt && (td.status & TD_NAK)) ||
             (scheduler_running() ? uhci_now() >= deadline : !budget--)) break;
         usb_wait(1);
     }
     if (stop_schedule() < 0) return -1;
     uint32_t status = td.status;
+    active->last_status=status; active->last_token=td.token;
+    active->last_count=(int)(((status&0x7ff)+1)&0x7ff);
     queue.element = 1;
     /* Keep SOFs running between requests so devices do not enter suspend. */
     __asm__ volatile ("" ::: "memory");
-    outw(uhci_io_base + UHCI_USBCMD, 0x81);
+    outw(uhci_io_base + UHCI_USBCMD, USBCMD_RS|USBCMD_CF|USBCMD_MAXP);
     if (status & TD_STALLED) return USB_TRANSFER_STALL;
     if (status & TD_ERRORS) return -1;
     if (status & TD_ACTIVE) return interrupt && (status & TD_NAK) ? -2 : -1;
@@ -196,9 +230,11 @@ static int packet(uint8_t addr, uint8_t ls, uint8_t ep, uint8_t pid,
 static int control(uint8_t addr, uint8_t ls, uint8_t mps,
                    usb_device_request_t* req, void* data, uint16_t length) {
     if (!req || length != req->wLength || (length && !data)) return -1;
+    active->control_phase="setup";
     if (packet(addr, ls, 0, USB_PID_SETUP, 0, req, 8, 0) != 8) return -1;
     uint8_t in = req->bmRequestType & 0x80, toggle = 1;
     uint16_t done = 0;
+    active->control_phase="data";
     while (done < length) {
         uint16_t count = length - done;
         if (count > mps) count = mps;
@@ -209,6 +245,7 @@ static int control(uint8_t addr, uint8_t ls, uint8_t mps,
         toggle ^= 1;
         if (actual < count) break;
     }
+    active->control_phase="status";
     if (packet(addr, ls, 0, in && length ? USB_PID_OUT : USB_PID_IN,
                1, 0, 0, 0) != 0) return -1;
     return done;
@@ -234,45 +271,83 @@ int32_t uhci_reset_port(uint8_t port) {
     port_write(port, PORTSC_PR, PORTSC_PE);
     usb_wait(50);
     port_write(port, 0, PORTSC_PR);
-    usb_wait(10);
+    usb_wait(20);
     port_write(port, PORTSC_PE, 0);
     usb_wait(10);
-    return (inw(uhci_io_base + UHCI_PORTSC1 + port * 2) &
-            (PORTSC_CCS | PORTSC_PE)) == (PORTSC_CCS | PORTSC_PE) ? 0 : -1;
+    uint16_t reg=uhci_io_base+UHCI_PORTSC1+port*2;
+    uint16_t status=inw(reg);
+    if ((status&(PORTSC_CCS|PORTSC_PE))!=(PORTSC_CCS|PORTSC_PE)) return -1;
+    /* Reset/enable can latch connection/enable changes on real root hubs.
+     * Consume those changes here, otherwise the next poll tears down the
+     * device we just enumerated and starts the first probe all over again. */
+    outw(reg,status&~PORTSC_PR); /* Write 1 to acknowledge only observed changes. */
+    return (inw(reg)&(PORTSC_CCS|PORTSC_PE))==(PORTSC_CCS|PORTSC_PE) ? 0 : -1;
 }
 
+static int enumeration_failed(uint8_t index, const char* stage) {
+    usb_port_t* p=&ports[index];
+    if (p->attempts<=2 || !(p->attempts&15)) {
+        debug_print("[UHCI] Enumeration failed: slot="); debug_hex((uint32_t)(active-controllers)*2+index);
+        debug_print(" io="); debug_hex(uhci_io_base);
+        debug_print(" vid="); debug_hex(p->vendor); debug_print(" pid="); debug_hex(p->product);
+        debug_print(" stage="); debug_print(stage);
+        debug_print(" attempt="); debug_hex(p->attempts);
+        debug_print(" phase="); debug_print(active->control_phase ? active->control_phase : "none");
+        debug_print(" td="); debug_hex(active->last_status);
+        debug_print(" token="); debug_hex(active->last_token);
+        debug_print(" portsc="); debug_hex(inw(uhci_io_base+UHCI_PORTSC1+index*2));
+        debug_print("; retrying\n");
+    }
+    return -1;
+}
 static int enumerate_device(uint8_t index) {
     usb_port_t* p = &ports[index];
-    uint8_t desc[18], config[512];
-    usb_device_request_t req = {0x80, 6, 0x100, 0, 8};
+    uint8_t desc[64];
+    uint8_t* config=config_descriptor;
+    /* Alternate the traditional 8-byte probe and Linux's 64-byte/reset
+     * enumeration scheme. Some real devices only tolerate one of them. */
+    unsigned first_size=(!p->low_speed && !(p->attempts&1)) ? 64 : 8;
+    usb_device_request_t req = {0x80, 6, 0x100, 0, first_size};
     p->ep0_size = 8;
-    if (control(0, p->low_speed, 8, &req, desc, 8) != 8) return -1;
-    if (desc[1] != 1 || (desc[7] != 8 && desc[7] != 16 && desc[7] != 32 && desc[7] != 64) ||
-        (p->low_speed && desc[7] != 8)) return -1;
+    int initial=control(0,p->low_speed,first_size,&req,desc,first_size);
+    if (initial<8)
+        return enumeration_failed(index,first_size==64 ? "descriptor64@0" : "descriptor8@0");
+    if (initial>=12) { p->vendor=desc[8]|(uint16_t)desc[9]<<8; p->product=desc[10]|(uint16_t)desc[11]<<8; }
+    if (desc[0]<18 || desc[1] != 1 || (desc[7] != 8 && desc[7] != 16 && desc[7] != 32 && desc[7] != 64) ||
+        (p->low_speed && desc[7] != 8)) return enumeration_failed(index,"invalid-ep0-descriptor");
     p->ep0_size = desc[7];
+    p->device_class=desc[4];
+    if (first_size==64 && uhci_reset_port(index)<0) return enumeration_failed(index,"second-reset");
     uint8_t addr = (uint8_t)((active-controllers)*2+index+1);
     req = (usb_device_request_t){0, 5, addr, 0, 0};
-    if (control(0, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return -1;
-    usb_wait(2);
+    if (control(0, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return enumeration_failed(index,"set-address");
+    usb_wait(10);
     p->address = addr;
     req = (usb_device_request_t){0x80, 6, 0x100, 0, 18};
-    if (control(addr, p->low_speed, p->ep0_size, &req, desc, 18) != 18) return -1;
+    if (control(addr, p->low_speed, p->ep0_size, &req, desc, 18) != 18)
+        return enumeration_failed(index,"descriptor18");
+    p->vendor=desc[8]|(uint16_t)desc[9]<<8; p->product=desc[10]|(uint16_t)desc[11]<<8;
+    if (desc[0]<18 || desc[1]!=1 || !desc[17]) return enumeration_failed(index,"invalid-device-descriptor");
+    uint8_t last_class=0, last_subclass=0, last_protocol=0;
+    uint16_t rejected_mps=0;
     for (uint8_t c = 0; c < desc[17]; ++c) {
         req = (usb_device_request_t){0x80, 6, 0x200 | c, 0, 9};
         if (control(addr, p->low_speed, p->ep0_size, &req, config, 9) != 9 ||
-            config[0] < 9 || config[1] != 2) return -1;
+            config[0] < 9 || config[1] != 2 || !config[5]) return enumeration_failed(index,"config-header");
         uint16_t total = config[2] | (config[3] << 8);
-        if (total < 9 || total > sizeof(config)) continue;
+        if (total < config[0] || total > sizeof(config_descriptor)) return enumeration_failed(index,"config-size");
         req.wLength = total;
-        if (control(addr, p->low_speed, p->ep0_size, &req, config, total) != total) return -1;
+        if (control(addr, p->low_speed, p->ep0_size, &req, config, total) != total)
+            return enumeration_failed(index,"config-body");
         /* SCSI transparent command set, Bulk-Only Transport, alternate 0. */
         uint8_t storage = 0, sin = 0, sout = 0, insz = 0, outsz = 0, sif = 0;
         for (unsigned off = 0; off + 2 <= total;) {
             uint8_t* d = config + off;
             unsigned len = d[0];
-            if (len < 2 || off + len > total) return -1;
+            if (len < 2 || off + len > total) return enumeration_failed(index,"config-record");
             if (d[1] == 4 && len >= 9) {
                 if (sin && sout) break;
+                last_class=d[5]; last_subclass=d[6]; last_protocol=d[7];
                 storage = !p->low_speed && !d[3] && d[5] == 8 && d[6] == 6 && d[7] == 0x50;
                 sin = sout = 0; sif = d[2];
             }
@@ -281,13 +356,14 @@ static int enumerate_device(uint8_t index) {
                 if (mps == 8 || mps == 16 || mps == 32 || mps == 64) {
                     if (d[2] & 0x80) { sin = d[2] & 15; insz = mps; }
                     else { sout = d[2] & 15; outsz = mps; }
-                }
+                } else rejected_mps=mps;
             }
             off += len;
         }
         if (sin && sout) {
             req = (usb_device_request_t){0, 9, config[5], 0, 0};
-            if (control(addr, 0, p->ep0_size, &req, 0, 0) < 0) return -1;
+            if (control(addr, 0, p->ep0_size, &req, 0, 0) < 0) return enumeration_failed(index,"storage-set-config");
+            usb_wait(10);
             p->storage_iface = sif; p->bulk_in = sin; p->bulk_out = sout;
             p->in_size = insz; p->out_size = outsz;
             p->in_toggle = p->out_toggle = 0;
@@ -297,7 +373,7 @@ static int enumerate_device(uint8_t index) {
         uint8_t match = 0, iface = 0, ep = 0, size = 0, interval = 0;
         for (unsigned off = 0; off + 2 <= total;) {
             uint8_t len = config[off], type = config[off + 1];
-            if (len < 2 || off + len > total) return -1;
+            if (len < 2 || off + len > total) return enumeration_failed(index,"config-record");
             uint8_t* d = config + off;
             if (type == 4 && len >= 9) {
                 match = d[3] == 0 && d[5] == 3 && d[6] == 1 && d[7] == 2;
@@ -314,9 +390,9 @@ static int enumerate_device(uint8_t index) {
         }
         if (!ep) continue;
         req = (usb_device_request_t){0, 9, config[5], 0, 0};
-        if (control(addr, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return -1;
+        if (control(addr, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return enumeration_failed(index,"mouse-set-config");
         req = (usb_device_request_t){0x21, 0x0B, 0, iface, 0};
-        if (control(addr, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return -1;
+        if (control(addr, p->low_speed, p->ep0_size, &req, 0, 0) < 0) return enumeration_failed(index,"mouse-set-protocol");
         /* SET_IDLE is optional; some mice stall it. */
         req = (usb_device_request_t){0x21, 0x0A, 0, iface, 0};
         control(addr, p->low_speed, p->ep0_size, &req, 0, 0);
@@ -325,7 +401,14 @@ static int enumerate_device(uint8_t index) {
         debug_print("[UHCI] HID boot mouse ready on port "); debug_hex(index + 1); debug_print("\n");
         return 0;
     }
-    debug_print("[UHCI] Device has no supported HID boot mouse interface.\n");
+    debug_print("[UHCI] Unsupported device (not a supported storage/mouse): slot=");
+    debug_hex((uint32_t)(active-controllers)*2+index);
+    debug_print(" vid="); debug_hex(p->vendor); debug_print(" pid="); debug_hex(p->product);
+    debug_print(" class="); debug_hex(p->device_class);
+    debug_print(" iface="); debug_hex(last_class); debug_print("/"); debug_hex(last_subclass);
+    debug_print("/"); debug_hex(last_protocol);
+    if (rejected_mps) { debug_print(" unsupported-bulk-mps="); debug_hex(rejected_mps); }
+    debug_print("\n");
     return 0;
 }
 
@@ -373,19 +456,27 @@ static void poll_controller(void) {
         uint16_t sc = inw(reg);
         if (sc & (PORTSC_CSC | PORTSC_PEC))
             outw(reg, sc & ~PORTSC_PR);
-        if (!(sc & PORTSC_CCS) || (sc & PORTSC_CSC)) {
+        /* An unconfigured port has no registered device to invalidate.
+         * Preserve its retry count across CSC, including reset-induced CSC,
+         * so the 64-byte fallback is actually reachable on real hardware. */
+        if (!(sc & PORTSC_CCS) || ((sc & PORTSC_CSC) && p->connected)) {
             if (p->buttons) uhci_handle_mouse_packet(0, 0, 0);
             usb_msc_detach(p->address);
             *p = (usb_port_t){0};
         }
         if (!(sc & PORTSC_CCS)) continue;
         if (!p->connected) {
+            if (scheduler_running() && uhci_now()<p->next_attempt) continue;
+            p->attempts++;
+            p->next_attempt=uhci_now()+1000000000ull;
+            active->last_status=active->last_token=0; active->control_phase="none";
             usb_wait(100);
             p->low_speed = (inw(reg) & PORTSC_LSDA) != 0;
-            if (uhci_reset_port(i) < 0 || enumerate_device(i) < 0) {
+            int reset=uhci_reset_port(i);
+            if (reset<0) enumeration_failed(i,"port-reset");
+            if (reset<0 || enumerate_device(i)<0) {
                 p->address = p->mouse_ep = 0;
                 port_write(i, 0, PORTSC_PE);
-                debug_print("[UHCI] Enumeration failed; retrying.\n");
                 continue;
             }
             p->connected = 1;
@@ -439,10 +530,11 @@ void uhci_handle_mouse_packet(int8_t dx, int8_t dy, uint8_t buttons) {
     }
 }
 
+static int uhci_owns_address(uint8_t addr) { return addr && addr<=controller_count*2; }
 static const usb_hci_ops_t uhci_ops = {
     .name = "UHCI USB 1.1 Controller", .init = uhci_init,
     .reset_port = uhci_reset_port, .submit_transfer = uhci_submit_transfer,
-    .poll = uhci_poll, .shutdown = uhci_shutdown
+    .poll = uhci_poll, .shutdown = uhci_shutdown, .owns_address=uhci_owns_address
 };
 const usb_hci_ops_t* uhci_get_ops(void) { return &uhci_ops; }
 

@@ -123,7 +123,7 @@ KERNEL_C := \
   src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
   src/system/icons/network.h src/kernel/hal/audio.c \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
-  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/ehci_handoff.c src/kernel/drivers/usb/mass_storage.c \
+  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/ehci_handoff.c src/kernel/drivers/usb/ehci.c src/kernel/drivers/usb/mass_storage.c \
   src/kernel/login.c src/kernel/emergency.c \
   src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c \
   src/system/graphics/dialog/crash_dialog.c
@@ -378,8 +378,25 @@ test-audio:
 	sh src/apps/doom/tests/run_audio_tests.sh
 
 .PHONY: test-usb
+.PHONY: test-usb-native
+test-usb-native:
+	sh src/kernel/drivers/usb/tests/run_native_tests.sh
+
+.PHONY: test-usb-handoff
+test-usb-handoff:
+	sh src/kernel/drivers/usb/tests/run_handoff_tests.sh
+
 test-usb:
 	sh src/kernel/drivers/usb/tests/run_tests.sh
+
+.PHONY: test-usb-enumeration
+.PHONY: test-usb-reset
+test-usb-reset:
+	$(PYTHON) tools/tests/test_usb_global_reset.py
+
+test-usb-enumeration:
+	$(PYTHON) tools/tests/test_usb_enumeration.py
+	$(PYTHON) tools/tests/test_usb_port_changes.py
 
 .PHONY: test-boot-layout
 test-boot-layout:

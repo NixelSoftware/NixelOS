@@ -27,6 +27,7 @@ typedef struct {
                                void* buffer, uint32_t length);
     void    (*poll)(void);
     void    (*shutdown)(void);
+    int     (*owns_address)(uint8_t address);
 } usb_hci_ops_t;
 
 void    usb_hal_init(void);
@@ -35,5 +36,8 @@ int32_t usb_submit_transfer(uint8_t dev_addr, uint8_t ep, usb_transfer_type_t ty
                             usb_direction_t dir, void* buf, uint32_t len);
 void    usb_poll(void);
 void    usb_shutdown(void);
+int usb_storage_info(unsigned port,uint8_t* addr,uint8_t* iface,uint8_t* in,uint8_t* out);
+int usb_storage_clear_halt(uint8_t addr,uint8_t ep,int in);
+int usb_storage_reset(uint8_t addr,uint8_t iface,uint8_t in,uint8_t out);
 
 #endif

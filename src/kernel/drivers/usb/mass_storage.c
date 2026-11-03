@@ -48,7 +48,7 @@ static int transport(disk_t* d, const uint8_t* cdb, unsigned cdb_size,
     /* A stalled data stage still has a CSW. Clear only that endpoint, then
      * consume status instead of discarding the command with a full reset. */
     if (actual==USB_TRANSFER_STALL) {
-        if (!uhci_storage_clear_halt(d->address,in ? d->in : d->out,in)) goto failed;
+        if (!usb_storage_clear_halt(d->address,in ? d->in : d->out,in)) goto failed;
         actual=0; /* The HCI cannot report partial bytes preceding a stall. */
     } else if (actual<0) goto failed;
     if (!d->present || generation!=d->generation) goto failed;
@@ -59,7 +59,7 @@ static int transport(disk_t* d, const uint8_t* cdb, unsigned cdb_size,
     if (!status) status=bulk(d,1,csw,sizeof(csw));
     if (!d->present || generation!=d->generation) goto failed;
     if (status==USB_TRANSFER_STALL) {
-        if (!uhci_storage_clear_halt(d->address,d->in,1)) goto failed;
+        if (!usb_storage_clear_halt(d->address,d->in,1)) goto failed;
         if (!d->present || generation!=d->generation) goto failed;
         status=bulk(d,1,csw,sizeof(csw));
     }
@@ -75,7 +75,7 @@ static int transport(disk_t* d, const uint8_t* cdb, unsigned cdb_size,
     return available>=minimum ? COMMAND_OK : COMMAND_SHORT;
 failed:
     if (d->present && generation==d->generation)
-        if (!uhci_storage_reset(d->address,d->iface,d->in,d->out)) d->ready=0;
+        if (!usb_storage_reset(d->address,d->iface,d->in,d->out)) d->ready=0;
     return COMMAND_ERROR;
 }
 static int command(disk_t* d, const uint8_t* cdb, unsigned cdb_size,
@@ -116,7 +116,7 @@ void usb_msc_probe(void) {
     for (unsigned i=0; i<USB_MSC_COUNT; i++) {
         disk_t* d=&disks[i];
         uint8_t addr, iface, in, out;
-        if (!uhci_storage_info(i,&addr,&iface,&in,&out) || d->ready) continue;
+        if (!usb_storage_info(i,&addr,&iface,&in,&out) || d->ready) continue;
         /* A connected disk can fail INQUIRY or still be spinning up. Keep
          * probing it on later polls instead of treating presence as readiness. */
         d->address=addr; d->iface=iface; d->in=in; d->out=out; d->present=1;

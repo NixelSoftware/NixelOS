@@ -17,6 +17,7 @@
 #include "drivers/nvme.h"
 #include "drivers/ahci.h"
 #include "drivers/usb/uhci.h"
+#include "drivers/usb/ehci.h"
 //#include "drivers/sb16_driver.h"
 #include "idt.h"
 #include "fs.h" 
@@ -447,6 +448,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     };
     audio_hal_init();
     usb_hal_init();
+    usb_hal_register(ehci_get_ops());
     usb_hal_register(uhci_get_ops());
     nixinit_start(&init_services);
 

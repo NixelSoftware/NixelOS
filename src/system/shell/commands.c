@@ -160,25 +160,42 @@ static int serial_output_command(const char* command) {
         }
         port=port*10+(*arg++-'0'); digits++;
     }
+    if (*arg && *arg!=' ') { print("Usage: srout <port> [text-filter]\n"); return 1; }
     while (*arg==' ') arg++;
-    if (!digits || *arg) { print("Usage: srout <port> (0 = first UART)\n"); return 1; }
+    if (!digits) { print("Usage: srout <port> [text-filter] (0 = first UART)\n"); return 1; }
+    const char* filter=arg;
     if (user_uid()!=USER_ROOT) { print("srout: permission denied; use sudo srout <port>.\n"); return 1; }
     if (port!=0) { print("srout: output capture is available only for port 0 (COM1/0x3F8).\n"); return 1; }
     print("Following port 0 output (COM1/0x3F8). Press Ctrl+C to stop.\n");
     uint32_t cursor=0, lost=0;
+    char line[512]; unsigned line_length=0; int discard_line=0;
     while (!current_task->terminate_requested) {
         uint32_t previous_lost=lost;
         char bytes[256], text[257];
         int32_t count=serial_log_read(bytes,sizeof(bytes),&cursor,&lost);
         if (count<0) { print("srout: serial output unavailable.\n"); break; }
-        if (lost!=previous_lost) print("\n[srout] Older output lost (capture overrun).\n");
+        if (lost!=previous_lost) {
+            print("\n[srout] Older output lost (capture overrun).\n");
+            line_length=0; discard_line=0;
+        }
         unsigned n=0;
         for (int32_t i=0; i<count; i++) if (bytes[i]!='\r') {
             /* Shell output is a string; render embedded NULs visibly. */
             text[n++]=bytes[i] ? bytes[i] : '.';
         }
         text[n]=0;
-        if (n) print(text);
+        if (!*filter) { if (n) print(text); }
+        else for (unsigned i=0; i<n; i++) {
+            if (text[i]=='\n') {
+                line[line_length]=0;
+                int matched=0;
+                for (unsigned at=0; at<line_length && !matched; at++)
+                    matched=has_prefix(line+at,filter);
+                if (matched) { print(line); if (discard_line) print(" [truncated]"); print("\n"); }
+                line_length=0; discard_line=0;
+            } else if (line_length+1<sizeof(line)) line[line_length++]=text[i];
+            else discard_line=1;
+        }
         if (count<(int32_t)sizeof(bytes)) task_sleep_ms(20);
         else task_yield();
     }
@@ -367,7 +384,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " chmod <octal> <path>  Set permissions\n"
                     " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
-                    " srout <port>    Follow serial output (0 = first UART)\n"
+                    " srout <port> [filter]  Follow serial output (0 = first UART)\n"
                     " ls [path]       List directory or file (exact case)\n"
                     " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"
