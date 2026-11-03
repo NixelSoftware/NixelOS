@@ -20,19 +20,43 @@ int ehci_claim_firmware(const pci_device_t* d, unsigned offset) {
         if (offset<0x40 || offset>0xf8 || (offset&3)) return 0;
         uint32_t cap=pci_read32(d,offset);
         if ((cap&0xff)==1) {
-            /* Byte writes avoid modifying the BIOS semaphore or cap header. */
+            /* Request normal BIOS release first. Keep byte writes away from
+             * the capability ID/next pointer and the other semaphore. */
             pci_write8(d,offset+3,1);
             unsigned retry;
             for (retry=0; retry<1000; retry++) {
                 if (!(pci_read32(d,offset)&(1u<<16))) break;
                 driver_delay_us(1000);
             }
-            if (retry==1000) {
-                debug_print("[EHCI] BIOS ownership timeout; companion handoff refused.\n");
-                return 0;
-            }
             /* Disable legacy SMIs and acknowledge only observed status bits. */
             pci_write32(d,offset+4,pci_read32(d,offset+4)&0xffff0000u);
+            uint32_t legacy=pci_read32(d,offset+4);
+            if (legacy==0xffffffffu || (legacy&0xe011u)) {
+                debug_print("[EHCI] Legacy SMI disable failed; firmware takeover refused.\n");
+                return 0;
+            }
+            if (retry==1000) {
+                /* Linux pci-quirks.c: some BIOSes never release this software
+                 * semaphore. USB BIOS calls have ended at kernel entry; clear
+                 * the stale BIOS byte after disabling USB legacy SMIs. The
+                 * caller will halt/reset the old controller before any DMA. */
+                debug_print("[EHCI] BIOS ownership timeout; applying legacy takeover at ");
+                debug_hex(d->bus); debug_print(":"); debug_hex(d->slot); debug_print("\n");
+                pci_write8(d,offset+2,0);
+                pci_write8(d,offset+3,1);
+            }
+            /* A timeout is recoverable only if the ownership and SMI writes
+             * actually latch. Never report a successful claim on all-ones
+             * config reads, a reasserted BIOS flag, or enabled legacy SMIs. */
+            uint32_t ownership=pci_read32(d,offset);
+            legacy=pci_read32(d,offset+4);
+            if ((ownership&((1u<<16)|(1u<<24)))!=(1u<<24) ||
+                ownership==0xffffffffu || legacy==0xffffffffu || (legacy&0xe011u)) {
+                debug_print("[EHCI] Firmware takeover verification failed: ownership=");
+                debug_hex(ownership); debug_print(" legacy="); debug_hex(legacy); debug_print("\n");
+                return 0;
+            }
+            if (retry==1000) debug_print("[EHCI] Legacy takeover verified.\n");
             return 1;
         }
         unsigned next=(cap>>8)&0xff;
