@@ -8,7 +8,7 @@
 
 #define SECOND 1000000000ull
 static struct { uint32_t magic; int enabled, offset; char server[128]; } config =
-    {0x31504e54, 1, 0, "pool.ntp.org"};
+    {0x31504e54, 1, 0, "ntp.nixelos.org"};
 static int loaded, state;
 static udp_socket_t* socket;
 static uint64_t deadline, next_sync;
