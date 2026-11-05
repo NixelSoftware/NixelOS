@@ -43,7 +43,7 @@ typedef struct {
 typedef struct { char url[MAX_URL_LEN]; int line, start, length, anchor; } link_t;
 typedef struct {
     char name[32], value[CONTROL_VALUE_LEN], label[CONTROL_VALUE_LEN];
-    int line, start, width, form;
+    int line, start, width, form, node;
     uint8_t type, checked, disabled, visibility_hidden;
     unsigned foreground, background;
     int text_transform, bold;
@@ -142,6 +142,8 @@ static int num_lines = 0;
 static uint8_t image_pool[MAX_PAGE_IMAGES][MAX_PNG_SIZE];
 static uint32_t image_sizes[MAX_PAGE_IMAGES];
 static int num_images = 0;
+static int image_nodes[MAX_PAGE_IMAGES];
+static int reflowing, document_valid;
 static link_t links[MAX_LINKS];
 static int num_links = 0;
 static control_t controls[MAX_CONTROLS];
@@ -359,6 +361,7 @@ static void layout_control(int index, int form, const browser_style* style, int 
     if (num_controls == MAX_CONTROLS) return;
     const browser_node* node = &page_document.nodes[index];
     control_t* c = &controls[num_controls];
+    c->node = index;
     char type[24], flag[1];
     browser_node_attr(node, "type", type, sizeof(type));
     c->type = CONTROL_TEXT;
@@ -648,6 +651,17 @@ static void layout_grid_children(int index, int form, int indent, int anchor, un
     layout_y = cursor; layout_right = right;
 }
 
+static int page_image(int node, const char *src) {
+    for (int i = 0; i < num_images; i++)
+        if (image_nodes[i] == node) return i;
+    /* Resizing uses cached resources and never performs network requests. */
+    if (reflowing || num_images == MAX_PAGE_IMAGES) return -1;
+    uint32_t size;
+    if (!fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) return -1;
+    image_sizes[num_images] = size; image_nodes[num_images] = node;
+    return num_images++;
+}
+
 static void layout_node(int index, int form, int indent, int anchor, unsigned depth, int item_flags) {
     if (depth >= BROWSER_DOM_DEPTH || num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     const browser_node* node = &page_document.nodes[index];
@@ -692,12 +706,13 @@ static void layout_node(int index, int form, int indent, int anchor, unsigned de
         char src[MAX_URL_LEN], alt[LINE_MAX_CHARS];
         browser_node_attr(node, "src", src, sizeof(src));
         browser_node_attr(node, "alt", alt, sizeof(alt));
-        uint32_t size = 0;
-        if (src[0] && num_images < MAX_PAGE_IMAGES && layout_right - indent >= 8 &&
-            num_lines < MAX_RENDER_LINES && fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) {
+        int image = -1;
+        if (src[0] && layout_right - indent >= 8 && num_lines < MAX_RENDER_LINES)
+            image = page_image(index, src);
+        if (image >= 0) {
+            uint32_t size = image_sizes[image];
             render_line_t* line = &lines[num_lines++];
-            image_sizes[num_images] = size;
-            line->image_index = num_images++; line->offset = indent; line->indent = indent; line->text[0] = 0;
+            line->image_index = image; line->offset = indent; line->indent = indent; line->text[0] = 0;
             int width = 64, height = 64;
             const uint8_t* png = image_pool[line->image_index];
             if (size >= 24 && png[0] == 137 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G') {
@@ -738,12 +753,26 @@ finish:
     }
 }
 
-static void parse_and_layout_html(const char* doc, uint32_t len) {
-    num_lines = num_images = num_links = num_controls = num_forms = 0;
-    scroll_y = 0; active_control = -1; control_editing = 0;
+static void layout_document(void) {
+    num_lines = num_links = num_controls = num_forms = 0;
     layout_length = layout_pixels = layout_indent = layout_pending_space = layout_truncated = 0;
     layout_align = BROWSER_ALIGN_LEFT; page_background = COLOR_WHITE;
     num_boxes = layout_y = 0; layout_height = 12; layout_right = browser_win.w - 36;
+    browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
+                          .line_height = 12, .width = -1, .max_width = -1, .height = -1,
+                          .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE,
+                          .font_size = 16, .root_font_size = 16, .viewport_width = browser_win.w - 36, .viewport_height = browser_win.h - 76};
+    node_styles[0] = root;
+    for (int i = 1; i < page_document.count; i++)
+        browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
+    for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0, 0);
+    layout_flush(0);
+    if (page_document.truncated) layout_truncated = 1;
+}
+
+static void parse_and_layout_html(const char* doc, uint32_t len) {
+    num_images = 0;
+    scroll_y = 0; active_control = -1; control_editing = 0;
     copy_string(page_url, sizeof(page_url), url_input);
     copy_string(page_base_url, sizeof(page_base_url), page_url);
     num_stylesheets = 0; resource_unavailable = 0;
@@ -761,16 +790,8 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
     if (page_stylesheet.rules && page_stylesheet.rules != page_stylesheet.inline_rules)
         sys_memory_free(page_stylesheet.rules);
     browser_stylesheet_collect_growing(&page_stylesheet, &page_document, load_stylesheet, 0, grow_page_rules);
-    browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
-                          .line_height = 12, .width = -1, .max_width = -1, .height = -1,
-                          .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE,
-                          .font_size = 16, .root_font_size = 16, .viewport_width = browser_win.w - 36, .viewport_height = browser_win.h - 76};
-    node_styles[0] = root;
-    for (int i = 1; i < page_document.count; i++)
-        browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
-    for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0, 0);
-    layout_flush(0);
-    if (page_document.truncated) layout_truncated = 1;
+    document_valid = 1;
+    layout_document();
 }
 
 static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t bg_col) {
@@ -823,6 +844,30 @@ static int browser_max_scroll(int canvas_height) {
     int maximum = layout_y - (canvas_height - 10);
     return maximum > 0 ? maximum : 0;
 }
+static void browser_resize(int width, int height) {
+    if (width == browser_win.w && height == browser_win.h) return;
+    browser_win.w = width; browser_win.h = height;
+    if (!document_valid) return;
+    control_t saved[MAX_CONTROLS];
+    int count = num_controls, selected = active_control >= 0 ? controls[active_control].node : -1;
+    for (int i = 0; i < count; i++) saved[i] = controls[i];
+    reflowing = 1;
+    layout_document();
+    reflowing = 0;
+    active_control = -1;
+    for (int i = 0; i < num_controls; i++) {
+        for (int j = 0; j < count; j++) if (controls[i].node == saved[j].node) {
+            copy_string(controls[i].value, sizeof(controls[i].value), saved[j].value);
+            controls[i].checked = saved[j].checked;
+            break;
+        }
+        if (controls[i].node == selected) active_control = i;
+    }
+    if (active_control < 0) control_editing = 0;
+    int maximum = browser_max_scroll(height - 76);
+    if (scroll_y > maximum) scroll_y = maximum;
+}
+
 static void paint_clipped(int x, int y, int width, int height, unsigned color,
                            int left, int top, int right, int bottom) {
     int end_x = x + width, end_y = y + height;
@@ -944,6 +989,7 @@ static int copy_string(char* dst, int max_len, const char* src) {
 
 static browser_http_response_t document_response;
 static int fetch_http_document(const char* url, const char* host, const char* path) {
+    document_valid = 0;
     browser_http_free(document_body_buf);
     document_body_buf = 0;
     document_body_len = 0;
@@ -1263,6 +1309,10 @@ void user_main(const char* arguments) {
     if (created < 0) return;
     user_window_handle = (uint32_t)created;
     user_window_closed = 0;
+    user_window_draw_t resize = {0};
+    resize.operation = USER_WINDOW_RESIZABLE;
+    resize.pressed = 1;
+    (void)sys_window_draw(user_window_handle, &resize);
 
     const char* default_page = "<html><body><h1>Nixel Browser</h1><p>Enter an HTTP address above.</p></body></html>";
 
@@ -1284,6 +1334,9 @@ void user_main(const char* arguments) {
         if (available < 0 || event.type == USER_WINDOW_EVENT_CLOSE) break;
         if (!available) continue;
         if (event.type == USER_WINDOW_EVENT_REDRAW) {
+            browser_win.x = event.x; browser_win.y = event.y;
+            if (event.buttons >= 160 && event.key >= 118)
+                browser_resize((int)event.buttons, (int)event.key);
             browser_draw(&browser_win);
             browser_user_present();
         } else if (event.type == USER_WINDOW_EVENT_KEY) {

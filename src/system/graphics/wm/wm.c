@@ -1106,6 +1106,13 @@ int32_t wm_user_window_poll(uint32_t handle, uint32_t owner_directory,
         return 0;
     }
     *event = slot->events[slot->event_read];
+    /* Resize/move events can queue while the app is busy. Report live geometry. */
+    if (event->type == USER_WINDOW_EVENT_REDRAW) {
+        event->x = slot->window.x;
+        event->y = slot->window.y;
+        event->buttons = (uint32_t)slot->window.w;
+        event->key = (uint32_t)slot->window.h;
+    }
     slot->event_read = (uint8_t)((slot->event_read + 1u) % USER_WINDOW_EVENT_CAPACITY);
     return 1;
 }

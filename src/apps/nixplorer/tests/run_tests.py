@@ -27,6 +27,11 @@ with tempfile.TemporaryDirectory(prefix='nixplorer-https-') as directory:
         'engine/parser/css_grid.c','engine/parser/css_color.c']
     run(CC+['-O2',*[str(B/source) for source in style_sources],'-o',str(tmp/'styles')])
     run([str(tmp/'styles')])
+    resize_sources=['tests/resize.c',*style_sources[1:], 'engine/layout/box.c',
+        'engine/layout/flex.c','engine/layout/grid.c','engine/net/url.c']
+    run(CC+['-O2','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+        *[str(B/source) for source in resize_sources],'-o',str(tmp/'resize')])
+    run([str(tmp/'resize')])
     sources=subprocess.check_output(['make','-s','tls-sources'],cwd=ROOT,text=True).split()
     objects=[]
     for i,source in enumerate(sources):
