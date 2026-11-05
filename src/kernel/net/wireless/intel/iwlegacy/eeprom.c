@@ -16,7 +16,7 @@ int il3945_eeprom_parse(const uint8_t* data, uint32_t size,
     for (unsigned i = 0; i < 6; i++) result.mac[i] = data[42 + i];
     result.version = il_le16(data + 136);
     result.board_revision = il_le16(data + 106);
-    result.sku = data[138];
+    result.sku = data[138]; result.radio_revision = data[148];
     static const uint8_t numbers[IL3945_CHANNEL_COUNT] = {
         1,2,3,4,5,6,7,8,9,10,11,12,13,14,
         183,184,185,187,188,189,192,196,7,8,11,12,16,

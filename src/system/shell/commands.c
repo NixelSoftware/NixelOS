@@ -179,7 +179,19 @@ static void print_wifi_device(void) {
             print("\n  Name: Intel PRO/Wireless "); print(intel->bg_only ? "3945BG" : "3945ABG");
             print("\n  Subsystem device: "); print_hex_u16(intel->subsystem_device);
             print("\n  Status: "); print(iwlegacy_description(intel->state));
-            if (intel->state == IL_EEPROM_READY) {
+            if (intel->error) {
+                print("\n  Error: ");
+                if (intel->error < 0) print("-");
+                print_u32(intel->error < 0 ? (unsigned)-intel->error : (unsigned)intel->error);
+            }
+            if (intel->firmware_version) {
+                print("\n  Firmware version: ");
+                for (int shift = 24; shift >= 0; shift -= 8) {
+                    if (shift != 24) print(".");
+                    print_u32((intel->firmware_version >> shift) & 255);
+                }
+            }
+            if (intel->eeprom.version) {
                 print("\n  MAC: ");
                 for (unsigned octet = 0; octet < 6; octet++) {
                     const char* hex = "0123456789ABCDEF";

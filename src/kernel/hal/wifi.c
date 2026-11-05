@@ -15,6 +15,11 @@ const char* sys_wifi_status_text(void) {
     MUTEX_GUARD(kernel_mutex);
     if (status.intel.vendor) {
         switch (status.intel.state) {
+        case IL_FIRMWARE_READY: return "Wi-Fi firmware verified; scanning is not available yet.";
+        case IL_FIRMWARE_MISSING: return "Wi-Fi firmware is missing.";
+        case IL_FIRMWARE_FAILED:
+            return status.intel.error == IL_RFKILL ? "Wi-Fi is blocked by the hardware switch." :
+                "Wi-Fi firmware initialization failed.";
         case IL_EEPROM_READY: return "Wi-Fi adapter found; connection support unavailable.";
         case IL_DEVICE_BUSY: return "Wi-Fi adapter is already active.";
         case IL_CLOCK_TIMEOUT:
@@ -33,6 +38,11 @@ const char* sys_wifi_status_text(void) {
 }
 const char* sys_wifi_scan(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (status.intel.eeprom.version) {
+        (void)iwlegacy_firmware_check(&status.intel);
+        status.generation++;
+        return sys_wifi_status_text();
+    }
     if (status.adapter.state != B43_CORE_FOUND && status.intel.state != IL_EEPROM_READY)
         return sys_wifi_status_text();
     return "Network scanning is not available yet.";

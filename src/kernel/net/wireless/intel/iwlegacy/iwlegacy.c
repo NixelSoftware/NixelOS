@@ -61,7 +61,10 @@ const char* iwlegacy_description(iwlegacy_state_t state) {
     case IL_ACCESS_FAILED: return "Intel 3945 register access failed.";
     case IL_CLOCK_TIMEOUT: return "Intel 3945 clock initialization timed out.";
     case IL_EEPROM_FAILED: return "Intel 3945 EEPROM read or validation failed.";
-    case IL_EEPROM_READY: return "Intel 3945 EEPROM ready; packet transport not ported.";
+    case IL_EEPROM_READY: return "Intel 3945 EEPROM ready; firmware not started.";
+    case IL_FIRMWARE_MISSING: return "Intel 3945 firmware missing: install iwlwifi-3945-2.ucode.";
+    case IL_FIRMWARE_FAILED: return "Intel 3945 firmware startup failed; see error code.";
+    case IL_FIRMWARE_READY: return "Intel 3945 runtime firmware verified; scan/association not ported.";
     default: return "No Intel 3945 adapter found.";
     }
 }

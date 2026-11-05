@@ -228,3 +228,41 @@ Useful checks while adding a driver:
 5. Test ARP and DHCP before higher protocols. A working link alone does not show that IPv4 routing or DNS works.
 
 The repository's `netdiag` app and kernel serial messages are the available built-in debugging aids. There is no general packet capture tool or automated hardware-driver test harness in the current tree.
+
+## Intel 3945 Wi-Fi firmware and security progress
+
+The native driver is in `src/kernel/net/wireless/intel/iwlegacy/`. It identifies
+Intel 3945BG/ABG PCI functions (`8086:4222` and `8086:4227`) independently of
+Ethernet, reads EEPROM/MAC and regulatory channel information, and exposes
+results through Settings and `netdev`.
+
+The first Intel Settings scan attempt now runs a firmware diagnostic. It reads
+`/lib/firmware/iwlwifi-3945-2.ucode`, falling back to
+`/lib/firmware/iwlwifi-3945-1.ucode` if the API-2 file cannot be read. No firmware
+is bundled. After validation it prepares coherent firmware DMA storage, a
+256-entry receive ring and five empty transmit queues, starts initialization
+firmware, verifies instruction SRAM, and transitions to verified runtime ALIVE.
+It then stops RX/TX, resets the device and disables PCI bus mastering. A
+successful diagnostic is cached until adapter detection runs again; it does not
+leave the NIC running or connected. `netdev` reports firmware version/errors.
+
+The receive component validates DMA indices and notification lengths, recycles
+buffers across ring wrap and requires DMA-idle acknowledgement before releasing
+posted memory. Unconfirmed DMA stop quarantines posted allocations until reboot;
+pre-activation failures free every allocation. These paths have host register
+and allocation-failure tests, not physical-card validation.
+
+`net/wireless/security/` reuses the existing wolfCrypt SHA-1/HMAC/PBKDF2 sources
+with an isolated allocation-free kernel configuration. It provides WPA2 PMK/PTK
+derivation and EAPOL-Key descriptor version 2 MIC generation/verification.
+TLS sessions are not used for Wi-Fi frames. The helpers are not yet wired into a
+four-way handshake, replay protection, key installation or CCMP data encryption.
+
+Command submission/completions, calibration, actual scan/association, data
+transmission and encryption integration still need to be ported. Intel 4965 is
+not supported by this port. Settings continues to report scanning unavailable.
+
+Run `make test-iwlegacy`, `make test-wifi-crypto`, and
+`make src/kernel/kernel.bin`. Component contracts and remaining work are in
+`src/kernel/net/wireless/intel/iwlegacy/README.md` and
+`src/kernel/net/wireless/security/README.md`.

@@ -65,4 +65,5 @@ int main(void) {
     iwlegacy_probe(&info); assert(info.state == IL_CLOCK_TIMEOUT && command == 1);
     assert(registers[CSR_INT_MASK/4] == 0 && (registers[CSR_RESET/4] & CSR_RESET_REG_FLAG_SW_RESET));
     puts("iwlegacy PCI: independent discovery, metadata, busy ownership and config cleanup passed");
+    return 0;
 }

@@ -175,4 +175,5 @@ int main(void) {
     assert(il3945_load_bsm(&io,firmware,sizeof firmware - 1,0x1000,0x2000) == IL_INVALID);
     assert(!model.reads && !model.writes);
     puts("iwlegacy 3945: IDs, firmware, EEPROM/regulatory data, APM, BSM and failure cleanup passed");
+    return 0;
 }

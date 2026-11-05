@@ -39,7 +39,7 @@ void il_prph_write(const il_io_t* io, uint32_t reg, uint32_t value) {
     io->write32(io->context, HBUS_TARG_PRPH_WADDR, (reg & 0xFFFF) | (3u << 24));
     io->write32(io->context, HBUS_TARG_PRPH_WDAT, value);
 }
-static int apm_start(const il_io_t* io) {
+int il3945_apm_start(const il_io_t* io) {
     int result;
     if ((result = il_update(io, CSR_GIO_CHICKEN_BITS, 0,
             CSR_GIO_CHICKEN_BITS_REG_BIT_DIS_L0S_EXIT_TIMER |
@@ -67,7 +67,7 @@ out:
     il_release(io);
     return result;
 }
-static int apm_stop(const il_io_t* io) {
+int il3945_apm_stop(const il_io_t* io) {
     int result = il_update(io, CSR_RESET, 0, CSR_RESET_REG_FLAG_STOP_MASTER);
     if (result) return result;
     result = il_poll(io, CSR_RESET, CSR_RESET_REG_FLAG_MASTER_DISABLED,
@@ -87,7 +87,7 @@ int il3945_inspect(const il_io_t* io, uint8_t bg_only, iwlegacy_info_t* info) {
     info->state = IL_ACCESS_FAILED;
     info->hardware_revision = io->read32(io->context, CSR_HW_REV);
     if (info->hardware_revision == 0xFFFFFFFFu) return info->error = IL_ACCESS;
-    int result = apm_start(io);
+    int result = il3945_apm_start(io);
     if (result) {
         info->state = result == IL_TIMEOUT ? IL_CLOCK_TIMEOUT : IL_ACCESS_FAILED;
         goto stopped;
@@ -119,7 +119,7 @@ int il3945_inspect(const il_io_t* io, uint8_t bg_only, iwlegacy_info_t* info) {
     info->rfkill = !(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW);
     info->state = IL_EEPROM_READY;
 stopped: {
-    int stopped_result = apm_stop(io);
+    int stopped_result = il3945_apm_stop(io);
     if (!result && stopped_result) {
         result = stopped_result;
         info->state = IL_ACCESS_FAILED;

@@ -25,7 +25,7 @@ bring-up port, not a working station driver. The Linux 4965 path is not ported.
   parser. Firmware buffers are caller-owned and must remain immutable.
 * BSM image upload/readback, initial-image DMA address/size programming, bounded
   bootstrap copy completion and enabling subsequent power-management reloads.
-  This component is tested but not invoked by the live probe.
+  This component is invoked by the explicit firmware diagnostic, not discovery.
 * HAL and shell integration: Settings uses vendor-neutral status text; `netdev`
   shows the 3945 variant, subsystem ID, initialization status and EEPROM/MAC,
   channel-count and radio-switch information when available.
@@ -37,28 +37,52 @@ is stopped and the original PCI command is restored. It remains in D0 rather
 than restoring a previous PCI power state. PCI inventory and BAR mapping use the
 kernel's existing firmware-assigned, 32-bit MMIO services.
 
-## Remaining integration
+## Firmware startup and transport components
 
-There is no file loader for `iwlwifi-3945-2.ucode` (fallback
-`iwlwifi-3945-1.ucode`) yet; no firmware is redistributed here. `il3945_load_bsm()`
-requires pinned coherent initial-code/data buffers with 32-bit DMA addresses,
-configured RX/TX queues and an exclusively owned, clocked NIC. It copies the
-bootstrap but does not release the embedded processor or handle ALIVE events.
-After an error the caller must reset/stop DMA before freeing firmware buffers.
+`rx.c` manages a coherent 256-entry receive ring with 254 posted 4 KiB buffers,
+the two-slot hardware gap, eight-entry producer alignment, bounded consumer
+processing, notification length validation and buffer recycling. The callback
+borrows a packet only until it returns. Completion indices outside the posted
+window are rejected; callers retain allocations if DMA stop is not acknowledged.
 
-RX/TX descriptor rings, command queue and completion dispatch, initialization
-ALIVE to runtime-firmware transition, calibration and temperature-based transmit
-power, scanning, authentication/association, encryption and 802.11/Ethernet
-bridging still need to be ported. EEPROM inspection does not establish physical
-card compatibility or that a network can be joined. Settings continues to report
-that scanning is unavailable.
+`session.c` configures the scheduler and five 256-entry TFD queues, starts
+bootstrap firmware, waits for initialization ALIVE, verifies instruction SRAM,
+programs runtime DMA pointers with the load bit last, and waits for/validates
+runtime ALIVE. Both waits are bounded and check RF-kill and firmware/hardware
+errors. This configures empty TX queues; command submission/completions and data
+transmission are not implemented.
+
+On the first Intel Settings scan attempt, `device.c` checks
+`/lib/firmware/iwlwifi-3945-2.ucode`, falling back to
+`/lib/firmware/iwlwifi-3945-1.ucode` if the API-2 file cannot be read. Firmware
+is not redistributed here. Invalid images fail validation before NIC startup.
+The driver allocates coherent physical memory using the kernel paging allocator,
+copies/pins the firmware images, brings the NIC through runtime ALIVE, then
+stops RX/TX and resets the device. PCI bus mastering is only enabled after the
+queues are configured. It is disabled again on cleanup.
+
+This is a firmware diagnostic stage, not a scan: no RXON/scan/association or
+frame-transmission command is issued. `netdev` reports the verified firmware
+version or a startup error, while Settings reports that scanning is unavailable.
+A successful result is cached until a new adapter probe; the NIC is stopped,
+not kept connected. Failed DMA-idle/master-stop acknowledgements quarantine
+posted allocations until reboot, rather than allowing DMA into freed RAM.
+Allocation and pre-activation failures release all allocated pages.
+
+Still required: command submission and completion dispatch, calibration and
+temperature-based transmit power, actual scanning, authentication/association,
+encryption/key installation and 802.11/Ethernet bridging. The shared
+`../../security` module supplies wolfCrypt-based WPA2 PMK,
+PTK and EAPOL MIC primitives, but these are not a four-way handshake. Intel 4965
+is still unported. Host tests do not establish physical-card compatibility.
 
 ## Validation
 
-Run `make test-iwlegacy`. The host register model exercises firmware parsing,
+Run `make test-iwlegacy`. The host register models and lifecycle tests exercise firmware parsing,
 regulatory data, APM/EEPROM sequencing, RF-kill polarity, indirect register
 routing, bootstrap upload/verification, bounded timeouts, cleanup, PCI matching
-and refusal to touch an existing owner. These tests do not transmit RF and do
+and refusal to touch an existing owner, RX wrap/recycling, ALIVE ordering,
+firmware-file failures, allocation rollback and DMA quarantine. These tests do not transmit RF and do
 not emulate a full Intel radio. Build `make src/kernel/kernel.bin` for the native
 32-bit freestanding integration check.
 

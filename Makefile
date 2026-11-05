@@ -119,7 +119,8 @@ KERNEL_C := \
   src/kernel/net/wireless/broadcom/b43/b43_firmware.c src/kernel/net/wireless/broadcom/b43/b43_boot.c src/kernel/hal/wifi.c \
   src/kernel/net/wireless/intel/iwlegacy/iwlegacy.c src/kernel/net/wireless/intel/iwlegacy/3945.c \
   src/kernel/net/wireless/intel/iwlegacy/firmware.c src/kernel/net/wireless/intel/iwlegacy/eeprom.c \
-  src/kernel/net/wireless/intel/iwlegacy/bsm.c \
+  src/kernel/net/wireless/intel/iwlegacy/bsm.c src/kernel/net/wireless/intel/iwlegacy/rx.c \
+  src/kernel/net/wireless/intel/iwlegacy/session.c src/kernel/net/wireless/intel/iwlegacy/device.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
@@ -456,8 +457,8 @@ src/system/shell/commands.o: src/kernel/hal/wifi.h src/kernel/net/wireless/broad
 src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: src/kernel/hal/wifi.h
 
 IWLEGACY_DIR := src/kernel/net/wireless/intel/iwlegacy
-IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c
-$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h
+IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c $(IWLEGACY_DIR)/rx.c $(IWLEGACY_DIR)/session.c
+$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h $(IWLEGACY_DIR)/rx.h $(IWLEGACY_DIR)/session.h $(IWLEGACY_DIR)/fh.h
 src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h
 .PHONY: test-iwlegacy
 test-iwlegacy:
@@ -465,6 +466,10 @@ test-iwlegacy:
 	/tmp/nixel-test-iwlegacy
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/pci_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-pci
 	/tmp/nixel-test-iwlegacy-pci
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/transport_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-transport
+	/tmp/nixel-test-iwlegacy-transport
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/device_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-device
+	/tmp/nixel-test-iwlegacy-device
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk
@@ -480,3 +485,21 @@ test-paging:
 # The generic C rule does not track included headers.
 src/kernel/paging.o src/kernel/syscall.o: src/kernel/paging.h src/system/user/sys_api.h
 src/apps/doom/compat/libc.o: src/system/user/sys_api.h
+
+# Reuse wolfCrypt SHA-1/HMAC/PBKDF2 with a kernel-only, allocation-free config.
+# Separate objects prevent the TLS client's settings/allocator from leaking in.
+WIFI_SECURITY_DIR := src/kernel/net/wireless/security
+WIFI_CRYPTO_VENDOR := src/system/libraries/tls/vendor/wolfssl
+WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha hmac hash pwdbased))
+WIFI_CRYPTO_FLAGS := -U__unix__ -U__linux__ -DWOLFSSL_USER_SETTINGS -I$(WIFI_SECURITY_DIR) -Isrc/system/libraries/tls/compat -I$(WIFI_CRYPTO_VENDOR) -fno-builtin -fno-stack-protector
+KERNEL_OBJ += $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_CRYPTO_OBJECTS)
+src/kernel/kernel.bin: $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_CRYPTO_OBJECTS)
+$(WIFI_SECURITY_DIR)/wpa2.o: CFLAGS += $(WIFI_CRYPTO_FLAGS)
+$(WIFI_SECURITY_DIR)/wpa2.o: $(WIFI_SECURITY_DIR)/wpa2.c $(WIFI_SECURITY_DIR)/wpa2.h $(WIFI_SECURITY_DIR)/user_settings.h
+$(WIFI_CRYPTO_OBJECTS): $(WIFI_SECURITY_DIR)/user_settings.h Makefile
+$(WIFI_SECURITY_DIR)/wolf_%.o: $(WIFI_CRYPTO_VENDOR)/wolfcrypt/src/%.c
+	$(CC) $(CFLAGS) $(WIFI_CRYPTO_FLAGS) -MMD -MP -c $< -o $@
+-include $(WIFI_CRYPTO_OBJECTS:.o=.d)
+.PHONY: test-wifi-crypto
+test-wifi-crypto:
+	CC="$(CC)" $(PYTHON) $(WIFI_SECURITY_DIR)/tests/test_wpa2.py
