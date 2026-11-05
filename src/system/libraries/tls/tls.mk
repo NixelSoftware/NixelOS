@@ -21,7 +21,7 @@ tls: $(TLS_DIR)/libnixeltls.a
 $(TLS_DIR)/libnixeltls.a: $(TLS_OBJECTS)
 	$(AR) rcs $@ $^
 clean-tls:
-	$(PYTHON) -c "from pathlib import Path; [p.unlink(missing_ok=True) for p in [$(foreach p,$(TLS_OBJECTS) $(TLS_OBJECTS:.o=.d) $(TLS_DIR)/libnixeltls.a,'$(p)',)]]"
+	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in [$(foreach p,$(TLS_OBJECTS) $(TLS_OBJECTS:.o=.d) $(TLS_DIR)/libnixeltls.a,'$(p)',)]]"
 
 .PHONY: tls-sources test-tls
 tls-sources:
