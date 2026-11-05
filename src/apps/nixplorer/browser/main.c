@@ -168,6 +168,23 @@ static int request_append(char* output, uint32_t capacity, uint32_t* length,
 }
 
 
+/* Retry transport failures once over HTTP. Keep the effective URL in sync
+ * so redirects and relative resources resolve against the fallback scheme. */
+static int fallback_to_http(char *url, unsigned capacity, int result) {
+    if (!browser_url_secure(url) ||
+        (result != BROWSER_HTTP_CONNECT && result != BROWSER_HTTP_TIMEOUT &&
+         result != BROWSER_HTTP_TLS && result != BROWSER_HTTP_TLS_PLATFORM)) return 0;
+    char host[BROWSER_HTTP_HOST_MAX], path[BROWSER_HTTP_PATH_MAX];
+    char fallback[MAX_URL_LEN];
+    uint32_t used = 0;
+    if (!browser_url_parse(url, host, sizeof(host), path, sizeof(path)) ||
+        !request_append(fallback, sizeof(fallback), &used, "http://") ||
+        !request_append(fallback, sizeof(fallback), &used, host) ||
+        !request_append(fallback, sizeof(fallback), &used, path) || used >= capacity) return 0;
+    fallback[used] = 0;
+    return copy_string(url, capacity, fallback);
+}
+
 static int fetch_resource(const char* base_url, const char* resource, const char* accept,
                            uint8_t* out_buf, uint32_t max_len, uint32_t* out_len) {
     char host[MAX_URL_LEN], path[MAX_URL_LEN], target[MAX_URL_LEN];
@@ -177,8 +194,12 @@ static int fetch_resource(const char* base_url, const char* resource, const char
         if (!browser_url_parse(target, host, sizeof(host), path, sizeof(path))) return 0;
         resource_body_len = 0;
         browser_http_response_t response;
-        if (browser_http_request_scheme(browser_url_secure(target), host, path, accept, 0, 0, 0,
-                resource_body_buf, sizeof(resource_body_buf), &resource_body_len, &response) != 1) return 0;
+        int result = browser_http_request_scheme(browser_url_secure(target), host, path, accept, 0, 0, 0,
+                resource_body_buf, sizeof(resource_body_buf), &resource_body_len, &response);
+        if (fallback_to_http(target, sizeof(target), result))
+            result = browser_http_request_scheme(0, host, path, accept, 0, 0, 0,
+                resource_body_buf, sizeof(resource_body_buf), &resource_body_len, &response);
+        if (result != 1) return 0;
         int status = (int)response.status;
         if (status >= 300 && status < 400) {
             if (redirect == MAX_REDIRECTS || !response.location[0] ||
@@ -1032,6 +1053,12 @@ static void browser_fetch(void) {
 
         uint8_t was_post = request_post;
         int status = fetch_http_document(current_url, host, path);
+        if (fallback_to_http(current_url, sizeof(current_url), status)) {
+            copy_string(url_input, sizeof(url_input), current_url);
+            url_cursor = 0;
+            while (url_input[url_cursor]) url_cursor++;
+            status = fetch_http_document(current_url, host, path);
+        }
         request_post = 0;
         if (status < 0) {
             set_status(status == BROWSER_HTTP_TLS_PLATFORM ? "HTTPS unavailable: hardware RNG or UTC clock required" :

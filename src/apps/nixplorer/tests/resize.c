@@ -22,6 +22,22 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
     assert(0 && "resize must not fetch resources"); return -1;
 }
 int main(void) {
+    char fallback[512] = "https://example.com/path?q=1";
+    assert(fallback_to_http(fallback, sizeof(fallback), BROWSER_HTTP_TLS));
+    assert(!strcmp(fallback, "http://example.com/path?q=1"));
+    assert(!fallback_to_http(fallback, sizeof(fallback), BROWSER_HTTP_CONNECT));
+    const int failures[] = { BROWSER_HTTP_CONNECT, BROWSER_HTTP_TIMEOUT,
+        BROWSER_HTTP_TLS, BROWSER_HTTP_TLS_PLATFORM };
+    for (unsigned i = 0; i < sizeof(failures) / sizeof(failures[0]); i++) {
+        strcpy(fallback, "example.com?q=1");
+        assert(fallback_to_http(fallback, sizeof(fallback), failures[i]));
+        assert(!strcmp(fallback, "http://example.com/?q=1"));
+    }
+    strcpy(fallback, "https://example.com/");
+    assert(!fallback_to_http(fallback, sizeof(fallback), 404));
+    assert(!fallback_to_http(fallback, sizeof(fallback), BROWSER_HTTP_MEMORY));
+    assert(!fallback_to_http(fallback, 8, BROWSER_HTTP_TLS));
+    assert(!strcmp(fallback, "https://example.com/"));
     const char *html = "<body><p>one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen</p>"
         "<form><input name='q' value='original'><input type='checkbox' name='enabled'></form>"
         "<img src='/cached.png'></body>";
