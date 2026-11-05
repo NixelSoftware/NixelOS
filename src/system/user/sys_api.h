@@ -69,6 +69,7 @@ enum {
     SYS_FS_DELETE = 54, /* EBX: path; filesystem permissions apply */
     SYS_PCI_DEVICE_INFO = 49, /* EBX: index, ECX: writable user_pci_device_t* */
     SYS_TASK_LIST = 55,   /* EBX: writable user_task_info_t*, ECX: capacity */
+    SYS_UTC_SECONDS = 57, /* signed UTC Unix seconds; -1 outside the supported range */
     SYS_TASK_KILL = 56    /* EBX: PID to kill */
 };
 
@@ -516,6 +517,13 @@ typedef struct {
     uint8_t month;
     uint16_t year;
 } user_rtc_time_t;
+
+static inline int32_t sys_utc_seconds(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"((uint32_t)SYS_UTC_SECONDS) : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
 
 static inline int32_t sys_rtc_time(user_rtc_time_t* out) {
     int32_t result;

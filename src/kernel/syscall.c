@@ -874,6 +874,11 @@ static void syscall_dispatch_impl(registers_t* regs) {
             power_reboot();
             regs->eax = (uint32_t)-1;
             return;
+        case SYS_UTC_SECONDS: {
+            uint64_t now = rtc_get_epoch();
+            regs->eax = now <= 2147483647u ? (uint32_t)now : (uint32_t)-1;
+            return;
+        }
         case SYS_RTC_TIME: {
             if (!user_writable(regs->ebx, sizeof(rtc_time_t))) {
                 regs->eax = (uint32_t)-1;

@@ -29,6 +29,14 @@ retained in `src/system/libraries/tls/vendor/wolfssl/`.
 
 ---
 
+## Browser Trust Roots
+
+Nixplorer embeds Mozilla CA certificates from the `ca-certificates` package.
+The pinned bundle, source manifest, and MPL-2.0/package notices are retained
+in `src/apps/nixplorer/engine/platform/certificates/`.
+
+---
+
 ## Browser Engine
 
 Thanks to **Dajo Frey**, creator of [Netzhaut](https://github.com/dajofrey/Netzhaut),

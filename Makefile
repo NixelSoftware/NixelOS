@@ -13,6 +13,8 @@ QEMU_DRIVE ?= -drive file=os.img,format=raw,index=0,media=disk
 QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 512M
+# The browser uses RDRAND for TLS entropy; expose it in the default VM CPU.
+QEMU_CPU ?= max
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000,hostfwd=tcp::2323-:2323
 QEMU_DISPLAY ?= sdl
@@ -220,6 +222,9 @@ NIXPLORER_DIR := src/apps/nixplorer
 BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/net/http.c \
              $(NIXPLORER_DIR)/engine/net/response.c \
+             $(NIXPLORER_DIR)/engine/net/url.c \
+             $(NIXPLORER_DIR)/engine/platform/tls.c \
+             $(NIXPLORER_DIR)/engine/platform/tls_heap.c \
              $(NIXPLORER_DIR)/engine/platform/tcp.c \
              $(NIXPLORER_DIR)/engine/parser/html.c \
              $(NIXPLORER_DIR)/engine/font/font.c \
@@ -231,15 +236,19 @@ BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/layout/grid.c \
              $(NIXPLORER_DIR)/engine/parser/css_grid.c \
              $(NIXPLORER_DIR)/engine/parser/css_color.c
-BROWSER_OBJ := $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
+BROWSER_OBJ := $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
 BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
 $(NIXPLORER_DIR)/engine/parser/html.o: $(NIXPLORER_DIR)/engine/parser/entities.inc
 $(NIXPLORER_DIR)/engine/parser/css_color.o: $(NIXPLORER_DIR)/engine/parser/colors.inc
 src/system/graphics/image/png.o: $(NIXPLORER_DIR)/engine/paint/png.c $(NIXPLORER_DIR)/engine/paint/png.h
 
-browser.bin: Makefile $(BROWSER_OBJ)
-	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(NIXPLORER_DIR)/browser/browser.tmp
+$(BROWSER_C:.c=.o): src/system/libraries/tls/tls.h src/system/user/sys_api.h
+$(NIXPLORER_DIR)/engine/platform/trust.o: $(NIXPLORER_DIR)/engine/platform/trust.S $(NIXPLORER_DIR)/engine/platform/certificates/ca-bundle.pem
+	$(CC) $(CFLAGS) -c $< -o $@
+
+browser.bin: Makefile $(NIXPLORER_DIR)/browser/app.ld $(BROWSER_OBJ) src/system/libraries/tls/libnixeltls.a
+	$(LD) $(LDFLAGS) --omagic -T $(NIXPLORER_DIR)/browser/app.ld $(filter %.o,$^) src/system/libraries/tls/libnixeltls.a -o $(NIXPLORER_DIR)/browser/browser.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(NIXPLORER_DIR)/browser/browser.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(NIXPLORER_DIR)/browser/browser.tmp').unlink(missing_ok=True)"
 
@@ -301,7 +310,7 @@ os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_
 	$(MAKE) clean-build
 
 run: os.img
-	$(QEMU) $(QEMU_ACCEL_FLAGS) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=localtime $(QEMU_USB) $(QEMU_EXTRA)
+	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch'.split()]]"
@@ -435,3 +444,7 @@ src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphic
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk
+
+.PHONY: test-browser-https
+test-browser-https: browser.bin
+	$(PYTHON) src/apps/nixplorer/tests/run_tests.py

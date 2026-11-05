@@ -12,6 +12,7 @@ typedef struct {
     uint16_t year;
 } rtc_time_t;
 
+uint64_t rtc_get_epoch(void); /* UTC Unix seconds, independent of display timezone */
 void rtc_get_time(rtc_time_t* out);
 void rtc_format_time_hm(char out[6]); /* HH:MM */
 

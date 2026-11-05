@@ -1,6 +1,7 @@
 #include "http.h"
 #include "response.h"
 #include "../platform/tcp.h"
+#include "../platform/tls.h"
 
 #define HTTP_TIMEOUT_TICKS 1200u
 #define HTTP_STALLED_POLLS 1000000u
@@ -51,7 +52,7 @@ static int ipv4(const char *p, unsigned *address) {
     }
     *address = value; return 1;
 }
-int browser_http_request(const char *host, const char *path, const char *accept,
+int browser_http_request_scheme(unsigned secure, const char *host, const char *path, const char *accept,
                            unsigned post, const void *body, unsigned body_length,
                            void *output, unsigned capacity, unsigned *length,
                            browser_http_response_t *response) {
@@ -74,10 +75,13 @@ int browser_http_request(const char *host, const char *path, const char *accept,
                  !number(request, sizeof(request), &used, body_length) || !append(request, sizeof(request), &used, "\r\n"))) return BROWSER_HTTP_LIMIT;
     if (!append(request, sizeof(request), &used, "\r\n") || body_length > sizeof(request) - used) return BROWSER_HTTP_LIMIT;
     for (unsigned i = 0; i < body_length; i++) request[used++] = ((const char*)body)[i];
+    if (secure && browser_tls_prepare()) return BROWSER_HTTP_TLS_PLATFORM;
+    nixel_tls_client *tls = 0;
     unsigned address;
     if (!ipv4(host, &address) && !nix_tcp_resolve(host, &address)) return BROWSER_HTTP_DNS;
-    int handle = nix_tcp_connect(address, 80);
+    int handle = nix_tcp_connect(address, secure ? 443 : 80);
     if (handle < 0) return BROWSER_HTTP_CONNECT;
+    unsigned socket_handle = (unsigned)handle;
     unsigned started = nix_tcp_ticks(), polls = 0, sent = 0;
     int result = BROWSER_HTTP_CONNECT;
     for (;;) {
@@ -87,13 +91,35 @@ int browser_http_request(const char *host, const char *path, const char *accept,
         if (state == NIX_TCP_ESTABLISHED) break;
         if (++polls > HTTP_STALLED_POLLS || (unsigned)(nix_tcp_ticks() - started) > HTTP_TIMEOUT_TICKS) { result = BROWSER_HTTP_TIMEOUT; goto done; }
     }
+    if (secure) {
+        tls = browser_tls_create(host, &socket_handle);
+        if (!tls) { result = BROWSER_HTTP_TLS; goto done; }
+        started = nix_tcp_ticks(); polls = 0;
+        for (;;) {
+            int handshake = nixel_tls_handshake(tls);
+            if (handshake == 1) break;
+            if (handshake != NIXEL_TLS_AGAIN) { result = BROWSER_HTTP_TLS; goto done; }
+            if (++polls > HTTP_STALLED_POLLS || (unsigned)(nix_tcp_ticks() - started) > HTTP_TIMEOUT_TICKS) {
+                result = BROWSER_HTTP_TIMEOUT; goto done;
+            }
+            nix_tcp_yield();
+        }
+    }
     started = nix_tcp_ticks(); polls = 0;
     while (sent < used) {
         nix_tcp_yield();
         if (nix_tcp_state((unsigned)handle) != NIX_TCP_ESTABLISHED) goto done;
         unsigned n = used - sent;
         if (n > HTTP_SEND_CHUNK) n = HTTP_SEND_CHUNK;
-        if (nix_tcp_send((unsigned)handle, request + sent, n) == 1) { sent += n; started = nix_tcp_ticks(); }
+        if (tls) {
+            int written = nixel_tls_write(tls, request + sent, n);
+            if (written != NIXEL_TLS_AGAIN) {
+                if (written <= 0 || (unsigned)written > n) { result = BROWSER_HTTP_TLS; goto done; }
+                sent += (unsigned)written; started = nix_tcp_ticks();
+            }
+        } else if (nix_tcp_send((unsigned)handle, request + sent, n) == 1) {
+            sent += n; started = nix_tcp_ticks();
+        }
         if (++polls > HTTP_STALLED_POLLS || (unsigned)(nix_tcp_ticks() - started) > HTTP_TIMEOUT_TICKS) { result = BROWSER_HTTP_TIMEOUT; goto done; }
     }
     used = 0; started = nix_tcp_ticks(); polls = 0;
@@ -102,14 +128,21 @@ int browser_http_request(const char *host, const char *path, const char *accept,
         if (!room) { result = BROWSER_HTTP_LIMIT; goto done; }
         if (room > HTTP_READ_CHUNK) room = HTTP_READ_CHUNK;
         nix_tcp_yield();
-        int received = nix_tcp_read((unsigned)handle, raw_response + used, room);
+        int tls_eof = 0;
+        int received;
+        if (tls) {
+            received = nixel_tls_read(tls, raw_response + used, room);
+            if (received == NIXEL_TLS_AGAIN) received = 0;
+            else if (received == 0) tls_eof = 1;
+            else if (received < 0) { result = BROWSER_HTTP_TLS; goto done; }
+        } else received = nix_tcp_read((unsigned)handle, raw_response + used, room);
         if (received < 0 || (unsigned)received > room) goto done;
         used += (unsigned)received;
         if (received) started = nix_tcp_ticks();
         int state = nix_tcp_state((unsigned)handle);
         if (state < 0) goto done;
         /* Drain queued bytes after FIN before treating an unframed body as EOF. */
-        int eof = !received && (state == NIX_TCP_CLOSE_WAIT || state == NIX_TCP_CLOSED);
+        int eof = tls ? tls_eof : !received && (state == NIX_TCP_CLOSE_WAIT || state == NIX_TCP_CLOSED);
         unsigned offset;
         result = browser_http_parse_response(raw_response, used, eof, response, &offset);
         if (result < 0) goto done;
@@ -122,6 +155,19 @@ int browser_http_request(const char *host, const char *path, const char *accept,
         if (++polls > HTTP_STALLED_POLLS || (unsigned)(nix_tcp_ticks() - started) > HTTP_TIMEOUT_TICKS) { result = BROWSER_HTTP_TIMEOUT; goto done; }
     }
 done:
+    if (tls) {
+        /* Best effort close_notify; tcp_close drains bytes already queued. */
+        if (result == 1) (void)nixel_tls_close(tls);
+        nixel_tls_client_destroy(tls);
+    }
     nix_tcp_close((unsigned)handle);
     return result;
+}
+
+int browser_http_request(const char *host, const char *path, const char *accept,
+                           unsigned post, const void *body, unsigned body_length,
+                           void *output, unsigned capacity, unsigned *length,
+                           browser_http_response_t *response) {
+    return browser_http_request_scheme(0, host, path, accept, post, body, body_length,
+        output, capacity, length, response);
 }
