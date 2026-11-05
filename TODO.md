@@ -9,4 +9,4 @@
 - [x] **elyas-code** - Abstractify kernel tasks
 - [ ] **elyas-code** - Create package manager
 - [x] **elyas-code** - Attempt to implement SSL (ong bro imma kms)
-- [ ] **elyas-code** - Allow apps to use a dynamic amount of memory (pmo)
+- [x] **elyas-code** - Allow apps to use a dynamic amount of memory (pmo)

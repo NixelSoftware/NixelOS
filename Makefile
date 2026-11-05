@@ -448,3 +448,11 @@ include src/system/libraries/tls/tls.mk
 .PHONY: test-browser-https
 test-browser-https: browser.bin
 	$(PYTHON) src/apps/nixplorer/tests/run_tests.py
+
+.PHONY: test-paging
+test-paging:
+	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_paging.py
+
+# The generic C rule does not track included headers.
+src/kernel/paging.o src/kernel/syscall.o: src/kernel/paging.h src/system/user/sys_api.h
+src/apps/doom/compat/libc.o: src/system/user/sys_api.h

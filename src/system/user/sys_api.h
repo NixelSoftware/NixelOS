@@ -70,8 +70,26 @@ enum {
     SYS_PCI_DEVICE_INFO = 49, /* EBX: index, ECX: writable user_pci_device_t* */
     SYS_TASK_LIST = 55,   /* EBX: writable user_task_info_t*, ECX: capacity */
     SYS_UTC_SECONDS = 57, /* signed UTC Unix seconds; -1 outside the supported range */
+    SYS_MEMORY_ALLOC = 58, /* EBX: bytes; returns zero-filled page-aligned pointer or null */
+    SYS_MEMORY_FREE = 59, /* EBX: original allocation base; returns 0 or -1 */
     SYS_TASK_KILL = 56    /* EBX: PID to kill */
 };
+
+/* Allocations are isolated per app and reclaimed automatically on app teardown.
+ * Sizes round up to 4 KiB. Free requires the returned base, not an interior pointer.
+ * These mappings can be passed to all syscalls that accept user buffers. */
+static inline void* sys_memory_alloc(uint32_t bytes) {
+    uint32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_MEMORY_ALLOC), "b"(bytes) : "memory", "cc");
+    return (void*)result;
+}
+static inline int32_t sys_memory_free(void* allocation) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_MEMORY_FREE), "b"(allocation) : "memory", "cc");
+    return result;
+}
 
 static inline int32_t sys_fs_getcwd(char* out, uint32_t capacity) {
     int32_t result;

@@ -204,8 +204,10 @@ void syscall_forget_address_space(uint32_t directory_address) {
 }
 
 static int user_readable(uint32_t address, uint32_t length) {
-    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
-        length > APP_VIRTUAL_LIMIT - address) return 0;
+    if (!length || !((address >= APP_VIRTUAL_BASE && address < APP_VIRTUAL_LIMIT &&
+        length <= APP_VIRTUAL_LIMIT - address) ||
+        (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT &&
+        length <= APP_HEAP_LIMIT - address))) return 0;
 
     uint32_t* directory = (uint32_t*)paging_current_directory();
     uint32_t end = address + length - 1u;
@@ -222,8 +224,10 @@ static int user_readable(uint32_t address, uint32_t length) {
 }
 
 static int user_writable(uint32_t address, uint32_t length) {
-    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
-        length > APP_VIRTUAL_LIMIT - address) return 0;
+    if (!length || !((address >= APP_VIRTUAL_BASE && address < APP_VIRTUAL_LIMIT &&
+        length <= APP_VIRTUAL_LIMIT - address) ||
+        (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT &&
+        length <= APP_HEAP_LIMIT - address))) return 0;
 
     uint32_t* directory = (uint32_t*)paging_current_directory();
     uint32_t end = address + length - 1u;
@@ -304,6 +308,12 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = 0;
             return;
         }
+        case SYS_MEMORY_ALLOC:
+            regs->eax = paging_user_alloc(regs->ebx);
+            return;
+        case SYS_MEMORY_FREE:
+            regs->eax = (uint32_t)paging_user_free(regs->ebx);
+            return;
         case SYS_MEMORY_INFO: {
             if (!user_writable(regs->ebx, sizeof(user_memory_info_t))) {
                 regs->eax = (uint32_t)-1;

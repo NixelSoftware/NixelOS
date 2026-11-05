@@ -3,7 +3,8 @@
 
 /* The first 16 MiB contains fixed kernel buffers and the boot stack.
  * Allocate only complete pages advertised as usable by BIOS E820.
- * The final physical page is excluded to keep byte counts in the 32-bit ABI.
+ * RAM overlapping the private virtual heap window is reserved: kernel
+ * physical accesses use identity mappings. PCI/MMIO above 2 GiB stays mapped.
  */
 #define PAGE_DIRECTORY_ENTRIES 1024u
 #define PAGE_TABLE_ENTRIES     1024u
@@ -16,6 +17,8 @@
 #define PAGE_WRITABLE          0x002u
 #define PAGE_USER              0x004u
 #define PAGE_SIZE_4M           0x080u
+#define PAGE_ALLOC_FIRST       0x200u
+#define PAGE_ALLOC_LAST        0x400u
 #define PAGE_ADDRESS_MASK      0xFFFFF000u
 #define CR0_PG                 0x80000000u
 #define CR4_PSE                0x00000010u
@@ -88,9 +91,14 @@ static void paging_detect_memory(const bios_memory_entry_t* entries, uint32_t co
         }
         if (usable && !reserved) detected_total += PAGE_SIZE;
     }
-    for (uint32_t i = 0; i < FRAME_COUNT; ++i)
-        if (frame_is_usable(i)) ++pool_pages;
-    detected_total += pool_pages * PAGE_SIZE;
+    for (uint32_t i = 0; i < FRAME_COUNT; ++i) {
+        if (!frame_is_usable(i)) continue;
+        detected_total += PAGE_SIZE;
+        uint32_t physical = FRAME_POOL_BASE + i * PAGE_SIZE;
+        if (physical >= APP_HEAP_BASE && physical < APP_HEAP_LIMIT)
+            usable_bitmap[i >> 3] &= (uint8_t)~(1u << (i & 7u));
+        else ++pool_pages;
+    }
     next_frame = 0;
 }
 
@@ -230,6 +238,8 @@ int paging_address_space_create(address_space_t* space) {
     for (uint32_t i = 0; i < app_page_count; i++)
         space->app_page_table[i] = 0;
     space->directory[app_directory_index] = table_frame | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    for (uint32_t i = APP_HEAP_BASE >> 22; i < APP_HEAP_LIMIT >> 22; ++i)
+        space->directory[i] = 0;
     return 0;
 }
 
@@ -262,10 +272,99 @@ void paging_address_space_destroy(address_space_t* space) {
         if (entry & PAGE_PRESENT) paging_frame_free(entry & PAGE_ADDRESS_MASK);
     }
 
+    for (uint32_t d = APP_HEAP_BASE >> 22; d < APP_HEAP_LIMIT >> 22; ++d) {
+        if (!(space->directory[d] & PAGE_PRESENT)) continue;
+        uint32_t* table = (uint32_t*)(space->directory[d] & PAGE_ADDRESS_MASK);
+        for (uint32_t i = 0; i < PAGE_TABLE_ENTRIES; ++i)
+            if (table[i] & PAGE_PRESENT) paging_frame_free(table[i] & PAGE_ADDRESS_MASK);
+        paging_frame_free((uint32_t)table);
+    }
     paging_frame_free((uint32_t)space->app_page_table);
     paging_frame_free((uint32_t)space->directory);
     space->app_page_table = 0;
     space->directory = 0;
+}
+
+/* All page-table frames remain accessible through the supervisor identity map. */
+static uint32_t* heap_entry(uint32_t* directory, uint32_t address, int create) {
+    uint32_t d = address >> 22;
+    if (!(directory[d] & PAGE_PRESENT)) {
+        if (!create) return 0;
+        uint32_t frame = paging_frame_alloc();
+        if (!frame) return 0;
+        directory[d] = frame | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    }
+    uint32_t* table = (uint32_t*)(directory[d] & PAGE_ADDRESS_MASK);
+    return &table[(address >> 12) & 1023u];
+}
+
+static void heap_release(uint32_t* directory, uint32_t address, uint32_t pages) {
+    for (uint32_t i = 0; i < pages; ++i) {
+        uint32_t* entry = heap_entry(directory, address + i * PAGE_SIZE, 0);
+        if (entry && (*entry & PAGE_PRESENT)) {
+            paging_frame_free(*entry & PAGE_ADDRESS_MASK);
+            *entry = 0;
+        }
+    }
+    /* Reclaim empty tables too, including a table created before OOM. */
+    for (uint32_t d = APP_HEAP_BASE >> 22; d < APP_HEAP_LIMIT >> 22; ++d) {
+        if (!(directory[d] & PAGE_PRESENT)) continue;
+        uint32_t* table = (uint32_t*)(directory[d] & PAGE_ADDRESS_MASK);
+        uint32_t i = 0;
+        while (i < PAGE_TABLE_ENTRIES && !table[i]) ++i;
+        if (i == PAGE_TABLE_ENTRIES) {
+            directory[d] = 0;
+            paging_frame_free((uint32_t)table);
+        }
+    }
+    paging_activate_directory((uint32_t)directory);
+}
+
+uint32_t paging_user_alloc(uint32_t bytes) {
+    MUTEX_GUARD(kernel_mutex);
+    if (!bytes || bytes > APP_HEAP_LIMIT - APP_HEAP_BASE ||
+        active_directory == (uint32_t)page_directory) return 0;
+    uint32_t pages = (bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
+    uint32_t* directory = (uint32_t*)active_directory;
+    uint32_t run = 0, start = APP_HEAP_BASE;
+    for (uint32_t address = APP_HEAP_BASE; address < APP_HEAP_LIMIT; address += PAGE_SIZE) {
+        uint32_t* entry = heap_entry(directory, address, 0);
+        if (entry && (*entry & PAGE_PRESENT)) { run = 0; continue; }
+        if (!run) start = address;
+        if (++run != pages) continue;
+        for (uint32_t i = 0; i < pages; ++i) {
+            uint32_t* target = heap_entry(directory, start + i * PAGE_SIZE, 1);
+            uint32_t frame = target ? paging_frame_alloc() : 0;
+            if (!frame) { heap_release(directory, start, i); return 0; }
+            *target = frame | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER |
+                (i == 0 ? PAGE_ALLOC_FIRST : 0) |
+                (i + 1 == pages ? PAGE_ALLOC_LAST : 0);
+        }
+        paging_activate_directory((uint32_t)directory);
+        return start;
+    }
+    return 0;
+}
+
+int paging_user_free(uint32_t address) {
+    MUTEX_GUARD(kernel_mutex);
+    if (address < APP_HEAP_BASE || address >= APP_HEAP_LIMIT ||
+        (address & (PAGE_SIZE - 1u)) || active_directory == (uint32_t)page_directory)
+        return -1;
+    uint32_t* directory = (uint32_t*)active_directory;
+    uint32_t* entry = heap_entry(directory, address, 0);
+    if (!entry || !(*entry & PAGE_ALLOC_FIRST)) return -1;
+    uint32_t pages = 0;
+    for (uint32_t current = address; current < APP_HEAP_LIMIT; current += PAGE_SIZE) {
+        entry = heap_entry(directory, current, 0);
+        if (!entry || !(*entry & PAGE_PRESENT)) return -1;
+        ++pages;
+        if (*entry & PAGE_ALLOC_LAST) {
+            heap_release(directory, address, pages);
+            return 0;
+        }
+    }
+    return -1;
 }
 
 void paging_activate(address_space_t* space) {
