@@ -8,6 +8,7 @@
 #include "../../../kernel/hal/video.h"
 #include "../../../kernel/hal/audio.h"
 #include "../../../kernel/hal/net.h"
+#include "../../../kernel/hal/wifi.h"
 #include "../../../kernel/task.h"
 #include "../../../kernel/mutex.h"
 
@@ -156,7 +157,7 @@ static void draw(Window* win) {
     (void)win;
     display_fill_rect(window.x + 2, window.y + 23, window.w - 4, window.h - 25, COLOR_SURFACE);
     button(16, 36, 104, "Display", tab == 0);
-    button(128, 36, 104, "Network", tab == 1);
+    button(128, 36, 104, "Network", tab == 1 || tab == 4);
     button(240, 36, 104, "Sound", tab == 2);
     button(352, 36, 108, "Time", tab == 3);
     if (tab == 0) {
@@ -191,6 +192,32 @@ static void draw(Window* win) {
         button(20, 276, 140, "Enable", 0); button(172, 276, 140, "Disable", 0);
         button(324, 276, 136, "Renew DHCP", 0);
         button(20, 310, 200, "Apply manual settings", 0);
+        button(232, 310, 228, "Wi-Fi settings", 0);
+    } else if (tab == 4) {
+        wifi_status_t wifi; sys_wifi_get_status(&wifi);
+        text(20, 88, "Wi-Fi / Broadcom b43", COLOR_TEXT_PRIMARY);
+        text(20, 120, sys_wifi_status_text(), COLOR_TEXT_MUTED);
+        if (wifi.adapter.vendor) {
+            char buf[48], *p;
+            text(20, 156, "PCI device", COLOR_TEXT_MUTED);
+            /* IDs are hexadecimal, as printed on PCI inventories. */
+            const char* hex = "0123456789ABCDEF";
+            p = buf;
+            for (int i = 3; i >= 0; i--) *p++ = hex[(wifi.adapter.vendor >> (i*4)) & 15];
+            *p++ = ':';
+            for (int i = 3; i >= 0; i--) *p++ = hex[(wifi.adapter.device >> (i*4)) & 15];
+            *p = 0; text(180, 156, buf, COLOR_TEXT_PRIMARY);
+            if (wifi.adapter.state == B43_CORE_FOUND || wifi.adapter.state == B43_LEGACY) {
+                number(buf, wifi.adapter.core_revision);
+                text(20, 184, "Wireless core revision", COLOR_TEXT_MUTED);
+                text(240, 184, buf, COLOR_TEXT_PRIMARY);
+            }
+        }
+        text(20, 220, "No wireless connection", COLOR_TEXT_PRIMARY);
+        text(20, 244, "Networks appear when radio support is available.", COLOR_TEXT_MUTED);
+        button(20, 276, 212, "Detect adapter", 0);
+        button(244, 276, 216, "Scan networks", 0);
+        button(20, 310, 212, "Wired settings", 0);
     } else if (tab == 3) {
         text(20, 82, time_sync_status(), COLOR_TEXT_PRIMARY);
         button(20,104,280,time_sync_enabled() ? "Automatic sync: enabled" : "Automatic sync: disabled",time_sync_enabled());
@@ -223,7 +250,12 @@ static void draw(Window* win) {
 }
 static void network_worker(void* arg) {
     (void)arg;
-    if (network_action == 1) {
+    if (network_action == 4) sys_wifi_probe();
+    else if (network_action == 5) {
+        const char* result = sys_wifi_scan();
+        MUTEX_GUARD(kernel_mutex);
+        set_message(result);
+    } else if (network_action == 1) {
         if (!sys_net_is_ready() && sys_net_init(0)) sys_net_initialize_stack();
         if (sys_net_is_ready()) sys_net_configure_address();
     } else if (network_action == 2) sys_net_shutdown();
@@ -252,12 +284,22 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
         for (int i = 0; i < 3; i++) if (hit(x,y,158,144 + i * 36,302)) {
             field = i; replace_field = 1;
         }
+        if (hit(x,y,232,310,228)) { tab = 4; field = -1; }
         if (hit(x,y,20,310,200)) apply_manual();
         int action = hit(x,y,20,276,140) ? 1 : hit(x,y,172,276,140) ? 2 : hit(x,y,324,276,136) ? 3 : 0;
         if (action) {
             network_action = action; busy = 1;
             if (task_create(network_worker, 0, "settings-net") < 0) {
                 busy = 0; set_message("Unable to start network task.");
+            }
+        }
+    } else if (tab == 4 && !busy) {
+        if (hit(x,y,20,310,212)) { tab = 1; load_manual(); }
+        int action = hit(x,y,20,276,212) ? 4 : hit(x,y,244,276,216) ? 5 : 0;
+        if (action) {
+            network_action = action; busy = 1;
+            if (task_create(network_worker, 0, "settings-wifi") < 0) {
+                busy = 0; set_message("Unable to start Wi-Fi task.");
             }
         }
     } else if (tab == 3) {
@@ -285,7 +327,7 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     request_redraw();
 }
 void settings_open(int initial_tab) {
-    tab = initial_tab >= 0 && initial_tab < 4 ? initial_tab : 0;
+    tab = initial_tab >= 0 && initial_tab < 5 ? initial_tab : 0;
     if (!window.title) {
         window = (Window){40, 50, 480, 390, "Settings", 1, 1, draw, key, mouse};
     }

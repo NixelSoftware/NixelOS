@@ -22,6 +22,7 @@
 #include "../../icons/network.h"
 #include "../../icons/sound.h"
 #include "../../../kernel/hal/net.h"
+#include "../../../kernel/hal/wifi.h"
 
 static Window* windows[WM_MAX_WINDOWS];
 static uint32_t window_directories[WM_MAX_WINDOWS];
@@ -475,7 +476,43 @@ uint8_t wm_render_drag(void) {
 }
 
 
-static int volume_open, volume_drag, volume_busy;
+static int volume_open, volume_drag, volume_busy, network_open;
+#define NETWORK_X (SCREEN_WIDTH - 386)
+#define NETWORK_Y (WM_TASKBAR_Y - 166)
+static void network_draw(void) {
+    if (!network_open) return;
+    int x = NETWORK_X, y = NETWORK_Y;
+    wm_api->graphics.fill_rect(x, y, 380, 160, COLOR_SURFACE);
+    wm_api->graphics.draw_string(x + 12, y + 12, "Network", COLOR_TEXT_PRIMARY);
+    wm_api->graphics.draw_string(x + 12, y + 38,
+        sys_net_is_ready() ? "Wired: connected" : "Wired: disconnected", COLOR_TEXT_MUTED);
+    wifi_status_t wifi; sys_wifi_get_status(&wifi);
+    wm_api->graphics.draw_string(x + 12, y + 64,
+        wifi.adapter.vendor ? "Wi-Fi: adapter detected, unavailable" : "Wi-Fi: no compatible adapter", COLOR_TEXT_MUTED);
+    wm_api->graphics.draw_button(x + 12, y + 98, 170, 36, "Wi-Fi settings", 0);
+    wm_api->graphics.draw_button(x + 194, y + 98, 170, 36, "Wired settings", 0);
+}
+static int network_mouse(int x, int y, int down) {
+    if (down && x >= SCREEN_WIDTH - 78 && x < SCREEN_WIDTH - 56 &&
+        y >= WM_TASKBAR_Y + 5 && y < WM_TASKBAR_Y + 27) {
+        network_open = !network_open;
+        volume_open = volume_drag = 0;
+        start_menu_close();
+        return 1;
+    }
+    if (!network_open) return 0;
+    int inside = x >= NETWORK_X && x < NETWORK_X + 380 &&
+        y >= NETWORK_Y && y < NETWORK_Y + 160;
+    if (down && !inside) { network_open = 0; request_redraw(); return 0; }
+    if (down && y >= NETWORK_Y + 98 && y < NETWORK_Y + 134) {
+        if (x >= NETWORK_X + 12 && x < NETWORK_X + 182) {
+            network_open = 0; settings_open(4);
+        } else if (x >= NETWORK_X + 194 && x < NETWORK_X + 364) {
+            network_open = 0; settings_open(1);
+        }
+    }
+    return inside;
+}
 #define VOLUME_X (SCREEN_WIDTH - 270)
 #define VOLUME_Y (WM_TASKBAR_Y - 174)
 static void volume_draw(void) {
@@ -629,6 +666,7 @@ void wm_draw_taskbar(uint8_t start_menu_open) {
     wm_api->graphics.draw_string(tray_x + 48, y + 11, time_str, COLOR_TEXT_PRIMARY);
 
     volume_draw();
+    network_draw();
     if (!start_menu_open) return;
     start_menu_draw();
 }
@@ -1193,7 +1231,8 @@ static void handle_mouse_event(const os_input_event_t* event) {
             return;
         }
     }
-    if (volume_mouse(mouse_x, mouse_y, left, click_down)) {
+    if (network_mouse(mouse_x, mouse_y, click_down) ||
+        volume_mouse(mouse_x, mouse_y, left, click_down)) {
         if (wm_api->input.move_cursor) wm_api->input.move_cursor(mouse_x, mouse_y, 1);
         previous_left_button = left;
         request_redraw();
@@ -1450,7 +1489,8 @@ static void handle_mouse_event(const os_input_event_t* event) {
 
 static void handle_key_event(const os_input_event_t* event) {
     uint8_t scancode = event->scancode;
-    if (volume_open && scancode == 0x01) {
+    if ((volume_open || network_open) && scancode == 0x01) {
+        network_open = 0;
         volume_open = volume_drag = 0;
         request_redraw();
         return;

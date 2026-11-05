@@ -1,5 +1,6 @@
 #include "../mutex.h"
 #include "net.h"
+#include "wifi.h"
 #include "../net/amd/pcnet.h"
 #include "../net/intel/e1000.h"
 #include "../net/broadcom/tg3.h"
@@ -101,6 +102,7 @@ uint8_t sys_net_init(uint16_t io) {
     debug_print("[NET] Probing PCI bus for network adapters...\n");
 
     if (!pci_init()) debug_print("[PCI] Device inventory exceeds capacity\n");
+    sys_wifi_probe();
     for (uint32_t index = 0; index < pci_device_count(); index++) {
         const pci_device_t* dev = pci_device_at(index);
         if (dev->class_code != 0x02) continue;
