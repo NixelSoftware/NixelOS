@@ -77,6 +77,7 @@ static void beacon(il_scan_results_t* results, const uint8_t* frame, unsigned le
     il_network_t found = {0};
     for (unsigned i = 0; i < 6; i++) found.bssid[i] = frame[16 + i];
     found.channel = channel; found.band = band; found.signal_dbm = signal;
+    for (unsigned i = 0; i < 8; i++) found.timestamp[i] = frame[24+i];
     found.capability = il_le16(frame + 34); found.beacon_interval = il_le16(frame + 32);
     found.security = found.capability & 16 ? IL_SECURITY_UNSUPPORTED : IL_SECURITY_OPEN;
     unsigned ssid_seen = 0, rsn_seen = 0;
@@ -90,11 +91,17 @@ static void beacon(il_scan_results_t* results, const uint8_t* frame, unsigned le
             if (ssid_seen++ || size > 32) { results->malformed++; return; }
             found.ssid_length = size;
             for (unsigned i = 0; i < size; i++) found.ssid[i] = data[i];
+        } else if (tag == 1 || tag == 50) {
+            if (!size || (tag == 1 && size > 8)) { results->malformed++; return; }
+            for (unsigned i = 0; i < size && found.rate_count < 12; i++)
+                found.rates[found.rate_count++] = data[i];
         } else if (tag == 3 && (size != 1 || (band == 2 && data[0] != channel))) {
             results->malformed++; return;
         } else if (tag == 48) {
             if (rsn_seen++) { results->malformed++; return; }
             found.security = rsn_security(data,size);
+            found.rsn_length = size + 2; found.rsn[0] = 48; found.rsn[1] = size;
+            for (unsigned i = 0; i < size; i++) found.rsn[i + 2] = data[i];
         }
         offset += size + 2;
     }

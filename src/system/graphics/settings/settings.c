@@ -14,7 +14,12 @@
 
 static Window window;
 static int tab, mode, busy, network_action;
-static unsigned wifi_scroll;
+static unsigned wifi_scroll, wifi_selected;
+static char wifi_password[64];
+static void clear_password(void) {
+    volatile char* p=wifi_password;
+    for(unsigned i=0;i<sizeof(wifi_password);i++) p[i]=0;
+}
 static char manual[3][16];
 static int field = -1, replace_field;
 static uint32_t saved_volume = 75;
@@ -127,6 +132,14 @@ static void set_manual_time(void) {
 }
 static void key(Window* win, char c) {
     (void)win;
+    if (tab == 5 && !busy) {
+        il_network_t network;
+        if(!sys_wifi_get_network(wifi_selected,&network) || network.security!=IL_SECURITY_WPA2_PSK) return;
+        unsigned n=0; while(wifi_password[n]) n++;
+        if(c=='\b' || c==127) { if(n) wifi_password[n-1]=0; }
+        else if(c>=32 && c<=126 && n<63) { wifi_password[n]=c; wifi_password[n+1]=0; }
+        request_redraw(); return;
+    }
     if (tab == 3) {
         if (c == '\t') { field = (field + 1) % 3; replace_field = 1; }
         else if (c == '\r' || c == '\n') { if (field == 1) set_manual_time(); else apply_time(); }
@@ -158,7 +171,7 @@ static void draw(Window* win) {
     (void)win;
     display_fill_rect(window.x + 2, window.y + 23, window.w - 4, window.h - 25, COLOR_SURFACE);
     button(16, 36, 104, "Display", tab == 0);
-    button(128, 36, 104, "Network", tab == 1 || tab == 4);
+    button(128, 36, 104, "Network", tab == 1 || tab == 4 || tab == 5);
     button(240, 36, 104, "Sound", tab == 2);
     button(352, 36, 108, "Time", tab == 3);
     if (tab == 0) {
@@ -194,6 +207,22 @@ static void draw(Window* win) {
         button(324, 276, 136, "Renew DHCP", 0);
         button(20, 310, 200, "Apply manual settings", 0);
         button(232, 310, 228, "Wi-Fi settings", 0);
+    } else if (tab == 5) {
+        il_network_t network;
+        text(20,88,"Connect to Wi-Fi",COLOR_TEXT_PRIMARY);
+        if(sys_wifi_get_network(wifi_selected,&network)) {
+            char name[33];
+            for(unsigned i=0;i<network.ssid_length;i++) name[i]=network.ssid[i]>=32 && network.ssid[i]<127 ? network.ssid[i] : '?';
+            name[network.ssid_length]=0; text(20,124,name,COLOR_TEXT_PRIMARY);
+            if(network.security==IL_SECURITY_WPA2_PSK) {
+                text(20,164,"Password",COLOR_TEXT_MUTED);
+                display_fill_rect(window.x+20,window.y+192,440,28,COLOR_MODERN_BG);
+                char masked[40]; unsigned n=0;
+                while(n<39 && wifi_password[n]) { masked[n]='*'; n++; }
+                masked[n]=0; text(28,199,masked,COLOR_TEXT_PRIMARY);
+            } else text(20,164,"Open network",COLOR_TEXT_MUTED);
+        }
+        button(20,276,212,"Connect",0); button(244,276,216,"Back",0);
     } else if (tab == 4) {
         text(20, 88, "Wi-Fi", COLOR_TEXT_PRIMARY);
         text(20, 120, sys_wifi_status_text(), COLOR_TEXT_MUTED);
@@ -222,6 +251,7 @@ static void draw(Window* win) {
         button(20, 276, 212, "Detect adapter", 0);
         button(244, 276, 216, "Scan networks", 0);
         button(20, 310, 212, "Wired settings", 0);
+        if(sys_wifi_is_connected()) button(244,310,216,"Disconnect",0);
     } else if (tab == 3) {
         text(20, 82, time_sync_status(), COLOR_TEXT_PRIMARY);
         button(20,104,280,time_sync_enabled() ? "Automatic sync: enabled" : "Automatic sync: disabled",time_sync_enabled());
@@ -254,7 +284,13 @@ static void draw(Window* win) {
 }
 static void network_worker(void* arg) {
     (void)arg;
-    if (network_action == 4) sys_wifi_probe();
+    if (network_action == 6) {
+        unsigned length=0; while(wifi_password[length]) length++;
+        const char* result=sys_wifi_connect(wifi_selected,(const uint8_t*)wifi_password,length);
+        MUTEX_GUARD(kernel_mutex);
+        clear_password(); set_message(result); tab=4;
+    } else if (network_action == 7) sys_net_shutdown();
+    else if (network_action == 4) sys_wifi_probe();
     else if (network_action == 5) {
         const char* result = sys_wifi_scan();
         MUTEX_GUARD(kernel_mutex);
@@ -278,6 +314,7 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     (void)win;
     if (!(buttons & 1)) return;
     for (int i = 0; i < 4; i++) if (hit(x, y, 16 + i * 112, 36, 104)) {
+        if(!busy) clear_password();
         tab = i; field = -1; if (tab == 3) load_time();
     }
     if (tab == 0) {
@@ -297,12 +334,29 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
                 busy = 0; set_message("Unable to start network task.");
             }
         }
+    } else if (tab == 5 && !busy) {
+        if(hit(x,y,244,276,216)) { clear_password(); tab=4; }
+        else if(hit(x,y,20,276,212)) {
+            network_action=6; busy=1;
+            if(task_create(network_worker,0,"settings-wifi-connect")<0) {
+                busy=0; clear_password(); set_message("Unable to start Wi-Fi task.");
+            }
+        }
     } else if (tab == 4 && !busy) {
         unsigned count = sys_wifi_network_count();
+        for(unsigned i=0;i<4 && wifi_scroll+i<count;i++) {
+            if(x>=20 && x<460 && y>=152+(int)i*24 && y<172+(int)i*24) {
+                il_network_t network;
+                if(sys_wifi_get_network(wifi_scroll+i,&network) && network.security!=IL_SECURITY_UNSUPPORTED) {
+                    wifi_selected=wifi_scroll+i; clear_password(); tab=5;
+                }
+            }
+        }
         if (count > 4 && hit(x,y,20,244,104)) wifi_scroll = wifi_scroll >= 4 ? wifi_scroll - 4 : 0;
         if (count > 4 && hit(x,y,356,244,104) && wifi_scroll + 4 < count) wifi_scroll += 4;
         if (hit(x,y,20,310,212)) { tab = 1; load_manual(); }
-        int action = hit(x,y,20,276,212) ? 4 : hit(x,y,244,276,216) ? 5 : 0;
+        int action = hit(x,y,20,276,212) ? 4 : hit(x,y,244,276,216) ? 5 :
+            hit(x,y,244,310,216) && sys_wifi_is_connected() ? 7 : 0;
         if (action) {
             network_action = action; busy = 1;
             if (task_create(network_worker, 0, "settings-wifi") < 0) {
@@ -347,6 +401,7 @@ void settings_open(int initial_tab) {
     wm_bring_to_front(&window); request_redraw();
 }
 void settings_poll(void) {
+    if(!window.visible && !busy) clear_password();
     static uint64_t time_redraw;
     if (window.visible && tab == 3 && scheduler_clock() >= time_redraw) {
         time_redraw = scheduler_clock() + 1000000000ull; request_redraw();

@@ -103,7 +103,7 @@ CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) 
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
-  src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
+  src/kernel/memory.c src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
   src/system/shell/network_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/text_layout.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
@@ -122,7 +122,7 @@ KERNEL_C := \
   src/kernel/net/wireless/intel/iwlegacy/bsm.c src/kernel/net/wireless/intel/iwlegacy/rx.c \
   src/kernel/net/wireless/intel/iwlegacy/session.c src/kernel/net/wireless/intel/iwlegacy/device.c \
   src/kernel/net/wireless/intel/iwlegacy/command.c src/kernel/net/wireless/intel/iwlegacy/scan.c \
-  src/kernel/net/wireless/ieee80211.c src/kernel/net/wireless/intel/iwlegacy/power.c \
+  src/kernel/net/wireless/ieee80211.c src/kernel/net/wireless/intel/iwlegacy/power.c src/kernel/net/wireless/intel/iwlegacy/tx.c src/kernel/net/wireless/intel/iwlegacy/station.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
@@ -459,23 +459,26 @@ src/system/shell/commands.o: src/kernel/hal/wifi.h src/kernel/net/wireless/broad
 src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: src/kernel/hal/wifi.h
 
 IWLEGACY_DIR := src/kernel/net/wireless/intel/iwlegacy
-IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c $(IWLEGACY_DIR)/rx.c $(IWLEGACY_DIR)/session.c $(IWLEGACY_DIR)/command.c $(IWLEGACY_DIR)/scan.c $(IWLEGACY_DIR)/power.c
-$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h $(IWLEGACY_DIR)/rx.h $(IWLEGACY_DIR)/session.h $(IWLEGACY_DIR)/fh.h $(IWLEGACY_DIR)/command.h $(IWLEGACY_DIR)/scan.h
-src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h
+IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c $(IWLEGACY_DIR)/rx.c $(IWLEGACY_DIR)/session.c $(IWLEGACY_DIR)/command.c $(IWLEGACY_DIR)/scan.c $(IWLEGACY_DIR)/power.c $(IWLEGACY_DIR)/tx.c
+$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_DIR)/station.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h $(IWLEGACY_DIR)/rx.h $(IWLEGACY_DIR)/session.h $(IWLEGACY_DIR)/fh.h $(IWLEGACY_DIR)/command.h $(IWLEGACY_DIR)/scan.h $(IWLEGACY_DIR)/station.h $(IWLEGACY_DIR)/tx.h
+src/kernel/hal/net.o src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/scan.h $(IWLEGACY_DIR)/station.h
 .PHONY: test-iwlegacy
 test-iwlegacy:
+	$(CC) -O2 -fno-builtin -shared -fPIC -DWOLFSSL_USER_SETTINGS -Isrc/kernel/net/wireless/security -Isrc/system/libraries/tls/vendor/wolfssl src/kernel/net/wireless/security/wpa2.c src/kernel/net/wireless/security/ccmp.c src/kernel/net/wireless/security/handshake.c $(addprefix src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/,$(addsuffix .c,sha hmac hash pwdbased aes)) -o /tmp/nixel-test-iwlegacy-crypto.so
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/3945_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy
 	/tmp/nixel-test-iwlegacy
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/pci_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-pci
 	/tmp/nixel-test-iwlegacy-pci
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/transport_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-transport
 	/tmp/nixel-test-iwlegacy-transport
-	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/device_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-device
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/device_test.c $(IWLEGACY_NATIVE) $(IWLEGACY_DIR)/station.c src/kernel/net/wireless/ieee80211.c /tmp/nixel-test-iwlegacy-crypto.so -o /tmp/nixel-test-iwlegacy-device
 	/tmp/nixel-test-iwlegacy-device
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/scan_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-scan
 	/tmp/nixel-test-iwlegacy-scan
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/power_bridge_test.c $(IWLEGACY_DIR)/power.c src/kernel/net/wireless/ieee80211.c -o /tmp/nixel-test-iwlegacy-power
 	/tmp/nixel-test-iwlegacy-power
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/station_test.c $(IWLEGACY_NATIVE) $(IWLEGACY_DIR)/station.c src/kernel/net/wireless/ieee80211.c /tmp/nixel-test-iwlegacy-crypto.so -o /tmp/nixel-test-iwlegacy-station
+	/tmp/nixel-test-iwlegacy-station
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk

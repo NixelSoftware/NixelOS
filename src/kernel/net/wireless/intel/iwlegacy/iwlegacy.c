@@ -66,7 +66,9 @@ const char* iwlegacy_description(iwlegacy_state_t state) {
     case IL_FIRMWARE_FAILED: return "Intel 3945 firmware startup failed; see error code.";
     case IL_SCAN_COMPLETE: return "Intel 3945 passive scan completed.";
     case IL_SCAN_FAILED: return "Intel 3945 scan failed; see error code.";
-    case IL_FIRMWARE_READY: return "Intel 3945 runtime firmware verified; scan/association not ported.";
+    case IL_FIRMWARE_READY: return "Intel 3945 runtime firmware verified.";
+    case IL_CONNECTION_FAILED: return "Intel 3945 connection failed; see error code.";
+    case IL_CONNECTED: return "Intel 3945 associated; network data interface active.";
     default: return "No Intel 3945 adapter found.";
     }
 }

@@ -16,4 +16,8 @@ unsigned sys_wifi_network_count(void);
 int sys_wifi_get_network(unsigned index, il_network_t* out);
 /* Passive scan of EEPROM-permitted channels on supported Intel hardware. */
 const char* sys_wifi_scan(void);
+const char* sys_wifi_connect(unsigned network, const uint8_t* password, unsigned length);
+void sys_wifi_disconnect(void);
+int sys_wifi_is_connected(void);
+void sys_wifi_poll(void);
 #endif

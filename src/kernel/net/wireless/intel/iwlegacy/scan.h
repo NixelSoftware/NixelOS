@@ -9,6 +9,10 @@ typedef struct {
     int16_t signal_dbm;
     uint16_t capability, beacon_interval;
     il_security_t security;
+    uint8_t timestamp[8];
+    uint8_t rates[12], rate_count;
+    uint8_t rsn[257];
+    uint16_t rsn_length;
 } il_network_t;
 typedef struct {
     il_network_t networks[IL_SCAN_NETWORKS];

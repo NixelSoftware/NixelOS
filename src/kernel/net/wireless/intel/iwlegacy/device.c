@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "session.h"
 #include "scan.h"
+#include "station.h"
 #include "fh.h"
 #include "../../../../fs.h"
 #include "../../../../paging.h"
@@ -14,9 +15,26 @@
 typedef struct { uint32_t address, pages; } dma_block_t;
 /* If hardware cannot acknowledge DMA stop, retain all posted buffers until
  * reboot. Never hand uncertain DMA memory back to the physical allocator. */
-static dma_block_t quarantined[8];
+static dma_block_t quarantined[9];
 static unsigned quarantine_count;
 static mutex_t device_mutex;
+static il_station_t station;
+static dma_block_t retained[9];
+static unsigned retained_count;
+static unsigned poll_epoch;
+static uint8_t poll_clock_set;
+static const pci_device_t* retained_device;
+static uint16_t retained_command;
+/* All public access is serialized by the Wi-Fi HAL once published. Boot runs
+ * under the private mutex before the HAL publishes the connected interface. */
+typedef struct {
+    const il_network_t* ap;
+    const uint8_t* password;
+    unsigned password_length;
+    wifi_nonce_fn entropy;
+    void* entropy_context;
+} connect_options_t;
+
 static dma_block_t allocate(unsigned bytes) {
     dma_block_t b = {0,(bytes + PAGE_SIZE - 1) / PAGE_SIZE};
     b.address = paging_alloc_contiguous(b.pages);
@@ -64,10 +82,11 @@ static int tx_stop(const il_io_t* io) {
     il_release(io);
     return result;
 }
-static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results) {
+static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, const connect_options_t* connect) {
     MUTEX_GUARD(device_mutex);
+    if (retained_count) return IL_ACCESS;
     if (!info || !il3945_matches(info->vendor,info->device) || !info->eeprom.version) return IL_INVALID;
-    if (!results && (info->state == IL_FIRMWARE_READY || info->state == IL_SCAN_COMPLETE)) return IL_OK;
+    if (!results && !connect && (info->state == IL_FIRMWARE_READY || info->state == IL_SCAN_COMPLETE)) return IL_OK;
     if (quarantine_count) { info->state = IL_FIRMWARE_FAILED; return info->error = IL_DMA_STOP; }
     const pci_device_t* dev = 0;
     for (unsigned i = 0; i < pci_device_count(); i++) {
@@ -90,7 +109,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results) {
     if (!il3945_firmware_parse(file,(uint32_t)bytes,&fw)) {
         release(raw); return info->error = IL_INVALID;
     }
-    dma_block_t blocks[8] = {{0}};
+    dma_block_t blocks[9] = {{0}};
     unsigned count = 0;
     il_fw_section_t images[4] = {fw.init_code,fw.init_data,fw.runtime_code,fw.runtime_data};
     int result = IL_NOMEM;
@@ -110,10 +129,16 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results) {
     if (!blocks[count].address) goto free_blocks;
     uint32_t rx = blocks[count++].address;
     uint32_t command_buffer = 0;
-    if (results) {
+    if (results || connect) {
         blocks[count] = allocate(PAGE_SIZE);
         if (!blocks[count].address) goto free_blocks;
         command_buffer = blocks[count++].address;
+    }
+    uint32_t tx_buffer = 0;
+    if (connect) {
+        blocks[count] = allocate(PAGE_SIZE);
+        if (!blocks[count].address) goto free_blocks;
+        tx_buffer = blocks[count++].address;
     }
     il_rx_buffer_t buffers[254];
     for (unsigned i = 0; i < 254; i++) buffers[i] = (il_rx_buffer_t){
@@ -157,6 +182,21 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results) {
             il3945_alive_t alive;
             result = il3945_firmware_run(&io,&queue,file,(uint32_t)bytes,&dma,&alive);
             if (!result) info->firmware_version = fw.version;
+            if (!result && connect) {
+                station = (il_station_t){0}; station.io = io; station.rx = queue;
+                result = il3945_command_prepare(&station.commands,(void*)(unsigned long)rings[4],
+                    (uint8_t*)(unsigned long)command_buffer,command_buffer);
+                if (!result) result = il3945_tx_prepare(&station.tx,(void*)(unsigned long)rings[0],
+                    (uint8_t*)(unsigned long)tx_buffer,tx_buffer);
+                if (!result) result = il3945_station_connect(&station,&info->eeprom,connect->ap,
+                    connect->password,connect->password_length,connect->entropy,connect->entropy_context);
+                if (!result) {
+                    for (unsigned i = 0; i < count; i++) retained[i] = blocks[i];
+                    poll_clock_set = 0; retained_count = count; retained_device = dev; retained_command = command;
+                    release(raw); info->state = IL_CONNECTED; info->error = IL_OK;
+                    return IL_OK;
+                }
+            }
             if (!result && results) {
                 il_command_queue_t commands = {0};
                 result = il3945_command_prepare(&commands,(void*)(unsigned long)rings[4],
@@ -196,15 +236,51 @@ free_blocks:
     if (!result) {
         info->state = results ? IL_SCAN_COMPLETE : IL_FIRMWARE_READY;
         info->scan_count = results ? results->count : 0;
-    } else if (results && info->firmware_version && result != IL_DMA_STOP) info->state = IL_SCAN_FAILED;
+    } else if (connect && info->firmware_version && result != IL_DMA_STOP) info->state = IL_CONNECTION_FAILED;
+    else if (results && info->firmware_version && result != IL_DMA_STOP) info->state = IL_SCAN_FAILED;
     return result;
 }
 
-int iwlegacy_firmware_check(iwlegacy_info_t* info) { return boot_operation(info,0); }
+int iwlegacy_firmware_check(iwlegacy_info_t* info) { return boot_operation(info,0,0); }
 int iwlegacy_scan(iwlegacy_info_t* info, il_scan_results_t* results) {
     if (!results) return IL_INVALID;
     *results = (il_scan_results_t){0};
-    int result = boot_operation(info,results);
+    int result = boot_operation(info,results,0);
     if (result) results->count = 0; /* Never publish stale/partial scans as successful. */
     return result;
 }
+
+int iwlegacy_connect(iwlegacy_info_t* info, const il_network_t* ap,
+                     const uint8_t* password, unsigned password_length,
+                     wifi_nonce_fn entropy, void* entropy_context) {
+    if (!ap || (password_length && !password)) return IL_INVALID;
+    connect_options_t options = {ap,password,password_length,entropy,entropy_context};
+    return boot_operation(info,0,&options);
+}
+int iwlegacy_disconnect(void) {
+    il3945_station_leave(&station);
+    if (!retained_count) return IL_OK;
+    int rx = il3945_rx_stop(&station.io,&station.rx);
+    int tx = tx_stop(&station.io);
+    int apm = il3945_apm_stop(&station.io);
+    pci_set_master(retained_device,0);
+    int stopped = !rx && !tx && !apm && !(pci_read16(retained_device,4)&PCI_COMMAND_MASTER);
+    pci_write16(retained_device,4,retained_command & ~PCI_COMMAND_MASTER);
+    for (unsigned i=0;i<retained_count;i++) {
+        if(stopped) release(retained[i]);
+        else quarantined[quarantine_count++]=retained[i];
+    }
+    retained_count=0; retained_device=0;
+    return stopped ? IL_OK : IL_DMA_STOP;
+}
+int iwlegacy_poll(unsigned elapsed_ms) {
+    if(!retained_count) return IL_ACCESS;
+    if (!poll_clock_set) { poll_epoch=elapsed_ms-station.now_ms; poll_clock_set=1; }
+    int r=il3945_station_poll(&station,elapsed_ms-poll_epoch);
+    if(r) iwlegacy_disconnect();
+    return r;
+}
+int iwlegacy_send(const uint8_t* frame,unsigned size) { return il3945_station_send(&station,frame,size); }
+int iwlegacy_connected(void) { return station.active; }
+void iwlegacy_set_receiver(net_receive_handler_t receive) { station.receive=receive; }
+void iwlegacy_get_diagnostics(net_diagnostics_t* out) { if(out) *out=station.diagnostics; }

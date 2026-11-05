@@ -229,7 +229,7 @@ Useful checks while adding a driver:
 
 The repository's `netdiag` app and kernel serial messages are the available built-in debugging aids. There is no general packet capture tool or automated hardware-driver test harness in the current tree.
 
-## Intel 3945 passive scanning and station components
+## Intel 3945 Wi-Fi station
 
 The native driver in `src/kernel/net/wireless/intel/iwlegacy/` identifies Intel
 3945BG/ABG (`8086:4222` and `8086:4227`) independently of Ethernet and exposes
@@ -245,15 +245,19 @@ timeouts, RF-kill and malformed notifications fail without publishing stale
 results. These paths are register-model tested, not physical-card validated.
 Long operations no longer hold the shared window/network mutex.
 
-Additional tested station components provide EEPROM/temperature-based transmit
-power calculation, Ethernet/802.11 SNAP conversion, the WPA2 four-way and GTK
-rekey exchanges, AES key unwrap, CCMP encryption/decryption, replay rejection and
-counter-preserving key reinstall handling. They reuse wolfCrypt in a separate
-allocation-free kernel build. They are not yet connected to native association
-or a persistent data interface: management/data TX, station/rate setup, thermal
-scheduling, association recovery and Wi-Fi selection in the network HAL remain.
-The OS can attempt scans on 3945 hardware but cannot join an AP yet. See the
-current driver and security READMEs for exact implementation boundaries.
+The persistent station path now submits management/data TX, configures station,
+rate, timing and calibrated power tables, authenticates/associates, and bridges
+Ethernet frames. WPA2 four-way/GTK rekey exchanges and software CCMP use the
+existing wolfCrypt sources in an isolated kernel build. Settings provides AP
+selection and a masked password field. Successful authorization selects Wi-Fi
+in the network HAL and requests DHCP; disconnect/failure clears keys and stack
+addressing and stops or quarantines DMA. Temperature updates are scheduled.
+
+Only open and WPA2-CCMP-PSK infrastructure networks on active non-DFS EEPROM
+channels are supported for joining. The current HAL's secure nonce provider
+requires RDRAND; older CPUs need another cryptographic entropy source for WPA2.
+See [the driver README](../src/kernel/net/wireless/intel/iwlegacy/README.md)
+for exact limits, firmware requirements and validation coverage.
 
 Run `make test-iwlegacy`, `make test-wifi-crypto` and
 `make src/kernel/kernel.bin` for the modeled driver tests, independent crypto

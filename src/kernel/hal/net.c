@@ -1,6 +1,7 @@
 #include "../mutex.h"
 #include "net.h"
 #include "wifi.h"
+#include "../net/wireless/intel/iwlegacy/station.h"
 #include "../net/amd/pcnet.h"
 #include "../net/intel/e1000.h"
 #include "../net/broadcom/tg3.h"
@@ -80,6 +81,7 @@ uint16_t net_detected_vendor = 0;
 uint16_t net_detected_device = 0;
 const char* net_detected_name = "None";
 static const pci_device_t* selected_pci_device;
+static uint32_t wifi_ip;
 
 const pci_device_t* sys_net_pci_device(void) { return selected_pci_device; }
 
@@ -93,6 +95,7 @@ void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const c
 uint8_t sys_net_init(uint16_t io) {
     MUTEX_GUARD(kernel_mutex);
     (void)io;
+    if(net_driver_type==5) sys_net_shutdown();
     selected_pci_device = 0;
     net_driver_type     = 0xFFFFFFFF;
     net_detected_vendor = 0;
@@ -153,6 +156,7 @@ adapter_matched:
 
 uint8_t sys_net_is_ready(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 5) return sys_wifi_is_connected();
     if (net_driver_type == 4) return r8169_is_ready();
     if (net_driver_type == 3) return b44_is_ready();
     if (net_driver_type == 2) return tg3_is_ready();
@@ -163,7 +167,8 @@ uint8_t sys_net_is_ready(void) {
 
 void sys_net_shutdown(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_shutdown();
+    if (net_driver_type == 5) { sys_wifi_disconnect(); wifi_ip=0; }
+    else if (net_driver_type == 4) r8169_shutdown();
     else if (net_driver_type == 3) b44_shutdown();
     else if (net_driver_type == 2) tg3_shutdown();
     else if (net_driver_type == 1) e1000_shutdown();
@@ -175,7 +180,8 @@ void sys_net_shutdown(void) {
 
 void sys_net_poll(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_poll();
+    if (net_driver_type == 5) sys_wifi_poll();
+    else if (net_driver_type == 4) r8169_poll();
     else if (net_driver_type == 3) b44_poll();
     else if (net_driver_type == 2) tg3_poll();
     else if (net_driver_type == 1) e1000_poll();
@@ -186,6 +192,7 @@ void sys_net_poll(void) {
 
 uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 5) return sys_wifi_is_connected() && !iwlegacy_send(data,length);
     if (net_driver_type == 4) return r8169_send(data, length);
     if (net_driver_type == 3) return b44_send(data, length);
     if (net_driver_type == 2) return tg3_send(data, length);
@@ -196,7 +203,8 @@ uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
 
 void sys_net_set_receive_handler(net_receive_handler_t handler) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_set_receive_handler(handler);
+    if (net_driver_type == 5) iwlegacy_set_receiver(handler);
+    else if (net_driver_type == 4) r8169_set_receive_handler(handler);
     else if (net_driver_type == 3) b44_set_receive_handler(handler);
     else if (net_driver_type == 2) tg3_set_receive_handler(handler);
     else if (net_driver_type == 1) e1000_set_receive_handler(handler);
@@ -205,6 +213,12 @@ void sys_net_set_receive_handler(net_receive_handler_t handler) {
 
 uint64_t sys_net_get_mac_address(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 5) {
+        wifi_status_t status; sys_wifi_get_status(&status);
+        uint64_t mac=0;
+        for(unsigned i=0;i<6;i++) mac=(mac<<8)|status.intel.eeprom.mac[i];
+        return mac;
+    }
     if (net_driver_type == 4) return r8169_get_mac_address();
     if (net_driver_type == 3) return b44_get_mac_address();
     if (net_driver_type == 2) return tg3_get_mac_address();
@@ -215,7 +229,8 @@ uint64_t sys_net_get_mac_address(void) {
 
 void sys_net_set_ip_address(uint32_t address) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_set_ip_address(address);
+    if (net_driver_type == 5) wifi_ip=address;
+    else if (net_driver_type == 4) r8169_set_ip_address(address);
     else if (net_driver_type == 3) b44_set_ip_address(address);
     else if (net_driver_type == 2) tg3_set_ip_address(address);
     else if (net_driver_type == 1) e1000_set_ip_address(address);
@@ -224,6 +239,7 @@ void sys_net_set_ip_address(uint32_t address) {
 
 uint32_t sys_net_get_ip_address(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type == 5) return wifi_ip;
     if (net_driver_type == 4) return r8169_get_ip_address();
     if (net_driver_type == 3) return b44_get_ip_address();
     if (net_driver_type == 2) return tg3_get_ip_address();
@@ -236,7 +252,8 @@ void sys_net_get_diagnostics(net_diagnostics_t* d) {
     MUTEX_GUARD(kernel_mutex);
     if (!d) return;
     *d = (net_diagnostics_t){0};
-    if (net_driver_type == 4) r8169_get_diagnostics(d);
+    if (net_driver_type == 5) iwlegacy_get_diagnostics(d);
+    else if (net_driver_type == 4) r8169_get_diagnostics(d);
     else if (net_driver_type == 3) b44_get_diagnostics(d);
     else if (net_driver_type == 2) tg3_get_diagnostics(d);
     else if (net_driver_type == 1) e1000_get_diagnostics(d);
@@ -300,4 +317,21 @@ uint8_t sys_net_set_manual_configuration(uint32_t address, uint32_t mask, uint32
     dhcp_clear_lease();
     ipv4_set_configuration(address, gateway, mask);
     return 1;
+}
+
+uint8_t sys_net_select_wifi(void) {
+    MUTEX_GUARD(kernel_mutex);
+    if(!sys_wifi_is_connected()) return 0;
+    /* Stop the old wired transport before replacing its stack identity. */
+    if(net_driver_type!=5) sys_net_shutdown();
+    wifi_status_t status; sys_wifi_get_status(&status);
+    net_driver_type=5; wifi_ip=0;
+    net_detected_vendor=status.intel.vendor; net_detected_device=status.intel.device;
+    net_detected_name="Intel PRO/Wireless 3945"; selected_pci_device=0;
+    for(unsigned i=0;i<pci_device_count();i++) {
+        const pci_device_t* p=pci_device_at(i);
+        if(p && p->bus==status.intel.pci_bus && p->slot==status.intel.pci_slot &&
+           p->function==status.intel.pci_function) { selected_pci_device=p; break; }
+    }
+    sys_net_initialize_stack(); return 1;
 }

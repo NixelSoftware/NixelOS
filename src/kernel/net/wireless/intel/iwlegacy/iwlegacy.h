@@ -11,7 +11,7 @@
 typedef enum {
     IL_ABSENT, IL_PCI_FOUND, IL_DEVICE_BUSY, IL_ACCESS_FAILED,
     IL_CLOCK_TIMEOUT, IL_EEPROM_FAILED, IL_EEPROM_READY,
-    IL_FIRMWARE_MISSING, IL_FIRMWARE_FAILED, IL_FIRMWARE_READY, IL_SCAN_FAILED, IL_SCAN_COMPLETE
+    IL_FIRMWARE_MISSING, IL_FIRMWARE_FAILED, IL_FIRMWARE_READY, IL_SCAN_FAILED, IL_SCAN_COMPLETE, IL_CONNECTED, IL_CONNECTION_FAILED
 } iwlegacy_state_t;
 typedef struct {
     uint8_t number, band, flags;
@@ -33,7 +33,7 @@ typedef struct {
     unsigned scan_count;
     il3945_eeprom_t eeprom;
 } iwlegacy_info_t;
-/* Native 3945BG/ABG port; does not register an Ethernet transport yet. */
+/* Native 3945BG/ABG PCI discovery; the station lifecycle is in station.h. */
 void iwlegacy_probe(iwlegacy_info_t* info);
 /* Load/check runtime firmware on an idle adapter, then stop it. No scan/TX.
  * Invoke outside kernel_mutex; firmware operations have a private mutex. */

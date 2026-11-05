@@ -9,7 +9,7 @@
 const pci_device_t* sys_net_pci_device(void);
 
 // 0 = PCNet32, 1 = Intel E1000, 2 = Tigon3, 3 = BCM4401,
-// 4 = Realtek RTL8169/8168; ~0u = none
+// 4 = Realtek RTL8169/8168, 5 = Intel 3945 Wi-Fi; ~0u = none
 extern uint32_t net_driver_type;
 
 void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out);
@@ -23,6 +23,7 @@ uint64_t sys_net_get_mac_address(void);
 void     sys_net_set_ip_address(uint32_t address);
 uint32_t sys_net_get_ip_address(void);
 void     sys_net_get_diagnostics(net_diagnostics_t* d);
+uint8_t sys_net_select_wifi(void);
 void     sys_net_initialize_stack(void);
 void     sys_net_configure_address(void);
 uint8_t sys_net_set_manual_configuration(uint32_t address, uint32_t mask, uint32_t gateway);

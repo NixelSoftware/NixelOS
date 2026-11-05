@@ -2,8 +2,8 @@
 
 This directory adapts the supplied Linux iwlegacy reference in
 `documentation/linux-for-ref/iwlegacy/` for Intel PRO/Wireless 3945BG/ABG,
-PCI `8086:4222` and `8086:4227`. It has a native passive-scan path. A connected
-station data path is not yet implemented; Intel 4965 remains unported.
+PCI `8086:4222` and `8086:4227`. It implements passive scanning and a persistent infrastructure station path
+for open and WPA2-CCMP-PSK networks. Intel 4965 remains unported.
 
 ## Native driver path
 
@@ -41,40 +41,71 @@ and command rejection/timeouts are handled independently. Failed scans are not
 published as successful partial results. Settings displays paged results with
 binary SSIDs escaped for display; the binary identities remain in the cache.
 
-The operation stops RX/TX and resets the NIC before releasing allocations. If
+Scan/firmware-check operations stop RX/TX and reset the NIC before releasing allocations. If
 DMA idle or bus-master shutdown cannot be confirmed, posted allocations remain
 quarantined until reboot. Long firmware operations use a private device mutex;
 the HAL publishes snapshots under the shared kernel mutex, allowing the window
-manager to run during the scan. The NIC is not kept connected after a scan.
+manager to run during the scan. Connections retain the firmware, DMA rings and
+command/frame storage until disconnect or failure. Scans require disconnecting
+first, so an active data interface is never reset by discovery.
 
-## Additional station components
+## Infrastructure station path
 
-`power.c` ports EEPROM gain interpolation, the upstream analog/DSP gain tables,
-rate clipping, and raw-temperature compensation for C_TX_PWR_TBL. It validates
-channel permissions and calibration data before exposing a power command. The
-live scan is receive-only; this helper still needs to be scheduled before data
-transmission and after RXON/temperature changes.
+`tx.c` submits management/data C_TX on queue 0 using separate, aligned command
+and MPDU-payload transfer buffers. It matches completions by sequence, preserves
+software data sequence numbers, wraps the TFD ring, and never recycles an
+unacknowledged DMA allocation after timeout.
 
-`../../ieee80211.c` implements bounded infrastructure Ethernet/SNAP conversion.
-`../../security/` implements WPA2 four-way/GTK handshakes and CCMP framing/replay
-checks over the existing wolfCrypt sources. These components have tests but are
-not wired into a persistent association/transmit loop.
+`station.c` configures awake power mode, legacy EDCA, RXON, AP/broadcast stations,
+control/data rate fallback tables and EEPROM-calibrated TX power. It performs
+open-system authentication and association with bounded retries and programs
+beacon timing/AID. Scan results preserve supported rates, TSF and the complete
+AP RSN IE for negotiation. The lowest supported legacy rate is used; adaptive
+rate selection is not implemented.
 
-## Still missing for connections
+Ethernet frames use the shared three-address SNAP bridge. WPA2 connections run
+the four-way and GTK rekey exchanges over actual EAPOL TX/RX, with software CCMP,
+authorized-port gating and replay protection. Duplicate authenticated handshake
+messages preserve installed packet counters. The port opens after M4 completes.
+Borrowed DMA frames are copied into a bounded deferred queue before invoking
+management, crypto or network callbacks, avoiding recursive RX-ring processing.
 
-Native data/management TX submission and completion, AP station/rate table
-configuration, authentication/association/deauthentication state, persistent
-DMA ownership and shutdown/recovery, periodic thermal updates, integration of
-the supplicant with received/sent EAPOL frames, and selection of the Wi-Fi
-interface in the Ethernet/IPv4/DHCP HAL remain unfinished. Settings can scan,
-but cannot connect to an AP or send encrypted network traffic yet.
+Settings allows selecting an AP, entering a masked password, connecting and
+disconnecting. Passwords are erased after the attempt and are not saved. A
+successful connection selects driver 5 in the network HAL, replaces the old
+wired interface/stack identity, and requests DHCP. RX, MAC/IP operations and
+diagnostics use that interface. Disconnect sends best-effort deauthentication;
+RF-kill, firmware errors, handshake/receive/TX timeouts close the port, clear
+keys/addressing, stop DMA and release or quarantine its allocations. Raw
+temperature is checked every minute and power recomputed for changes of 6 units.
+
+## Supported limits
+
+This is an infrastructure 3945 station implementation, not feature parity with
+Linux mac80211. Only EEPROM-valid active non-DFS channels are used for joining.
+Passive/DFS scanning remains available, but joining such channels is rejected.
+WEP, WPA1/TKIP, enterprise EAP, WPA3/SAE, required PMF, hidden-SSID entry, ad-hoc/AP
+mode, roaming, suspend/resume, QoS negotiation and adaptive rate selection are
+not implemented. TX is single-inflight and polled; contention returns busy.
+A failed connection can be retried after a new scan; there is no automatic roam.
+
+The HAL currently obtains strong WPA2 nonces only from CPUID-checked RDRAND.
+CPUs without RDRAND cannot establish WPA2 connections with this HAL; this
+includes many machines originally shipped with a 3945. They need another
+cryptographic entropy provider. The native station API accepts an injected
+provider, but never substitutes predictable clock/PRNG values. Open connections
+do not need entropy. Firmware is still an external prerequisite.
 
 ## Validation and provenance
 
 Run `make test-iwlegacy`, `make test-wifi-crypto` and
 `make src/kernel/kernel.bin`. Register models exercise PCI ownership, EEPROM,
 firmware boot, DMA/ring wrapping, command completion matching/poisoning,
-scan parsing, allocation rollback and quarantine. Power/framing and independent
+scan parsing, allocation rollback and quarantine. The station model additionally
+exercises association, 4,300 data frames across sequence/ring wrap, RX delivery,
+regulatory rejection, RF-kill and retained TX timeout ownership. An independent
+Python-generated AP transcript drives the native station through WPA2 M1–M4
+and encrypted data TX. Power/framing and independent
 cryptographic tests cover the additional protocol components. Physical-card
 interoperability has not been tested.
 

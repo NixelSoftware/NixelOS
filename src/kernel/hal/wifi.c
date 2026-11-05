@@ -1,11 +1,15 @@
 #include "wifi.h"
 #include "../mutex.h"
+#include "net.h"
+#include "../net/wireless/security/wpa2.h"
+#include "../scheduler.h"
+#include "../net/wireless/intel/iwlegacy/station.h"
 static wifi_status_t status;
 static il_scan_results_t scan_results;
 static uint8_t scan_valid, scan_busy;
 void sys_wifi_probe(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (scan_busy) return;
+    if (scan_busy || iwlegacy_connected()) return;
     scan_valid = 0; scan_results = (il_scan_results_t){0};
     b43_probe(&status.adapter);
     iwlegacy_probe(&status.intel);
@@ -19,14 +23,17 @@ const char* sys_wifi_status_text(void) {
     MUTEX_GUARD(kernel_mutex);
     if (status.intel.vendor) {
         switch (status.intel.state) {
+        case IL_CONNECTED: return "Wi-Fi connected.";
+        case IL_CONNECTION_FAILED: return status.intel.error==IL_RFKILL ?
+            "Wi-Fi is blocked by the hardware switch." : "Wi-Fi connection failed.";
         case IL_SCAN_COMPLETE: return "Wi-Fi scan complete.";
         case IL_SCAN_FAILED: return "Wi-Fi scan failed.";
-        case IL_FIRMWARE_READY: return "Wi-Fi firmware verified; scanning is not available yet.";
+        case IL_FIRMWARE_READY: return "Wi-Fi firmware ready.";
         case IL_FIRMWARE_MISSING: return "Wi-Fi firmware is missing.";
         case IL_FIRMWARE_FAILED:
             return status.intel.error == IL_RFKILL ? "Wi-Fi is blocked by the hardware switch." :
                 "Wi-Fi firmware initialization failed.";
-        case IL_EEPROM_READY: return "Wi-Fi adapter found; connection support unavailable.";
+        case IL_EEPROM_READY: return "Wi-Fi adapter ready; scan to select a network.";
         case IL_DEVICE_BUSY: return "Wi-Fi adapter is already active.";
         case IL_CLOCK_TIMEOUT:
         case IL_EEPROM_FAILED:
@@ -47,6 +54,7 @@ const char* sys_wifi_scan(void) {
     {
         MUTEX_GUARD(kernel_mutex);
         if (scan_busy) return "Wi-Fi operation in progress.";
+        if (iwlegacy_connected()) return "Disconnect Wi-Fi before scanning.";
         if (!status.intel.eeprom.version)
             return status.adapter.state == B43_CORE_FOUND ? "Network scanning is not available yet." : sys_wifi_status_text();
         adapter = status.intel; scan_busy = 1; scan_valid = 0;
@@ -72,4 +80,72 @@ int sys_wifi_get_network(unsigned index, il_network_t* out) {
     MUTEX_GUARD(kernel_mutex);
     if (!out || !scan_valid || index >= scan_results.count) return 0;
     *out = scan_results.networks[index]; return 1;
+}
+
+static int nonce(void* context, uint8_t* out, unsigned length) {
+    (void)context;
+    unsigned a,b,c,d;
+    __asm__ volatile("cpuid" : "=a"(a),"=b"(b),"=c"(c),"=d"(d) : "a"(1),"c"(0));
+    if(!(c & (1u<<30))) return -1;
+    while(length) {
+        unsigned value=0; uint8_t ok=0;
+        for(unsigned tries=0;tries<10 && !ok;tries++)
+            __asm__ volatile("rdrand %0; setc %1" : "=r"(value),"=qm"(ok) :: "cc");
+        if(!ok) return -1;
+        for(unsigned i=0;i<4 && length;i++,length--) { *out++=value; value>>=8; }
+    }
+    return 0;
+}
+const char* sys_wifi_connect(unsigned index,const uint8_t* password,unsigned length) {
+    iwlegacy_info_t adapter; il_network_t ap;
+    {
+        MUTEX_GUARD(kernel_mutex);
+        if(scan_busy) return "Wi-Fi operation in progress.";
+        if(iwlegacy_connected()) return "Disconnect before selecting another network.";
+        if(!scan_valid || index>=scan_results.count) return "Scan and select a network first.";
+        ap=scan_results.networks[index]; adapter=status.intel;
+        if(ap.security==IL_SECURITY_UNSUPPORTED) return "This network security is not supported.";
+        if(ap.security==IL_SECURITY_WPA2_PSK) {
+            uint8_t probe[32]; int r=nonce(0,probe,sizeof(probe));
+            wifi_crypto_erase(probe,sizeof(probe));
+            if(r) return "WPA2 requires a cryptographic entropy source on this CPU.";
+        }
+        scan_busy=1;
+    }
+    int result=iwlegacy_connect(&adapter,&ap,password,length,nonce,0);
+    {
+        MUTEX_GUARD(kernel_mutex);
+        status.intel=adapter; status.generation++; scan_busy=0;
+        if(!result) sys_net_select_wifi();
+    }
+    if(result) return result==IL_RFKILL ? "Wi-Fi is blocked by the hardware switch." : "Wi-Fi connection failed.";
+    sys_net_configure_address();
+    return "Wi-Fi connected.";
+}
+void sys_wifi_disconnect(void) {
+    MUTEX_GUARD(kernel_mutex);
+    if(scan_busy) return;
+    int r=iwlegacy_disconnect();
+    status.intel.state=r ? IL_FIRMWARE_FAILED : IL_EEPROM_READY;
+    status.intel.error=r; status.generation++;
+}
+int sys_wifi_is_connected(void) {
+    MUTEX_GUARD(kernel_mutex);
+    return !scan_busy && iwlegacy_connected();
+}
+void sys_wifi_poll(void) {
+    MUTEX_GUARD(kernel_mutex);
+    if(scan_busy || !iwlegacy_connected()) return;
+    /* Divide the monotonic ns clock without a 64-bit libgcc dependency. */
+    uint64_t ns=scheduler_clock(); unsigned ms=0, remainder=0;
+    for(int bit=63;bit>=0;bit--) {
+        remainder=(remainder<<1)|(unsigned)((ns>>bit)&1);
+        if(remainder>=1000000u) { remainder-=1000000u; if(bit<32) ms|=1u<<bit; }
+    }
+    int r=iwlegacy_poll(ms);
+    if(r) {
+        /* Drop stale addressing immediately when the authorized port closes. */
+        sys_net_shutdown();
+        status.intel.state=IL_CONNECTION_FAILED; status.intel.error=r; status.generation++;
+    }
 }
