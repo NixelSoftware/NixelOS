@@ -5,6 +5,7 @@
 #include "../../kernel/fs.h"
 #include "../../kernel/drivers/serial.h"
 #include "../../kernel/hal/usb.h"
+#include "../../kernel/hal/wifi.h"
 #include "network_commands.h"
 #include "../loader/app_loader.h"
 #include "../graphics/terminal/terminal.h"
@@ -142,6 +143,49 @@ static void print_u32(uint32_t value) {
         char digit[2] = { digits[--count], '\0' };
         print(digit);
     }
+}
+
+/* PCI class discovery is independent of driver support. Class 02/80 is
+ * commonly Wi-Fi, but is formally "other network controller"; keep that
+ * distinction visible when no driver can identify the radio. */
+static void print_wifi_device(void) {
+    wifi_status_t wifi;
+    sys_wifi_get_status(&wifi);
+    const b43_info_t* adapter = &wifi.adapter;
+    unsigned found = 0;
+    for (uint32_t i = 0; i < pci_device_count(); i++) {
+        const pci_device_t* dev = pci_device_at(i);
+        if (!dev || !((dev->class_code == 0x02 && dev->subclass == 0x80) ||
+                      (dev->class_code == 0x0D && dev->subclass == 0x20))) continue;
+        found++;
+        int matched = adapter->vendor && adapter->vendor == dev->vendor_id &&
+            adapter->device == dev->device_id && adapter->pci_bus == dev->bus &&
+            adapter->pci_slot == dev->slot && adapter->pci_function == dev->function;
+        print(matched || dev->class_code == 0x0D ? "PCI Wi-Fi Device:" :
+              "PCI Wireless / Other Network Controller:");
+        print("\n  Vendor: "); print_hex_u16(dev->vendor_id);
+        print("\n  Device: "); print_hex_u16(dev->device_id);
+        print("\n  PCI bus/slot/function: "); print_u32(dev->bus);
+        print("/"); print_u32(dev->slot); print("/"); print_u32(dev->function);
+        print("\n  Revision: "); print_hex_u16(dev->revision);
+        print("\n  Class: "); print_hex_u16((uint16_t)dev->class_code << 8 | dev->subclass);
+        print("\n  Driver: ");
+        if (!matched) {
+            print("No matching Wi-Fi driver\n");
+            continue;
+        }
+        print(adapter->state == B43_LEGACY ? "b43legacy (not ported)" : "b43 (incomplete)");
+        if (adapter->chip) {
+            print("\n  Chip:   "); print_hex_u16(adapter->chip);
+        }
+        if (adapter->state == B43_CORE_FOUND || adapter->state == B43_LEGACY) {
+            print("\n  Core index:    "); print_u32(adapter->core_index);
+            print("\n  Core revision: "); print_u32(adapter->core_revision);
+        }
+        print("\n  Status: "); print(b43_probe_description(adapter->state));
+        print("\n");
+    }
+    if (!found) print("No PCI Wi-Fi or other network controller found.\n");
 }
 
 const char* shell_command_args(void) {
@@ -474,6 +518,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
     } else if ((has_prefix(command, "netdev") && (!command[6] || command[6] == ' '))) {
         if (!shell_api || !shell_api->network.get_device_info) {
             print("Network API unavailable.\n");
+            print_wifi_device();
             return;
         }
 
@@ -493,6 +538,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
             print_hex_u16(device);
             print("\n");
         }
+        print_wifi_device();
     } else if (has_prefix(command, "echo ")) {
         const char* text = command + 5;
         const char* redirect = 0;

@@ -194,25 +194,8 @@ static void draw(Window* win) {
         button(20, 310, 200, "Apply manual settings", 0);
         button(232, 310, 228, "Wi-Fi settings", 0);
     } else if (tab == 4) {
-        wifi_status_t wifi; sys_wifi_get_status(&wifi);
-        text(20, 88, "Wi-Fi / Broadcom b43", COLOR_TEXT_PRIMARY);
+        text(20, 88, "Wi-Fi", COLOR_TEXT_PRIMARY);
         text(20, 120, sys_wifi_status_text(), COLOR_TEXT_MUTED);
-        if (wifi.adapter.vendor) {
-            char buf[48], *p;
-            text(20, 156, "PCI device", COLOR_TEXT_MUTED);
-            /* IDs are hexadecimal, as printed on PCI inventories. */
-            const char* hex = "0123456789ABCDEF";
-            p = buf;
-            for (int i = 3; i >= 0; i--) *p++ = hex[(wifi.adapter.vendor >> (i*4)) & 15];
-            *p++ = ':';
-            for (int i = 3; i >= 0; i--) *p++ = hex[(wifi.adapter.device >> (i*4)) & 15];
-            *p = 0; text(180, 156, buf, COLOR_TEXT_PRIMARY);
-            if (wifi.adapter.state == B43_CORE_FOUND || wifi.adapter.state == B43_LEGACY) {
-                number(buf, wifi.adapter.core_revision);
-                text(20, 184, "Wireless core revision", COLOR_TEXT_MUTED);
-                text(240, 184, buf, COLOR_TEXT_PRIMARY);
-            }
-        }
         text(20, 220, "No wireless connection", COLOR_TEXT_PRIMARY);
         text(20, 244, "Networks appear when radio support is available.", COLOR_TEXT_MUTED);
         button(20, 276, 212, "Detect adapter", 0);
