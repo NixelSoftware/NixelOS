@@ -17,7 +17,13 @@ QEMU_MEMORY ?= 512M
 QEMU_CPU ?= max
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000,hostfwd=tcp::2323-:2323
-QEMU_DISPLAY ?= sdl
+QEMU_DISPLAY ?= sdl,gl=off
+# SDL can otherwise create an OpenGL renderer even with QEMU GL disabled.
+# Use software rendering so startup also works on hosts with broken GLX.
+export SDL_RENDER_DRIVER ?= software
+# SDL's X11 initialization may probe GLX even for a software renderer.
+# Bypass that probe on hosts where GLX context creation raises an X error.
+export SDL_VIDEO_X11_FORCE_EGL ?= 1
 QEMU_VGA ?= virtio
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_AUDIO_DRIVER ?= sdl
