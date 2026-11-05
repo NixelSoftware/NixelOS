@@ -67,6 +67,9 @@ int main(void) {
         info = device_setup(); fail_allocation = fail;
         assert(iwlegacy_firmware_check(&info) == IL_NOMEM && !pinned() && !bar_probes);
     }
+    info = device_setup(); fail_allocation = 9;
+    il_scan_results_t found;
+    assert(iwlegacy_scan(&info,&found) == IL_NOMEM && !pinned() && !bar_probes && !found.count);
     info = device_setup(); command |= PCI_COMMAND_MASTER;
     assert(iwlegacy_firmware_check(&info) == IL_ACCESS && !pinned() && !bar_probes);
     info = device_setup(); registers[CSR_GP_CNTRL/4] = 0;

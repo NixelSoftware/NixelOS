@@ -4,6 +4,7 @@
  */
 #include "internal.h"
 #include "session.h"
+#include "scan.h"
 #include "fh.h"
 #include "../../../../fs.h"
 #include "../../../../paging.h"
@@ -15,6 +16,7 @@ typedef struct { uint32_t address, pages; } dma_block_t;
  * reboot. Never hand uncertain DMA memory back to the physical allocator. */
 static dma_block_t quarantined[8];
 static unsigned quarantine_count;
+static mutex_t device_mutex;
 static dma_block_t allocate(unsigned bytes) {
     dma_block_t b = {0,(bytes + PAGE_SIZE - 1) / PAGE_SIZE};
     b.address = paging_alloc_contiguous(b.pages);
@@ -62,10 +64,10 @@ static int tx_stop(const il_io_t* io) {
     il_release(io);
     return result;
 }
-int iwlegacy_firmware_check(iwlegacy_info_t* info) {
-    MUTEX_GUARD(kernel_mutex);
+static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results) {
+    MUTEX_GUARD(device_mutex);
     if (!info || !il3945_matches(info->vendor,info->device) || !info->eeprom.version) return IL_INVALID;
-    if (info->state == IL_FIRMWARE_READY) return IL_OK;
+    if (!results && (info->state == IL_FIRMWARE_READY || info->state == IL_SCAN_COMPLETE)) return IL_OK;
     if (quarantine_count) { info->state = IL_FIRMWARE_FAILED; return info->error = IL_DMA_STOP; }
     const pci_device_t* dev = 0;
     for (unsigned i = 0; i < pci_device_count(); i++) {
@@ -75,6 +77,7 @@ int iwlegacy_firmware_check(iwlegacy_info_t* info) {
     }
     if (!dev) return info->error = IL_ACCESS;
     info->state = IL_FIRMWARE_FAILED;
+    info->firmware_version = 0; info->scan_count = 0;
     dma_block_t raw = allocate(FW_MAX + 1);
     if (!raw.address) return info->error = IL_NOMEM;
     uint8_t* file = (uint8_t*)(unsigned long)raw.address;
@@ -106,6 +109,12 @@ int iwlegacy_firmware_check(iwlegacy_info_t* info) {
     blocks[count] = allocate(254 * IL_RX_BYTES);
     if (!blocks[count].address) goto free_blocks;
     uint32_t rx = blocks[count++].address;
+    uint32_t command_buffer = 0;
+    if (results) {
+        blocks[count] = allocate(PAGE_SIZE);
+        if (!blocks[count].address) goto free_blocks;
+        command_buffer = blocks[count++].address;
+    }
     il_rx_buffer_t buffers[254];
     for (unsigned i = 0; i < 254; i++) buffers[i] = (il_rx_buffer_t){
         (uint8_t*)(unsigned long)(rx + i * IL_RX_BYTES),rx + i * IL_RX_BYTES};
@@ -148,6 +157,25 @@ int iwlegacy_firmware_check(iwlegacy_info_t* info) {
             il3945_alive_t alive;
             result = il3945_firmware_run(&io,&queue,file,(uint32_t)bytes,&dma,&alive);
             if (!result) info->firmware_version = fw.version;
+            if (!result && results) {
+                il_command_queue_t commands = {0};
+                result = il3945_command_prepare(&commands,(void*)(unsigned long)rings[4],
+                    (uint8_t*)(unsigned long)command_buffer,command_buffer);
+                uint8_t rxon[44] = {0};
+                for (unsigned i = 0; i < 6; i++) rxon[i] = info->eeprom.mac[i];
+                rxon[24] = 3; rxon[25] = 10; rxon[28] = 0xFF; rxon[29] = 15;
+                unsigned first = 0;
+                while (first < IL3945_CHANNEL_COUNT && !(info->eeprom.channels[first].flags & 1)) first++;
+                if (first == IL3945_CHANNEL_COUNT) result = IL_BAD_EEPROM;
+                else {
+                    rxon[32] = info->eeprom.channels[first].band == 2 ? 5 : 0;
+                    rxon[33] = 0x80; /* TSF to host */
+                    rxon[36] = 4 | 8 | 16 | 64;
+                    rxon[40] = info->eeprom.channels[first].number;
+                }
+                if (!result) result = il3945_command_send(&io,&queue,&commands,0x10,rxon,sizeof(rxon),1000,0,0);
+                if (!result) result = il3945_scan_run(&io,&queue,&commands,&info->eeprom,results);
+            }
         }
     }
     int rx_stopped = il3945_rx_stop(&io,&queue);
@@ -165,6 +193,18 @@ free_blocks:
     for (unsigned i = 0; i < count; i++) release(blocks[i]);
     release(raw);
     info->error = result;
-    if (!result) info->state = IL_FIRMWARE_READY;
+    if (!result) {
+        info->state = results ? IL_SCAN_COMPLETE : IL_FIRMWARE_READY;
+        info->scan_count = results ? results->count : 0;
+    } else if (results && info->firmware_version && result != IL_DMA_STOP) info->state = IL_SCAN_FAILED;
+    return result;
+}
+
+int iwlegacy_firmware_check(iwlegacy_info_t* info) { return boot_operation(info,0); }
+int iwlegacy_scan(iwlegacy_info_t* info, il_scan_results_t* results) {
+    if (!results) return IL_INVALID;
+    *results = (il_scan_results_t){0};
+    int result = boot_operation(info,results);
+    if (result) results->count = 0; /* Never publish stale/partial scans as successful. */
     return result;
 }

@@ -3,7 +3,9 @@
 #include <string.h>
 /* Kernel lock is not needed in this single-threaded PCI/MMIO fixture. */
 #define KERNEL_MUTEX_H
-#define MUTEX_GUARD(lock) ((void)0)
+#define MUTEX_GUARD(lock) ((void)(&(lock)))
+typedef struct { unsigned depth; } mutex_t;
+static mutex_t kernel_mutex;
 #include "../iwlegacy.c"
 
 static pci_device_t devices[3];

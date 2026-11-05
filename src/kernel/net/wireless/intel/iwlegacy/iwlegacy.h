@@ -11,7 +11,7 @@
 typedef enum {
     IL_ABSENT, IL_PCI_FOUND, IL_DEVICE_BUSY, IL_ACCESS_FAILED,
     IL_CLOCK_TIMEOUT, IL_EEPROM_FAILED, IL_EEPROM_READY,
-    IL_FIRMWARE_MISSING, IL_FIRMWARE_FAILED, IL_FIRMWARE_READY
+    IL_FIRMWARE_MISSING, IL_FIRMWARE_FAILED, IL_FIRMWARE_READY, IL_SCAN_FAILED, IL_SCAN_COMPLETE
 } iwlegacy_state_t;
 typedef struct {
     uint8_t number, band, flags;
@@ -22,6 +22,7 @@ typedef struct {
     uint16_t version, board_revision;
     il3945_channel_t channels[IL3945_CHANNEL_COUNT];
     uint8_t valid_channels;
+    uint8_t calibration[320];
 } il3945_eeprom_t;
 typedef struct {
     iwlegacy_state_t state;
@@ -29,11 +30,13 @@ typedef struct {
     uint8_t pci_bus, pci_slot, pci_function, revision, bg_only, rfkill;
     uint32_t hardware_revision, firmware_version;
     int error;
+    unsigned scan_count;
     il3945_eeprom_t eeprom;
 } iwlegacy_info_t;
 /* Native 3945BG/ABG port; does not register an Ethernet transport yet. */
 void iwlegacy_probe(iwlegacy_info_t* info);
-/* Load/check runtime firmware on an idle adapter, then stop it. No scan/TX. */
+/* Load/check runtime firmware on an idle adapter, then stop it. No scan/TX.
+ * Invoke outside kernel_mutex; firmware operations have a private mutex. */
 int iwlegacy_firmware_check(iwlegacy_info_t* info);
 const char* iwlegacy_description(iwlegacy_state_t state);
 int il3945_matches(uint16_t vendor, uint16_t device);
@@ -52,6 +55,10 @@ enum {
 /* All register sequences require exclusive access to an idle 3945. No DMA
  * bus mastering or RF transmission is enabled by inspection. */
 int il3945_inspect(const il_io_t* io, uint8_t bg_only, iwlegacy_info_t* info);
+/* Encode C_TX_PWR_TBL using EEPROM interpolation and current raw temperature.
+ * Recompute after RXON and whenever temperature changes by at least 6 units. */
+int il3945_power_table(const il3945_eeprom_t*, unsigned band, unsigned channel,
+                         int temperature, int user_limit_dbm, uint8_t out[52]);
 int il3945_eeprom_parse(const uint8_t* data, uint32_t size,
                         uint8_t bg_only, il3945_eeprom_t* out);
 

@@ -64,12 +64,13 @@ static il_io_t transport_setup(transport_t* t) {
     assert(il3945_rx_prepare(&t->rx,descriptors,0x10000,status,0x11000,buffers) == IL_OK);
     return (il_io_t){t,transport_read,transport_write,transport_delay};
 }
-static void packet(void* ctx, uint8_t command, uint8_t flags, uint16_t sequence,
+static void __attribute__((unused)) packet(void* ctx, uint8_t command, uint8_t flags, uint16_t sequence,
                      const uint8_t* payload, unsigned length) {
     transport_t* t = ctx;
     assert(command == 0x82 && flags == 0 && sequence == 0x1234);
     assert(length == 4 && il_le32(payload) == 0xABCDEF01); t->dispatched++;
 }
+#ifndef IL_TRANSPORT_FIXTURE_ONLY
 int main(void) {
     transport_t t; il_io_t io = transport_setup(&t);
     assert(t.rx.write == 254 && descriptors[253] == buffers[253].dma && !descriptors[254]);
@@ -128,4 +129,7 @@ int main(void) {
     assert(il3945_firmware_run(&io,&t.rx,t.firmware,sizeof(t.firmware),&dma,&alive) == IL_INVALID);
     assert(t.m.writes == before);
     puts("iwlegacy transport: RX wrap/recycling, malformed DMA, TX setup, ALIVE transition and failures passed");
+    return 0;
 }
+
+#endif

@@ -10,6 +10,12 @@ void* wifi_crypto_memcpy(void* out, const void* in, size_t length) {
     while (length--) *d++ = *s++;
     return out;
 }
+void* wifi_crypto_memmove(void* out, const void* in, size_t length) {
+    uint8_t* d = out; const uint8_t* s = in;
+    if ((unsigned long)d < (unsigned long)s) return wifi_crypto_memcpy(out,in,length);
+    while (length) { length--; d[length] = s[length]; }
+    return out;
+}
 void* wifi_crypto_memset(void* out, int value, size_t length) {
     uint8_t* d = out; while (length--) *d++ = (uint8_t)value; return out;
 }

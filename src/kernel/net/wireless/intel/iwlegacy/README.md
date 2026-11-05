@@ -1,97 +1,84 @@
 # Native Intel iwlegacy port
 
-This directory adapts Intel's Linux iwlegacy implementation supplied in
-`documentation/linux-for-ref/iwlegacy/`. It targets the PRO/Wireless 3945BG/ABG
-first (PCI `8086:4222` and `8086:4227`). This is an initial hardware/firmware
-bring-up port, not a working station driver. The Linux 4965 path is not ported.
+This directory adapts the supplied Linux iwlegacy reference in
+`documentation/linux-for-ref/iwlegacy/` for Intel PRO/Wireless 3945BG/ABG,
+PCI `8086:4222` and `8086:4227`. It has a native passive-scan path. A connected
+station data path is not yet implemented; Intel 4965 remains unported.
 
-## Implemented
+## Native driver path
 
-* Native PCI discovery, including BG-only subsystem variants from the upstream
-  match table, firmware-assigned BAR validation and exclusive-access checks.
-* 3945 APM/PLL initialization, bounded clock/MAC-access waits, indirect peripheral
-  access, DMA/BSM clocks, internal interrupt masking and radio-chip reset.
-* The 1024-byte EEPROM signature, ownership and read sequence. Decode the factory
-  MAC, EEPROM/board revisions and all 56 regulatory channel entries. Retain
-  EEPROM flags, DFS/passive restrictions and signed transmit-power limits; omit
-  5 GHz permissions on BG-only cards.
-* Stop-master/software-reset/initialization cleanup after inspection. The probe
-  never enables PCI bus mastering or transmits a frame; the APM clock enables do
-  not start DMA without queue configuration.
-* Strict little-endian firmware parsing for API versions 1 and 2, including
-  exact file lengths, overflow-safe bounds and aligned image sizes. The native
-  boot path requires all five images and limits bootstrap code to the physical
-  1 KiB BSM SRAM, rather than the larger instruction-SRAM limit in the Linux
-  parser. Firmware buffers are caller-owned and must remain immutable.
-* BSM image upload/readback, initial-image DMA address/size programming, bounded
-  bootstrap copy completion and enabling subsequent power-management reloads.
-  This component is invoked by the explicit firmware diagnostic, not discovery.
-* HAL and shell integration: Settings uses vendor-neutral status text; `netdev`
-  shows the 3945 variant, subsystem ID, initialization status and EEPROM/MAC,
-  channel-count and radio-switch information when available.
+`iwlegacy.c` independently discovers a 3945 PCI function, checks BAR/ownership,
+and reads the EEPROM MAC, revisions, subsystem capabilities and regulatory
+channels. Discovery does not enable bus mastering or transmit a frame. Existing
+active owners are left alone. Inspection can bring an idle card to D0; afterward
+it is stopped with its original PCI command restored, and remains in D0.
 
-`sys_wifi_probe()` inspects the first matching 3945 PCI function, independently
-of Ethernet and b43 discovery. Devices already bus mastering or initialized are
-left alone. An idle device may be brought to D0 for inspection; afterward the NIC
-is stopped and the original PCI command is restored. It remains in D0 rather
-than restoring a previous PCI power state. PCI inventory and BAR mapping use the
-kernel's existing firmware-assigned, 32-bit MMIO services.
+`3945.c` ports PLL/APM and EEPROM access with bounded polling and cleanup.
+`firmware.c` validates complete API-1/API-2 little-endian firmware containers,
+image bounds and alignment. `bsm.c` uploads/verifies bootstrap SRAM. `session.c`
+configures the scheduler and five TFD rings, waits for initialization ALIVE,
+verifies instruction SRAM, programs runtime pointers with the load bit last,
+then waits for and verifies runtime ALIVE. RF-kill and hardware/firmware errors
+terminate bounded waits.
 
-## Firmware startup and transport components
+`rx.c` owns a coherent 256-entry receive ring with 254 posted 4 KiB buffers,
+reserved ring slots, eight-entry producer alignment and bounded recycling.
+`command.c` submits actual queue-4 firmware commands, matches command/sequence
+completions and preserves buffer ownership across failures. Timed-out commands
+poison the queue until hardware reset, rather than reusing a still-owned buffer.
 
-`rx.c` manages a coherent 256-entry receive ring with 254 posted 4 KiB buffers,
-the two-slot hardware gap, eight-entry producer alignment, bounded consumer
-processing, notification length validation and buffer recycling. The callback
-borrows a packet only until it returns. Completion indices outside the posted
-window are rejected; callers retain allocations if DMA stop is not acknowledged.
+`device.c` loads `/lib/firmware/iwlwifi-3945-2.ucode`, with an API-1 filename
+fallback when that file cannot be read. Firmware is not bundled. It prepares
+coherent physical firmware/ring storage, starts runtime firmware, then runs the
+requested operation. The scan path configures unassociated RXON and sends
+passive C_SCAN commands separately for each permitted band. It does not send
+probes or promote a passive channel to active transmission.
 
-`session.c` configures the scheduler and five 256-entry TFD queues, starts
-bootstrap firmware, waits for initialization ALIVE, verifies instruction SRAM,
-programs runtime DMA pointers with the load bit last, and waits for/validates
-runtime ALIVE. Both waits are bounded and check RF-kill and firmware/hardware
-errors. This configures empty TX queues; command submission/completions and data
-transmission are not implemented.
+`scan.c` bounds-checks RX metadata, FCS/error flags and beacon/probe-response
+IEs; validates BSSIDs; retains up to 32 infrastructure networks; and recognizes
+open, WPA2-CCMP-PSK and unsupported protected configurations. Scan completion
+and command rejection/timeouts are handled independently. Failed scans are not
+published as successful partial results. Settings displays paged results with
+binary SSIDs escaped for display; the binary identities remain in the cache.
 
-On the first Intel Settings scan attempt, `device.c` checks
-`/lib/firmware/iwlwifi-3945-2.ucode`, falling back to
-`/lib/firmware/iwlwifi-3945-1.ucode` if the API-2 file cannot be read. Firmware
-is not redistributed here. Invalid images fail validation before NIC startup.
-The driver allocates coherent physical memory using the kernel paging allocator,
-copies/pins the firmware images, brings the NIC through runtime ALIVE, then
-stops RX/TX and resets the device. PCI bus mastering is only enabled after the
-queues are configured. It is disabled again on cleanup.
+The operation stops RX/TX and resets the NIC before releasing allocations. If
+DMA idle or bus-master shutdown cannot be confirmed, posted allocations remain
+quarantined until reboot. Long firmware operations use a private device mutex;
+the HAL publishes snapshots under the shared kernel mutex, allowing the window
+manager to run during the scan. The NIC is not kept connected after a scan.
 
-This is a firmware diagnostic stage, not a scan: no RXON/scan/association or
-frame-transmission command is issued. `netdev` reports the verified firmware
-version or a startup error, while Settings reports that scanning is unavailable.
-A successful result is cached until a new adapter probe; the NIC is stopped,
-not kept connected. Failed DMA-idle/master-stop acknowledgements quarantine
-posted allocations until reboot, rather than allowing DMA into freed RAM.
-Allocation and pre-activation failures release all allocated pages.
+## Additional station components
 
-Still required: command submission and completion dispatch, calibration and
-temperature-based transmit power, actual scanning, authentication/association,
-encryption/key installation and 802.11/Ethernet bridging. The shared
-`../../security` module supplies wolfCrypt-based WPA2 PMK,
-PTK and EAPOL MIC primitives, but these are not a four-way handshake. Intel 4965
-is still unported. Host tests do not establish physical-card compatibility.
+`power.c` ports EEPROM gain interpolation, the upstream analog/DSP gain tables,
+rate clipping, and raw-temperature compensation for C_TX_PWR_TBL. It validates
+channel permissions and calibration data before exposing a power command. The
+live scan is receive-only; this helper still needs to be scheduled before data
+transmission and after RXON/temperature changes.
 
-## Validation
+`../../ieee80211.c` implements bounded infrastructure Ethernet/SNAP conversion.
+`../../security/` implements WPA2 four-way/GTK handshakes and CCMP framing/replay
+checks over the existing wolfCrypt sources. These components have tests but are
+not wired into a persistent association/transmit loop.
 
-Run `make test-iwlegacy`. The host register models and lifecycle tests exercise firmware parsing,
-regulatory data, APM/EEPROM sequencing, RF-kill polarity, indirect register
-routing, bootstrap upload/verification, bounded timeouts, cleanup, PCI matching
-and refusal to touch an existing owner, RX wrap/recycling, ALIVE ordering,
-firmware-file failures, allocation rollback and DMA quarantine. These tests do not transmit RF and do
-not emulate a full Intel radio. Build `make src/kernel/kernel.bin` for the native
-32-bit freestanding integration check.
+## Still missing for connections
 
-## Provenance and license
+Native data/management TX submission and completion, AP station/rate table
+configuration, authentication/association/deauthentication state, persistent
+DMA ownership and shutdown/recovery, periodic thermal updates, integration of
+the supplicant with received/sent EAPOL frames, and selection of the Wi-Fi
+interface in the Ethernet/IPv4/DHCP HAL remain unfinished. Settings can scan,
+but cannot connect to an AP or send encrypted network traffic yet.
 
-`3945.c`, `bsm.c`, `firmware.c` and `eeprom.c` adapt the Linux iwlegacy
-`3945.c`, `3945-mac.c`, `common.c`, `common.h` and `3945.h` algorithms and layouts.
-Copyright (c) 2003–2011 Intel Corporation. All rights reserved. Native adaptations
-retain GPL-2.0-only licensing; see `COPYING`. The original `csr.h` and `prph.h`
-register definitions are copied unchanged with their complete Intel copyright
-and dual BSD/GPLv2 notices. Linux device model, mac80211, workqueue and allocator
-interfaces are not copied into the native kernel.
+## Validation and provenance
+
+Run `make test-iwlegacy`, `make test-wifi-crypto` and
+`make src/kernel/kernel.bin`. Register models exercise PCI ownership, EEPROM,
+firmware boot, DMA/ring wrapping, command completion matching/poisoning,
+scan parsing, allocation rollback and quarantine. Power/framing and independent
+cryptographic tests cover the additional protocol components. Physical-card
+interoperability has not been tested.
+
+The firmware/register/power algorithms adapt Linux `3945.c`, `3945-mac.c`,
+`common.c`, `common.h`, `commands.h` and `3945.h`, copyright (c) 2003–2011 Intel
+Corporation. Native adaptations retain GPL-2.0-only licensing; see `COPYING`.
+The copied `csr.h`/`prph.h` retain their complete dual BSD/GPLv2 notices.

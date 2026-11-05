@@ -184,6 +184,9 @@ static void print_wifi_device(void) {
                 if (intel->error < 0) print("-");
                 print_u32(intel->error < 0 ? (unsigned)-intel->error : (unsigned)intel->error);
             }
+            if (intel->state == IL_SCAN_COMPLETE) {
+                print("\n  Networks found: "); print_u32(intel->scan_count);
+            }
             if (intel->firmware_version) {
                 print("\n  Firmware version: ");
                 for (int shift = 24; shift >= 0; shift -= 8) {

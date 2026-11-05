@@ -229,40 +229,32 @@ Useful checks while adding a driver:
 
 The repository's `netdiag` app and kernel serial messages are the available built-in debugging aids. There is no general packet capture tool or automated hardware-driver test harness in the current tree.
 
-## Intel 3945 Wi-Fi firmware and security progress
+## Intel 3945 passive scanning and station components
 
-The native driver is in `src/kernel/net/wireless/intel/iwlegacy/`. It identifies
-Intel 3945BG/ABG PCI functions (`8086:4222` and `8086:4227`) independently of
-Ethernet, reads EEPROM/MAC and regulatory channel information, and exposes
-results through Settings and `netdev`.
+The native driver in `src/kernel/net/wireless/intel/iwlegacy/` identifies Intel
+3945BG/ABG (`8086:4222` and `8086:4227`) independently of Ethernet and exposes
+EEPROM/MAC, channel permissions and driver state through `netdev` and Settings.
+Firmware is loaded from `/lib/firmware/iwlwifi-3945-2.ucode`, with an API-1
+filename fallback when that file cannot be read; firmware is not bundled.
 
-The first Intel Settings scan attempt now runs a firmware diagnostic. It reads
-`/lib/firmware/iwlwifi-3945-2.ucode`, falling back to
-`/lib/firmware/iwlwifi-3945-1.ucode` if the API-2 file cannot be read. No firmware
-is bundled. After validation it prepares coherent firmware DMA storage, a
-256-entry receive ring and five empty transmit queues, starts initialization
-firmware, verifies instruction SRAM, and transitions to verified runtime ALIVE.
-It then stops RX/TX, resets the device and disables PCI bus mastering. A
-successful diagnostic is cached until adapter detection runs again; it does not
-leave the NIC running or connected. `netdev` reports firmware version/errors.
+The Intel scan action now boots firmware, configures RXON and submits actual
+passive firmware scan commands for EEPROM-permitted channels in each band.
+Settings displays up to 32 cached network results in pages, with open/WPA2/other
+protection labels. Command and scan completion are matched independently;
+timeouts, RF-kill and malformed notifications fail without publishing stale
+results. These paths are register-model tested, not physical-card validated.
+Long operations no longer hold the shared window/network mutex.
 
-The receive component validates DMA indices and notification lengths, recycles
-buffers across ring wrap and requires DMA-idle acknowledgement before releasing
-posted memory. Unconfirmed DMA stop quarantines posted allocations until reboot;
-pre-activation failures free every allocation. These paths have host register
-and allocation-failure tests, not physical-card validation.
+Additional tested station components provide EEPROM/temperature-based transmit
+power calculation, Ethernet/802.11 SNAP conversion, the WPA2 four-way and GTK
+rekey exchanges, AES key unwrap, CCMP encryption/decryption, replay rejection and
+counter-preserving key reinstall handling. They reuse wolfCrypt in a separate
+allocation-free kernel build. They are not yet connected to native association
+or a persistent data interface: management/data TX, station/rate setup, thermal
+scheduling, association recovery and Wi-Fi selection in the network HAL remain.
+The OS can attempt scans on 3945 hardware but cannot join an AP yet. See the
+current driver and security READMEs for exact implementation boundaries.
 
-`net/wireless/security/` reuses the existing wolfCrypt SHA-1/HMAC/PBKDF2 sources
-with an isolated allocation-free kernel configuration. It provides WPA2 PMK/PTK
-derivation and EAPOL-Key descriptor version 2 MIC generation/verification.
-TLS sessions are not used for Wi-Fi frames. The helpers are not yet wired into a
-four-way handshake, replay protection, key installation or CCMP data encryption.
-
-Command submission/completions, calibration, actual scan/association, data
-transmission and encryption integration still need to be ported. Intel 4965 is
-not supported by this port. Settings continues to report scanning unavailable.
-
-Run `make test-iwlegacy`, `make test-wifi-crypto`, and
-`make src/kernel/kernel.bin`. Component contracts and remaining work are in
-`src/kernel/net/wireless/intel/iwlegacy/README.md` and
-`src/kernel/net/wireless/security/README.md`.
+Run `make test-iwlegacy`, `make test-wifi-crypto` and
+`make src/kernel/kernel.bin` for the modeled driver tests, independent crypto
+vectors and native kernel build.

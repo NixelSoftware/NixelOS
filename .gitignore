@@ -15,3 +15,5 @@ struct
 # Local Doom game data
 /*.wad
 /*.WAD
+
+/src/kernel/net/wireless/security/*.d

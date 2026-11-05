@@ -121,6 +121,8 @@ KERNEL_C := \
   src/kernel/net/wireless/intel/iwlegacy/firmware.c src/kernel/net/wireless/intel/iwlegacy/eeprom.c \
   src/kernel/net/wireless/intel/iwlegacy/bsm.c src/kernel/net/wireless/intel/iwlegacy/rx.c \
   src/kernel/net/wireless/intel/iwlegacy/session.c src/kernel/net/wireless/intel/iwlegacy/device.c \
+  src/kernel/net/wireless/intel/iwlegacy/command.c src/kernel/net/wireless/intel/iwlegacy/scan.c \
+  src/kernel/net/wireless/ieee80211.c src/kernel/net/wireless/intel/iwlegacy/power.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
@@ -457,8 +459,8 @@ src/system/shell/commands.o: src/kernel/hal/wifi.h src/kernel/net/wireless/broad
 src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: src/kernel/hal/wifi.h
 
 IWLEGACY_DIR := src/kernel/net/wireless/intel/iwlegacy
-IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c $(IWLEGACY_DIR)/rx.c $(IWLEGACY_DIR)/session.c
-$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h $(IWLEGACY_DIR)/rx.h $(IWLEGACY_DIR)/session.h $(IWLEGACY_DIR)/fh.h
+IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c $(IWLEGACY_DIR)/rx.c $(IWLEGACY_DIR)/session.c $(IWLEGACY_DIR)/command.c $(IWLEGACY_DIR)/scan.c $(IWLEGACY_DIR)/power.c
+$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h $(IWLEGACY_DIR)/rx.h $(IWLEGACY_DIR)/session.h $(IWLEGACY_DIR)/fh.h $(IWLEGACY_DIR)/command.h $(IWLEGACY_DIR)/scan.h
 src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h
 .PHONY: test-iwlegacy
 test-iwlegacy:
@@ -470,6 +472,10 @@ test-iwlegacy:
 	/tmp/nixel-test-iwlegacy-transport
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/device_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-device
 	/tmp/nixel-test-iwlegacy-device
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/scan_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-scan
+	/tmp/nixel-test-iwlegacy-scan
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/power_bridge_test.c $(IWLEGACY_DIR)/power.c src/kernel/net/wireless/ieee80211.c -o /tmp/nixel-test-iwlegacy-power
+	/tmp/nixel-test-iwlegacy-power
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk
@@ -490,12 +496,14 @@ src/apps/doom/compat/libc.o: src/system/user/sys_api.h
 # Separate objects prevent the TLS client's settings/allocator from leaking in.
 WIFI_SECURITY_DIR := src/kernel/net/wireless/security
 WIFI_CRYPTO_VENDOR := src/system/libraries/tls/vendor/wolfssl
-WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha hmac hash pwdbased))
+WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha hmac hash pwdbased aes))
 WIFI_CRYPTO_FLAGS := -U__unix__ -U__linux__ -DWOLFSSL_USER_SETTINGS -I$(WIFI_SECURITY_DIR) -Isrc/system/libraries/tls/compat -I$(WIFI_CRYPTO_VENDOR) -fno-builtin -fno-stack-protector
-KERNEL_OBJ += $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_CRYPTO_OBJECTS)
-src/kernel/kernel.bin: $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_CRYPTO_OBJECTS)
-$(WIFI_SECURITY_DIR)/wpa2.o: CFLAGS += $(WIFI_CRYPTO_FLAGS)
+KERNEL_OBJ += $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o $(WIFI_CRYPTO_OBJECTS)
+src/kernel/kernel.bin: $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o $(WIFI_CRYPTO_OBJECTS)
+$(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o: CFLAGS += $(WIFI_CRYPTO_FLAGS)
 $(WIFI_SECURITY_DIR)/wpa2.o: $(WIFI_SECURITY_DIR)/wpa2.c $(WIFI_SECURITY_DIR)/wpa2.h $(WIFI_SECURITY_DIR)/user_settings.h
+$(WIFI_SECURITY_DIR)/ccmp.o: $(WIFI_SECURITY_DIR)/ccmp.c $(WIFI_SECURITY_DIR)/ccmp.h $(WIFI_SECURITY_DIR)/wpa2.h $(WIFI_SECURITY_DIR)/user_settings.h
+$(WIFI_SECURITY_DIR)/handshake.o: $(WIFI_SECURITY_DIR)/handshake.c $(WIFI_SECURITY_DIR)/handshake.h $(WIFI_SECURITY_DIR)/ccmp.h $(WIFI_SECURITY_DIR)/wpa2.h $(WIFI_SECURITY_DIR)/user_settings.h
 $(WIFI_CRYPTO_OBJECTS): $(WIFI_SECURITY_DIR)/user_settings.h Makefile
 $(WIFI_SECURITY_DIR)/wolf_%.o: $(WIFI_CRYPTO_VENDOR)/wolfcrypt/src/%.c
 	$(CC) $(CFLAGS) $(WIFI_CRYPTO_FLAGS) -MMD -MP -c $< -o $@
@@ -503,3 +511,10 @@ $(WIFI_SECURITY_DIR)/wolf_%.o: $(WIFI_CRYPTO_VENDOR)/wolfcrypt/src/%.c
 .PHONY: test-wifi-crypto
 test-wifi-crypto:
 	CC="$(CC)" $(PYTHON) $(WIFI_SECURITY_DIR)/tests/test_wpa2.py
+
+src/kernel/net/wireless/ieee80211.o: src/kernel/net/wireless/ieee80211.h
+
+src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/scan.h $(IWLEGACY_DIR)/command.h $(IWLEGACY_DIR)/rx.h
+$(WIFI_SECURITY_DIR)/%.o: $(WIFI_SECURITY_DIR)/%.c
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+-include $(WIFI_SECURITY_DIR)/wpa2.d $(WIFI_SECURITY_DIR)/ccmp.d $(WIFI_SECURITY_DIR)/handshake.d

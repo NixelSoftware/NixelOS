@@ -14,6 +14,7 @@
 
 static Window window;
 static int tab, mode, busy, network_action;
+static unsigned wifi_scroll;
 static char manual[3][16];
 static int field = -1, replace_field;
 static uint32_t saved_volume = 75;
@@ -196,8 +197,28 @@ static void draw(Window* win) {
     } else if (tab == 4) {
         text(20, 88, "Wi-Fi", COLOR_TEXT_PRIMARY);
         text(20, 120, sys_wifi_status_text(), COLOR_TEXT_MUTED);
-        text(20, 220, "No wireless connection", COLOR_TEXT_PRIMARY);
-        text(20, 244, "Networks appear when radio support is available.", COLOR_TEXT_MUTED);
+        unsigned count = sys_wifi_network_count();
+        if (wifi_scroll >= count) wifi_scroll = 0;
+        if (!count) text(20, 156, "Scan to find nearby networks.", COLOR_TEXT_MUTED);
+        for (unsigned i = 0; i < 4 && wifi_scroll + i < count; i++) {
+            il_network_t network;
+            if (!sys_wifi_get_network(wifi_scroll + i,&network)) continue;
+            char name[33];
+            unsigned n = network.ssid_length;
+            for (unsigned j = 0; j < n; j++) name[j] = network.ssid[j] >= 32 && network.ssid[j] < 127 ? network.ssid[j] : '?';
+            name[n] = 0;
+            text(20, 156 + (int)i * 24, n ? name : "Hidden network", COLOR_TEXT_PRIMARY);
+            text(300, 156 + (int)i * 24, network.security == IL_SECURITY_OPEN ? "Open" :
+                network.security == IL_SECURITY_WPA2_PSK ? "WPA2" : "Protected", COLOR_TEXT_MUTED);
+        }
+        if (count > 4) {
+            button(20, 244, 104, "Previous", 0);
+            char summary[32], *p = number(summary,count);
+            const char* suffix = " networks";
+            while (*suffix) *p++ = *suffix++;
+            *p = 0; text(172, 252, summary, COLOR_TEXT_MUTED);
+            button(356, 244, 104, "Next", 0);
+        }
         button(20, 276, 212, "Detect adapter", 0);
         button(244, 276, 216, "Scan networks", 0);
         button(20, 310, 212, "Wired settings", 0);
@@ -277,6 +298,9 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
             }
         }
     } else if (tab == 4 && !busy) {
+        unsigned count = sys_wifi_network_count();
+        if (count > 4 && hit(x,y,20,244,104)) wifi_scroll = wifi_scroll >= 4 ? wifi_scroll - 4 : 0;
+        if (count > 4 && hit(x,y,356,244,104) && wifi_scroll + 4 < count) wifi_scroll += 4;
         if (hit(x,y,20,310,212)) { tab = 1; load_manual(); }
         int action = hit(x,y,20,276,212) ? 4 : hit(x,y,244,276,216) ? 5 : 0;
         if (action) {

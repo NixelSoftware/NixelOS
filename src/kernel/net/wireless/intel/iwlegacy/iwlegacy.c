@@ -64,6 +64,8 @@ const char* iwlegacy_description(iwlegacy_state_t state) {
     case IL_EEPROM_READY: return "Intel 3945 EEPROM ready; firmware not started.";
     case IL_FIRMWARE_MISSING: return "Intel 3945 firmware missing: install iwlwifi-3945-2.ucode.";
     case IL_FIRMWARE_FAILED: return "Intel 3945 firmware startup failed; see error code.";
+    case IL_SCAN_COMPLETE: return "Intel 3945 passive scan completed.";
+    case IL_SCAN_FAILED: return "Intel 3945 scan failed; see error code.";
     case IL_FIRMWARE_READY: return "Intel 3945 runtime firmware verified; scan/association not ported.";
     default: return "No Intel 3945 adapter found.";
     }

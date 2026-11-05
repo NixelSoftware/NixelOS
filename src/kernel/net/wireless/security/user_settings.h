@@ -13,6 +13,7 @@
 #define SINGLE_THREADED
 #define WOLFSSL_NO_MALLOC
 #define WOLFSSL_NO_ASM
+#define WC_BARRIER_DATA(p) __asm__ __volatile__("" : : "r"(p) : "memory")
 #define NO_FILESYSTEM
 #define NO_DEV_RANDOM
 #define WC_NO_RNG
@@ -22,7 +23,10 @@
 #define NO_RSA
 #define NO_DH
 #define NO_DSA
-#define NO_AES
+#define HAVE_AESCCM
+#define HAVE_AES_KEYWRAP
+#define WOLFSSL_AES_DIRECT
+#define NO_AES_CBC
 #define NO_DES3
 #define NO_RC4
 #define NO_MD4
@@ -41,8 +45,9 @@ void* wifi_crypto_memset(void*, int, size_t);
 int wifi_crypto_memcmp(const void*, const void*, size_t);
 size_t wifi_crypto_strlen(const char*);
 void wifi_crypto_zero(void*, size_t);
-#define ForceZero wifi_crypto_zero
 #define XSTRLEN wifi_crypto_strlen
+void* wifi_crypto_memmove(void*, const void*, size_t);
+#define XMEMMOVE wifi_crypto_memmove
 #define XMEMCPY wifi_crypto_memcpy
 #define XMEMSET wifi_crypto_memset
 #define XMEMCMP wifi_crypto_memcmp
