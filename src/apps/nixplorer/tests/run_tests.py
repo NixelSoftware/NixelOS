@@ -22,11 +22,16 @@ with tempfile.TemporaryDirectory(prefix='nixplorer-https-') as directory:
     assert image[:8]==b'APP1\x03\0\0\0' and len(image)<=1048576
     run(CC+['-O2',str(B/'tests/response.c'),str(B/'engine/net/response.c'),'-o',str(tmp/'response')])
     run([str(tmp/'response')])
+    run(CC+['-O2',str(B/'tests/color_functions.c'),str(B/'engine/parser/css_color.c'),'-o',str(tmp/'colors')])
+    run([str(tmp/'colors')])
     style_sources=['tests/styles.c','engine/dom/document.c','engine/parser/html.c',
         'engine/font/font.c','engine/style/style.c','engine/style/selectors.c',
         'engine/parser/css_grid.c','engine/parser/css_color.c']
     run(CC+['-O2',*[str(B/source) for source in style_sources],'-o',str(tmp/'styles')])
     run([str(tmp/'styles')])
+    google_sources=['tests/google_css.c',*style_sources[1:], 'engine/layout/box.c']
+    run(CC+['-O2',*[str(B/source) for source in google_sources],'-o',str(tmp/'google-css')])
+    run([str(tmp/'google-css')])
     resize_sources=['tests/resize.c',*style_sources[1:], 'engine/layout/box.c',
         'engine/layout/flex.c','engine/layout/grid.c','engine/net/url.c']
     run(CC+['-O2','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',

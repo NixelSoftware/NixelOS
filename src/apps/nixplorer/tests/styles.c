@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     unsigned size = (unsigned)sprintf(html, "<style>");
     for (unsigned i = 0; i < 1000; i++)
         size += (unsigned)sprintf(html + size, ".unused%u{color:red}", i);
-    size += (unsigned)sprintf(html + size, "div{color:#123456}</style><div>hello</div>");
+    size += (unsigned)sprintf(html + size, "%s", "div{color:color(srgb 7% 20% 34%);background:color-mix(in srgb, red, blue);border:1px solid hwb(120 0% 0%)}</style><div>hello</div>");
     browser_document_parse(&doc, html, size);
     assert(!doc.truncated);
     browser_stylesheet_collect(&sheet, &doc, 0, 0);
@@ -36,7 +36,8 @@ int main(int argc, char **argv) {
     assert(!sheet.truncated && sheet.count == 1001 && grows > 1);
     browser_style parent = {0}, style;
     browser_style_compute(&doc, 3, &sheet, &parent, &style);
-    assert(style.color == 0x123456);
+    assert(style.color == 0x123357);
+    assert(style.background == 0x800080 && style.border_color == 0x00ff00);
     release();
     grows = 0; fail_after = 1;
     browser_stylesheet_collect_growing(&sheet, &doc, 0, 0, grow);

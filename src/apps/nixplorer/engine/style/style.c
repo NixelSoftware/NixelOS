@@ -134,7 +134,7 @@ enum {
     P_COLOR, P_BG, P_BOLD, P_DISPLAY, P_PRE, P_ALIGN, P_UNDERLINE,
     P_MARGIN_TOP, P_MARGIN_RIGHT, P_MARGIN_BOTTOM, P_MARGIN_LEFT,
     P_PADDING_TOP, P_PADDING_RIGHT, P_PADDING_BOTTOM, P_PADDING_LEFT,
-    P_WIDTH, P_MAX_WIDTH, P_HEIGHT, P_MIN_HEIGHT,
+    P_WIDTH, P_MAX_WIDTH, P_HEIGHT, P_MIN_HEIGHT, P_MIN_WIDTH,
     P_BORDER_WIDTH, P_BORDER_COLOR, P_BORDER_STYLE, P_BOX_SIZING, P_LINE_HEIGHT,
     P_FLEX_DIRECTION, P_FLEX_WRAP, P_JUSTIFY, P_ALIGN_ITEMS, P_ROW_GAP, P_COLUMN_GAP,
     P_FLEX_GROW, P_FLEX_SHRINK, P_FLEX_BASIS, P_ALIGN_SELF,
@@ -151,9 +151,10 @@ static void apply_property(browser_style *s, unsigned *ranks, unsigned priority,
         case P_BG: s->background_rgb = (unsigned)value; s->background_set = 1; break;
         case P_BOLD: s->bold = value; break;
         case P_DISPLAY: s->display = value; break;
-        case P_PRE: s->pre = value; break;
+        case P_PRE: s->pre = value == 1; s->nowrap = value == 2; break;
         case P_ALIGN: s->align = value; break;
         case P_UNDERLINE: s->underline = value; break;
+        case P_MIN_WIDTH: s->min_width = value; break;
         case P_WIDTH: s->width = value; break;
         case P_MAX_WIDTH: s->max_width = value; break;
         case P_HEIGHT: s->height = value; break;
@@ -430,9 +431,11 @@ static void box_declaration(browser_style *s, const browser_style *parent, unsig
     else if (equal(name, name_end, "max-width", 1)) property = P_MAX_WIDTH;
     else if (equal(name, name_end, "height", 1)) property = P_HEIGHT;
     else if (equal(name, name_end, "min-height", 1)) property = P_MIN_HEIGHT;
+    else if (equal(name, name_end, "min-width", 1)) property = P_MIN_WIDTH;
     if (property >= 0) {
-        if (property == P_MAX_WIDTH && equal(v, end, "none", 1)) value = -1;
-        else if (!length_value(v, end, property == P_WIDTH || property == P_HEIGHT, property == P_WIDTH || property == P_MAX_WIDTH, &value)) return;
+        if (property == P_MIN_WIDTH && equal(v, end, "auto", 1)) value = 0;
+        else if (property == P_MAX_WIDTH && equal(v, end, "none", 1)) value = -1;
+        else if (!length_value(v, end, property == P_WIDTH || property == P_HEIGHT, property == P_WIDTH || property == P_MAX_WIDTH || property == P_MIN_WIDTH, &value)) return;
         apply_property(s, ranks, priority, property, value); return;
     }
     if (equal(name, name_end, "border", 1)) {
@@ -475,8 +478,131 @@ static void box_declaration(browser_style *s, const browser_style *parent, unsig
     } else flex_declaration(s, ranks, priority, name, name_end, v, end);
 }
 
+/* Custom property values remain slices of the document/stylesheet. Resolve at
+ * their defining element so a descendant cannot rebind inherited references. */
+static int copy_value(char *out, unsigned capacity, const char *p, const char *end) {
+    if ((unsigned)(end - p) >= capacity) return 0;
+    unsigned n = 0;
+    while (p < end) out[n++] = *p++;
+    out[n] = 0; return 1;
+}
+static void custom_declarations(const char *p, const char *end, const char *name, const char *name_end,
+                               unsigned rank, unsigned *best, int *found, char *out, unsigned capacity) {
+    while ((p = skip(p, end)) < end) {
+        const char *semi = find(p, end, ';'), *colon = find(p, semi, ':');
+        const char *key_end = trim(p, colon);
+        if (colon < semi && key_end - p == name_end - name) {
+            const char *a = p, *b = name;
+            while (a < key_end && *a == *b) { a++; b++; }
+            if (a == key_end) {
+                const char *v = skip(colon + 1, semi), *ve = trim(v, semi), *bang = find(v, ve, '!');
+                unsigned priority = rank;
+                if (bang < ve) {
+                    if (!equal(skip(bang + 1, ve), ve, "important", 1)) goto next;
+                    priority |= 0x80000000u; ve = trim(v, bang);
+                }
+                if (priority >= *best) {
+                    *found = copy_value(out, capacity, v, ve) ? 1 : -1;
+                    *best = priority;
+                }
+            }
+        }
+next:
+        p = semi < end ? semi + 1 : end;
+    }
+}
+static int custom_value(const browser_document *doc, int node, const browser_stylesheet *sheet,
+                        const char *name, const char *name_end, char *out, unsigned capacity, int *owner) {
+    for (; node > 0; node = doc->nodes[node].parent) {
+        int found = 0; unsigned best = 0;
+        for (int i = 0; i < sheet->count; i++) {
+            unsigned specificity;
+            const browser_css_rule *rule = &sheet->rules[i];
+            if (browser_css_matches(doc, node, rule->selector, rule->selector_end, &specificity))
+                custom_declarations(rule->declarations, rule->declarations_end, name, name_end,
+                                    specificity + 1, &best, &found, out, capacity);
+        }
+        char inline_style[768];
+        if (browser_node_attr(&doc->nodes[node], "style", inline_style, sizeof(inline_style))) {
+            const char *end = inline_style; while (*end) end++;
+            custom_declarations(inline_style, end, name, name_end, 0x40000000u, &best, &found, out, capacity);
+        }
+        if (found < 0) return 0;
+        if (found) {
+            const char *end = out; while (*end) end++;
+            if (equal(out, end, "inherit", 1) || equal(out, end, "unset", 1)) continue;
+            if (equal(out, end, "initial", 1)) return 0;
+            *owner = node; return 1;
+        }
+    }
+    return 0;
+}
+typedef struct variable_chain {
+    const struct variable_chain *parent;
+    const char *name, *end;
+    int owner;
+} variable_chain;
+static int expand_variables(const browser_document *doc, int node, const browser_stylesheet *sheet,
+                            const char *p, const char *end, char *out, unsigned capacity,
+                            const variable_chain *chain, unsigned depth) {
+    if (depth > 12) return -1;
+    unsigned used = 0;
+    while (p < end) {
+        if (*p == '\'' || *p == '"') {
+            char quote = *p;
+            do {
+                if (used + 1 >= capacity) return 0;
+                out[used++] = *p++;
+                if (p < end && p[-1] == '\\') {
+                    if (used + 1 >= capacity) return 0;
+                    out[used++] = *p++;
+                }
+            } while (p < end && *p != quote);
+            if (p < end) { if (used + 1 >= capacity) return 0; out[used++] = *p++; }
+        } else if (end - p >= 4 && equal(p, p + 4, "var(", 1)) {
+            const char *start = p + 4, *close = start;
+            unsigned nesting = 1; char quote = 0;
+            for (; close < end; close++) {
+                if (quote) { if (*close == '\\' && close + 1 < end) close++; else if (*close == quote) quote = 0; }
+                else if (*close == '\'' || *close == '"') quote = *close;
+                else if (*close == '(') nesting++;
+                else if (*close == ')' && !--nesting) break;
+            }
+            if (close == end) return 0;
+            const char *comma = find(start, close, ','), *name = skip(start, comma), *limit = trim(name, comma);
+            if (limit - name < 3 || name[0] != '-' || name[1] != '-') return 0;
+            for (const char *q = name + 2; q < limit; q++)
+                if (!((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || (*q >= '0' && *q <= '9') || *q == '-' || *q == '_')) return 0;
+            char value[768]; int owner = node, result = 0;
+            if (custom_value(doc, node, sheet, name, limit, value, sizeof(value), &owner)) {
+                for (const variable_chain *c = chain; c; c = c->parent) {
+                    const char *a = name, *b = c->name;
+                    while (a < limit && b < c->end && *a == *b) { a++; b++; }
+                    if (owner == c->owner && a == limit && b == c->end) return -1;
+                }
+                const char *ve = value; while (*ve) ve++;
+                variable_chain current = {chain, name, limit, owner};
+                result = expand_variables(doc, owner, sheet, value, ve, out + used, capacity - used, &current, depth + 1);
+            }
+            if (result < 0 && chain) return -1;
+            if (result <= 0) {
+                if (comma == close) return 0;
+                result = expand_variables(doc, node, sheet, comma + 1, close, out + used, capacity - used, chain, depth + 1);
+                if (result <= 0) return result;
+            }
+            while (out[used]) used++;
+            p = close + 1;
+        } else {
+            if (used + 1 >= capacity) return 0;
+            out[used++] = *p++;
+        }
+    }
+    out[used] = 0; return 1;
+}
+
 static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
-                          const char *p, const char *end, const browser_style *parent) {
+                          const char *p, const char *end, const browser_style *parent,
+                          const browser_document *doc, int node, const browser_stylesheet *sheet) {
     while ((p = skip(p, end)) < end) {
         const char *semi = find(p, end, ';'), *colon = find(p, semi, ':');
         const char *name_end = trim(p, colon);
@@ -489,6 +615,13 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             if (!equal(important, ve, "important", 1)) { p = semi < end ? semi + 1 : end; continue; }
             priority |= 0x80000000u; ve = trim(v, bang);
         }
+        /* Custom declarations are looked up independently of their source order. */
+        if (name_end - p >= 2 && p[0] == '-' && p[1] == '-') goto next_declaration;
+        char expanded[768];
+        if (expand_variables(doc, node, sheet, v, ve, expanded, sizeof(expanded), 0, 0) <= 0) goto next_declaration;
+        ve = expanded; while (*ve) ve++;
+        v = skip(expanded, ve);
+        ve = trim(v, ve);
         int property = -1, value = 0; unsigned alpha = 255; browser_css_color candidate;
         int inherit = equal(v, ve, "inherit", 1);
         if (equal(p, name_end, "color", 1)) {
@@ -520,8 +653,9 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             else if (equal(v, ve, "block", 1) || equal(v, ve, "list-item", 1)) { property = P_DISPLAY; value = BROWSER_BLOCK; }
             else if (equal(v, ve, "inline", 1) || equal(v, ve, "inline-block", 1)) property = P_DISPLAY;
         } else if (equal(p, name_end, "white-space", 1)) {
-            if (inherit) { property = P_PRE; value = parent->pre; }
+            if (inherit) { property = P_PRE; value = parent->pre ? 1 : parent->nowrap ? 2 : 0; }
             else if (equal(v, ve, "pre", 1) || equal(v, ve, "pre-wrap", 1)) { property = P_PRE; value = 1; }
+            else if (equal(v, ve, "nowrap", 1)) { property = P_PRE; value = 2; }
             else if (equal(v, ve, "normal", 1)) property = P_PRE;
         } else if (equal(p, name_end, "text-align", 1)) {
             if (inherit) { property = P_ALIGN; value = parent->align; }
@@ -558,6 +692,7 @@ static void declarations(browser_style *style, unsigned *ranks, unsigned rank,
             if (property == P_COLOR) style->text_alpha = alpha;
             if (property == P_BG) style->background_alpha = alpha;
         }
+next_declaration:
         p = semi < end ? semi + 1 : end;
     }
 }
@@ -569,7 +704,7 @@ void browser_style_compute(const browser_document *doc, int index,
     style->display = BROWSER_INLINE; style->background_set = 0;
     style->background_rgb = style->background_alpha = 0; style->border_alpha = 255;
     for (int i = 0; i < 4; i++) style->margin[i] = style->padding[i] = 0;
-    style->width = style->max_width = style->height = -1; style->min_height = 0;
+    style->width = style->max_width = style->height = -1; style->min_width = style->min_height = 0;
     style->border_width = 3; style->border_solid = style->border_box = 0;
     style->border_color = BROWSER_CURRENT_COLOR;
     style->flex_column = style->flex_wrap = style->justify = 0;
@@ -595,12 +730,12 @@ void browser_style_compute(const browser_document *doc, int index,
     for (int i = 0; i < sheet->count; i++) {
         unsigned specificity;
         if (browser_css_matches(doc, index, sheet->rules[i].selector, sheet->rules[i].selector_end, &specificity))
-            declarations(style, ranks, specificity + 1, sheet->rules[i].declarations, sheet->rules[i].declarations_end, parent);
+            declarations(style, ranks, specificity + 1, sheet->rules[i].declarations, sheet->rules[i].declarations_end, parent, doc, index, sheet);
     }
     char inline_style[768];
     if (browser_node_attr(node, "style", inline_style, sizeof(inline_style))) {
         const char *end = inline_style; while (*end) end++;
-        declarations(style, ranks, 0x40000000u, inline_style, end, parent);
+        declarations(style, ranks, 0x40000000u, inline_style, end, parent, doc, index, sheet);
     }
     char hidden_attr[1];
     if (browser_node_attr(node, "hidden", hidden_attr, sizeof(hidden_attr))) style->display = BROWSER_HIDDEN;
@@ -616,6 +751,7 @@ void browser_style_compute(const browser_document *doc, int index,
         style->padding[i] = resolve_length(style->padding[i], style, font);
     }
     style->width = resolve_length(style->width, style, font);
+    style->min_width = resolve_length(style->min_width, style, font);
     style->max_width = resolve_length(style->max_width, style, font);
     style->height = resolve_length(style->height, style, font);
     style->min_height = resolve_length(style->min_height, style, font);

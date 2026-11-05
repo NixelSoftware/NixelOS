@@ -50,6 +50,12 @@ int main(void) {
     assert(num_images == 1 && num_lines <= wide_lines);
     for (int i = 0; i < 10; i++) { browser_resize(160, 118); browser_resize(800, 600); }
     assert(!strcmp(controls[0].value, "edited query") && controls[1].checked && num_images == 1);
+    const char *nowrap = "<div style='white-space:nowrap'>one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen</div>";
+    browser_document_parse(&page_document, nowrap, (unsigned)strlen(nowrap));
+    browser_stylesheet_collect(&page_stylesheet, &page_document, 0, 0);
+    browser_win.w = 160; layout_document();
+    assert(num_lines == 2 && lines[0].top == lines[1].top);
+    assert(lines[1].indent > lines[0].indent);
     puts("PASS resize reflow, viewport units, cached images, form state and scroll bounds");
     return 0;
 }

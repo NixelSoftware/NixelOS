@@ -283,7 +283,14 @@ static void layout_char(char ch, const browser_style* style, int indent, int anc
     if (font_size / 2 > layout_right - indent) font_size = (layout_right - indent) * 2;
     if (font_size < 8) font_size = 8;
     int advance = font_size / 2;
-    if (layout_length && (layout_length == LINE_MAX_CHARS - 1 || layout_pixels + advance > layout_right - indent)) layout_flush(0);
+    if (style->nowrap && layout_length == LINE_MAX_CHARS - 1) {
+        /* Continue long no-wrap text in another storage segment on the same row. */
+        int top = layout_y, height = layout_height;
+        indent = layout_indent + layout_pixels;
+        layout_flush(0);
+        layout_y = top; layout_height = height;
+    } else if (layout_length && (layout_length == LINE_MAX_CHARS - 1 ||
+               (!style->nowrap && layout_pixels + advance > layout_right - indent))) layout_flush(0);
     if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     if (!layout_length) { layout_indent = indent; layout_align = style->align; }
     if (style->line_height > layout_height) layout_height = style->line_height;
@@ -347,7 +354,7 @@ static void layout_text(const char* p, const char* end, const browser_style* sty
             const char* word = p;
             int word_length = 1;
             while (word < end && *word != ' ' && *word != '\n' && *word != '\r' && *word != '\t' && word_length < LINE_MAX_CHARS) { word_length++; word++; }
-            if (layout_pixels + (1 + word_length) * (style->font_size / 2) > layout_right - indent) layout_flush(0);
+            if (!style->nowrap && layout_pixels + (1 + word_length) * (style->font_size / 2) > layout_right - indent) layout_flush(0);
             else layout_char(' ', style, indent, anchor);
         }
         layout_char(ch, style, indent, anchor);
@@ -957,6 +964,9 @@ static void browser_draw(browser_window_t* win) {
             run[stop - start] = 0;
             int size = lines[i].font_sizes[start];
             int run_x = row_x + render_char_offset(i, start), width = (stop - start) * (size / 2);
+            int visible = (canvas_x + canvas_w - 8 - run_x) / (size / 2);
+            if (visible <= 0) { start = stop; continue; }
+            if (visible < stop - start) { run[visible] = 0; width = visible * (size / 2); }
             int glyph_y = row_top + (height - size) / 2;
             paint_clipped(run_x, row_top, width, height, lines[i].backgrounds[start], canvas_x + 8, page_top, canvas_x + canvas_w - 8, page_bottom);
             if (glyph_y >= page_top && glyph_y + size <= page_bottom) {
