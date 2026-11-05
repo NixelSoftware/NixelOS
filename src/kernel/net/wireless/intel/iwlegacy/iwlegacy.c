@@ -31,6 +31,7 @@ void iwlegacy_probe(iwlegacy_info_t* info) {
         /* Do not resize BARs, reset or claim EEPROM from a live DMA owner. */
         if (command & PCI_COMMAND_MASTER) { info->state = IL_DEVICE_BUSY; return; }
         info->state = IL_ACCESS_FAILED;
+        info->error = IL_ACCESS;
         pci_bar_t bar;
         if (!pci_probe_bar(dev, 0, &bar) || bar.io || !bar.address ||
             bar.address > 0xFFFFF000ull || bar.size < 4096 ||
@@ -38,10 +39,12 @@ void iwlegacy_probe(iwlegacy_info_t* info) {
             pci_write16(dev, 4, command); return;
         }
         pci_write16(dev, 4, command | PCI_COMMAND_MEMORY | PCI_COMMAND_INTX_OFF);
-        il_io_t io = {(void*)(uint32_t)bar.address, mmio_read, mmio_write, delay};
+        il_io_t io = {(void*)(unsigned long)bar.address, mmio_read, mmio_write, delay};
         uint32_t gp = mmio_read(io.context, CSR_GP_CNTRL);
         if (gp == 0xFFFFFFFFu) info->error = IL_ACCESS;
-        else if (gp & CSR_GP_CNTRL_REG_FLAG_INIT_DONE) info->state = IL_DEVICE_BUSY;
+        else if (gp & CSR_GP_CNTRL_REG_FLAG_INIT_DONE) {
+            info->state = IL_DEVICE_BUSY; info->error = 0;
+        }
         else {
             mmio_write(io.context, CSR_INT_MASK, 0);
             (void)il3945_inspect(&io, info->bg_only, info);

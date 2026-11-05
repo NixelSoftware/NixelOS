@@ -117,6 +117,9 @@ KERNEL_C := \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
   src/kernel/net/realtek/r8169.c src/kernel/net/wireless/broadcom/b43/b43.c \
   src/kernel/net/wireless/broadcom/b43/b43_firmware.c src/kernel/net/wireless/broadcom/b43/b43_boot.c src/kernel/hal/wifi.c \
+  src/kernel/net/wireless/intel/iwlegacy/iwlegacy.c src/kernel/net/wireless/intel/iwlegacy/3945.c \
+  src/kernel/net/wireless/intel/iwlegacy/firmware.c src/kernel/net/wireless/intel/iwlegacy/eeprom.c \
+  src/kernel/net/wireless/intel/iwlegacy/bsm.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
@@ -451,6 +454,17 @@ src/kernel/net/wireless/broadcom/b43/b43.o src/kernel/net/wireless/broadcom/b43/
 src/kernel/net/wireless/broadcom/b43/b43_boot.o: src/kernel/net/wireless/broadcom/b43/b43_boot.h
 src/system/shell/commands.o: src/kernel/hal/wifi.h src/kernel/net/wireless/broadcom/b43/b43.h
 src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: src/kernel/hal/wifi.h
+
+IWLEGACY_DIR := src/kernel/net/wireless/intel/iwlegacy
+IWLEGACY_NATIVE := $(IWLEGACY_DIR)/3945.c $(IWLEGACY_DIR)/firmware.c $(IWLEGACY_DIR)/eeprom.c $(IWLEGACY_DIR)/bsm.c
+$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_NATIVE:.c=.o): $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/internal.h $(IWLEGACY_DIR)/csr.h $(IWLEGACY_DIR)/prph.h
+src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h
+.PHONY: test-iwlegacy
+test-iwlegacy:
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/3945_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy
+	/tmp/nixel-test-iwlegacy
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/pci_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-pci
+	/tmp/nixel-test-iwlegacy-pci
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk

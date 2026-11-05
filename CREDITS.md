@@ -47,6 +47,14 @@ those contributions.
 
 ---
 
+## Intel Wi-Fi Driver
+
+The native Intel 3945 bring-up code adapts Intel Corporation's Linux iwlegacy
+driver. Source attribution, GPL-2.0-only licensing, and the original dual-license
+register headers are retained in `src/kernel/net/wireless/intel/iwlegacy/`.
+
+---
+
 ## Wallpapers
 
 Special thanks to all the individuals who helped submit wallpapers for this project:

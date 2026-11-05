@@ -152,6 +152,7 @@ static void print_wifi_device(void) {
     wifi_status_t wifi;
     sys_wifi_get_status(&wifi);
     const b43_info_t* adapter = &wifi.adapter;
+    const iwlegacy_info_t* intel = &wifi.intel;
     unsigned found = 0;
     for (uint32_t i = 0; i < pci_device_count(); i++) {
         const pci_device_t* dev = pci_device_at(i);
@@ -161,7 +162,10 @@ static void print_wifi_device(void) {
         int matched = adapter->vendor && adapter->vendor == dev->vendor_id &&
             adapter->device == dev->device_id && adapter->pci_bus == dev->bus &&
             adapter->pci_slot == dev->slot && adapter->pci_function == dev->function;
-        print(matched || dev->class_code == 0x0D ? "PCI Wi-Fi Device:" :
+        int intel_matched = intel->vendor && intel->vendor == dev->vendor_id &&
+            intel->device == dev->device_id && intel->pci_bus == dev->bus &&
+            intel->pci_slot == dev->slot && intel->pci_function == dev->function;
+        print(matched || intel_matched || dev->class_code == 0x0D ? "PCI Wi-Fi Device:" :
               "PCI Wireless / Other Network Controller:");
         print("\n  Vendor: "); print_hex_u16(dev->vendor_id);
         print("\n  Device: "); print_hex_u16(dev->device_id);
@@ -170,6 +174,28 @@ static void print_wifi_device(void) {
         print("\n  Revision: "); print_hex_u16(dev->revision);
         print("\n  Class: "); print_hex_u16((uint16_t)dev->class_code << 8 | dev->subclass);
         print("\n  Driver: ");
+        if (intel_matched) {
+            print("iwl3945 / iwlegacy (incomplete)");
+            print("\n  Name: Intel PRO/Wireless "); print(intel->bg_only ? "3945BG" : "3945ABG");
+            print("\n  Subsystem device: "); print_hex_u16(intel->subsystem_device);
+            print("\n  Status: "); print(iwlegacy_description(intel->state));
+            if (intel->state == IL_EEPROM_READY) {
+                print("\n  MAC: ");
+                for (unsigned octet = 0; octet < 6; octet++) {
+                    const char* hex = "0123456789ABCDEF";
+                    uint8_t byte = intel->eeprom.mac[octet];
+                    char text[3] = {hex[byte >> 4], hex[byte & 15], 0};
+                    if (octet) print(":");
+                    print(text);
+                }
+                print("\n  EEPROM version: "); print_hex_u16(intel->eeprom.version);
+                print("\n  Board revision: "); print_hex_u16(intel->eeprom.board_revision);
+                print("\n  Allowed channels: "); print_u32(intel->eeprom.valid_channels);
+                print("\n  Radio switch: "); print(intel->rfkill ? "Blocked" : "Enabled");
+            }
+            print("\n");
+            continue;
+        }
         if (!matched) {
             print("No matching Wi-Fi driver\n");
             continue;

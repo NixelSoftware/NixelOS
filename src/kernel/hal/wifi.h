@@ -1,8 +1,10 @@
 #ifndef NIXEL_HAL_WIFI_H
 #define NIXEL_HAL_WIFI_H
 #include "../net/wireless/broadcom/b43/b43.h"
+#include "../net/wireless/intel/iwlegacy/iwlegacy.h"
 typedef struct {
     b43_info_t adapter;
+    iwlegacy_info_t intel;
     uint32_t generation;
 } wifi_status_t;
 /* Independent of the selected Ethernet adapter. No simulated scan results. */

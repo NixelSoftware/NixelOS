@@ -4,6 +4,7 @@ static wifi_status_t status;
 void sys_wifi_probe(void) {
     MUTEX_GUARD(kernel_mutex);
     b43_probe(&status.adapter);
+    iwlegacy_probe(&status.intel);
     status.generation++;
 }
 void sys_wifi_get_status(wifi_status_t* out) {
@@ -12,6 +13,16 @@ void sys_wifi_get_status(wifi_status_t* out) {
 }
 const char* sys_wifi_status_text(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (status.intel.vendor) {
+        switch (status.intel.state) {
+        case IL_EEPROM_READY: return "Wi-Fi adapter found; connection support unavailable.";
+        case IL_DEVICE_BUSY: return "Wi-Fi adapter is already active.";
+        case IL_CLOCK_TIMEOUT:
+        case IL_EEPROM_FAILED:
+        case IL_ACCESS_FAILED: return "Unable to initialize Wi-Fi adapter.";
+        default: return "Wi-Fi adapter found; connection support unavailable.";
+        }
+    }
     switch (status.adapter.state) {
     case B43_BUS_UNSUPPORTED:
     case B43_LEGACY: return "Wi-Fi adapter not supported yet.";
@@ -22,6 +33,7 @@ const char* sys_wifi_status_text(void) {
 }
 const char* sys_wifi_scan(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (status.adapter.state != B43_CORE_FOUND) return sys_wifi_status_text();
+    if (status.adapter.state != B43_CORE_FOUND && status.intel.state != IL_EEPROM_READY)
+        return sys_wifi_status_text();
     return "Network scanning is not available yet.";
 }
