@@ -20,7 +20,7 @@
 #define COLOR_H2          0x00000080
 
 #define MAX_URL_LEN       512
-#define MAX_HTML_BUF      65536
+#define MAX_HTML_BUF      BROWSER_HTTP_RESPONSE_BODY_MAX
 #define MAX_RENDER_LINES  128
 #define LINE_MAX_CHARS    64
 #define MAX_PAGE_IMAGES   4
@@ -968,10 +968,28 @@ static void browser_fetch(void) {
             set_status(status == BROWSER_HTTP_TLS_PLATFORM ? "HTTPS unavailable: hardware RNG or UTC clock required" :
                        status == BROWSER_HTTP_TLS ? "HTTPS certificate or secure connection failed" :
                        status == BROWSER_HTTP_DNS ? "DNS lookup failed" :
+                       status == BROWSER_HTTP_HEADER_LIMIT ? "Response headers exceed 64 KiB" :
+                       status == BROWSER_HTTP_BODY_LIMIT ? "Page exceeds 512 KiB" :
                        status == BROWSER_HTTP_LIMIT ? "HTTP response exceeds browser limit" :
                        status == BROWSER_HTTP_ENCODING ? "Unsupported HTTP encoding" :
                        status == BROWSER_HTTP_PROTOCOL ? "Invalid or incomplete HTTP response" :
                        status == BROWSER_HTTP_TIMEOUT ? "HTTP request timed out" : "HTTP request failed");
+            if (status == BROWSER_HTTP_TLS) {
+                int error = browser_http_tls_error();
+                if (error == -150 || error == -151)
+                    set_status("HTTPS certificate date invalid; check system date");
+                else {
+                    char message[80] = "HTTPS failed (TLS error ";
+                    unsigned used = 0, value = error < 0 ? (unsigned)-error : (unsigned)error;
+                    char digits[12]; unsigned count = 0;
+                    while (message[used]) used++;
+                    if (error < 0) message[used++] = '-';
+                    do { digits[count++] = '0' + value % 10; value /= 10; } while (value);
+                    while (count) message[used++] = digits[--count];
+                    message[used++] = ')'; message[used] = 0;
+                    set_status(message);
+                }
+            }
             browser_draw(&browser_win);
             browser_user_present();
             return;

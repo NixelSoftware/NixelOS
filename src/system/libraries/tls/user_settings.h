@@ -19,6 +19,9 @@ int nixel_tls_seed(unsigned char *, unsigned int);
 #define WOLFSSL_TLS13
 #define HAVE_TLS_EXTENSIONS
 #define HAVE_SNI
+/* Accept a valid path to a trusted root even when the peer also sends a
+ * cross-signed certificate whose alternate issuer is absent from our store. */
+#define WOLFSSL_ALT_CERT_CHAINS
 #define HAVE_SUPPORTED_CURVES
 #define HAVE_HKDF
 #define HAVE_ECC

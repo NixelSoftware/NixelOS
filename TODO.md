@@ -8,4 +8,5 @@
 - [ ] **elyas-code** - Abstractify browser functions
 - [x] **elyas-code** - Abstractify kernel tasks
 - [ ] **elyas-code** - Create package manager
-- [ ] **elyas-code** - Attempt to implement SSL (ong bro imma kms)
+- [x] **elyas-code** - Attempt to implement SSL (ong bro imma kms)
+- [ ] **elyas-code** - Allow apps to use a dynamic amount of memory (pmo)

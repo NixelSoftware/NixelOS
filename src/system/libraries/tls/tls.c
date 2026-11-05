@@ -5,6 +5,7 @@
 
 static nixel_tls_platform platform;
 static int initialized;
+static int setup_error;
 struct nixel_tls_client {
     WOLFSSL_CTX *ctx;
     WOLFSSL *ssl;
@@ -81,25 +82,31 @@ void nixel_tls_client_destroy(nixel_tls_client *c) {
 nixel_tls_client *nixel_tls_client_create(const unsigned char *ca, int ca_size,
     const char *hostname, nixel_tls_io send, nixel_tls_io receive, void *io) {
     nixel_tls_client *c;
+    int ret;
+    setup_error = BAD_FUNC_ARG;
     if (!initialized || !ca || ca_size <= 0 || !hostname || !*hostname ||
         !send || !receive || XSTRLEN(hostname) > 253 || nixel_tls_time(NULL) <= 0) return NULL;
     c = nixel_tls_alloc(sizeof(*c));
-    if (!c) return NULL;
+    if (!c) { setup_error = MEMORY_E; return NULL; }
     *c = (nixel_tls_client){0};
     c->send = send; c->receive = receive; c->io = io;
     c->ctx = wolfSSL_CTX_new(wolfTLS_client_method());
+    setup_error = MEMORY_E;
     if (!c->ctx) goto fail;
     wolfSSL_CTX_set_verify(c->ctx, WOLFSSL_VERIFY_PEER, NULL);
-    if (wolfSSL_CTX_SetMinVersion(c->ctx, WOLFSSL_TLSV1_2) != WOLFSSL_SUCCESS ||
-        wolfSSL_CTX_load_verify_buffer(c->ctx, ca, ca_size, WOLFSSL_FILETYPE_PEM)
-        != WOLFSSL_SUCCESS) goto fail;
+    ret = wolfSSL_CTX_SetMinVersion(c->ctx, WOLFSSL_TLSV1_2);
+    if (ret != WOLFSSL_SUCCESS) { setup_error = ret; goto fail; }
+    ret = wolfSSL_CTX_load_verify_buffer(c->ctx, ca, ca_size, WOLFSSL_FILETYPE_PEM);
+    if (ret != WOLFSSL_SUCCESS) { setup_error = ret; goto fail; }
     wolfSSL_SetIOSend(c->ctx, send_cb); wolfSSL_SetIORecv(c->ctx, recv_cb);
+    setup_error = -1003; /* Session creation failed before a handshake. */
     c->ssl = wolfSSL_new(c->ctx);
     if (!c->ssl) goto fail;
     wolfSSL_SetIOWriteCtx(c->ssl, c); wolfSSL_SetIOReadCtx(c->ssl, c);
     if (wolfSSL_check_domain_name(c->ssl, hostname) != WOLFSSL_SUCCESS ||
         wolfSSL_UseSNI(c->ssl, WOLFSSL_SNI_HOST_NAME, hostname,
             (unsigned short)XSTRLEN(hostname)) != WOLFSSL_SUCCESS) goto fail;
+    setup_error = 0;
     return c;
 fail:
     nixel_tls_client_destroy(c);
@@ -133,5 +140,5 @@ int nixel_tls_close(nixel_tls_client *c) {
     return result(c, ret);
 }
 int nixel_tls_last_error(const nixel_tls_client *c) {
-    return c ? c->error : NIXEL_TLS_ERROR;
+    return c ? c->error : setup_error;
 }

@@ -10,6 +10,8 @@
 #define HTTP_READ_CHUNK 2048u
 /* This synchronous client has one transaction at a time; no kernel storage
  * or user pointers survive the call. Framing stays entirely in this app. */
+static int tls_error;
+int browser_http_tls_error(void) { return tls_error; }
 static unsigned char raw_response[HTTP_RAW_MAX];
 static int valid_text(const char *p, unsigned cap, int host, int path) {
     if (!p) return 0;
@@ -56,6 +58,7 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
                            unsigned post, const void *body, unsigned body_length,
                            void *output, unsigned capacity, unsigned *length,
                            browser_http_response_t *response) {
+    tls_error = 0;
     if (length) *length = 0;
     if (response) *response = (browser_http_response_t){0};
     if (!output || !capacity || !length || !response || (post && body_length && !body) ||
@@ -93,7 +96,7 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
     }
     if (secure) {
         tls = browser_tls_create(host, &socket_handle);
-        if (!tls) { result = BROWSER_HTTP_TLS; goto done; }
+        if (!tls) { tls_error = nixel_tls_last_error(NULL); result = BROWSER_HTTP_TLS; goto done; }
         started = nix_tcp_ticks(); polls = 0;
         for (;;) {
             int handshake = nixel_tls_handshake(tls);
@@ -156,6 +159,7 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
     }
 done:
     if (tls) {
+        if (result == BROWSER_HTTP_TLS) tls_error = nixel_tls_last_error(tls);
         /* Best effort close_notify; tcp_close drains bytes already queued. */
         if (result == 1) (void)nixel_tls_close(tls);
         nixel_tls_client_destroy(tls);

@@ -29,6 +29,7 @@ int nixel_tls_read(nixel_tls_client *client, void *data, int size);
 int nixel_tls_write(nixel_tls_client *client, const void *data, int size);
 /* Retry close on AGAIN to send close_notify before destroying the client. */
 int nixel_tls_close(nixel_tls_client *client);
+/* NULL retrieves the most recent client-creation failure. */
 int nixel_tls_last_error(const nixel_tls_client *client);
 void nixel_tls_client_destroy(nixel_tls_client *client);
 #endif

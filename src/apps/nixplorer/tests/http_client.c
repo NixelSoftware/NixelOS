@@ -57,7 +57,7 @@ unsigned nix_tcp_ticks(void) {
     return now.tv_sec*100 + now.tv_nsec/10000000;
 }
 int main(int argc,char **argv) {
-    if(argc!=7) return 10;
+    if(argc!=7 && argc!=8) return 10;
     fd=atoi(argv[1]); secure=atoi(argv[3]); unavailable=atoi(argv[5]);
     FILE *f=fopen(argv[2],"rb"); if(!f) return 11;
     ca_size=fread(ca,1,sizeof(ca),f); fclose(f);
@@ -71,11 +71,16 @@ int main(int argc,char **argv) {
         nixel_tls_client_destroy(client);
         return 0;
     }
-    unsigned char body[128]; unsigned length=0;
+    static unsigned char body[BROWSER_HTTP_RESPONSE_BODY_MAX]; unsigned length=0;
     browser_http_response_t response;
     int result=browser_http_request_scheme(secure,argv[4],"/path?q=1","text/plain",
         1,"a=b",3,body,sizeof(body),&length,&response);
-    if(result!=atoi(argv[6])) { fprintf(stderr,"HTTP result %d, expected %s\n",result,argv[6]); return 14; }
-    if(result==1 && (response.status!=200 || length!=4 || memcmp(body,"pong",4))) return 15;
+    if(result!=atoi(argv[6])) { fprintf(stderr,"HTTP result %d, expected %s (TLS %d)\n",result,argv[6],browser_http_tls_error()); return 14; }
+    unsigned expected_length=argc==8?(unsigned)atoi(argv[7]):4;
+    if(result==1 && (response.status!=200 || length!=expected_length)) return 15;
+    if(result==1) {
+        if(expected_length==4 && memcmp(body,"pong",4)) return 16;
+        if(expected_length!=4) for(unsigned i=0;i<length;i++) if(body[i]!='x') return 17;
+    }
     return 0;
 }

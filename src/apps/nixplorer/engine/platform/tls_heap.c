@@ -1,6 +1,6 @@
 #include "tls_heap.h"
 /* A bounded process-local heap: TLS allocations never touch renderer storage. */
-#define HEAP_SIZE (2u * 1024u * 1024u)
+#define HEAP_SIZE (1024u * 1024u)
 static unsigned char storage[HEAP_SIZE] __attribute__((aligned(16)));
 typedef struct block {
     size_t size;
