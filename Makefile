@@ -432,3 +432,6 @@ test-b43:
 
 src/kernel/net/wireless/broadcom/b43/b43.o src/kernel/net/wireless/broadcom/b43/b43_firmware.o src/kernel/hal/wifi.o: src/kernel/net/wireless/broadcom/b43/b43.h
 src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: src/kernel/hal/wifi.h
+
+# Reusable user-space TLS library; applications opt in by linking this archive.
+include src/system/libraries/tls/tls.mk

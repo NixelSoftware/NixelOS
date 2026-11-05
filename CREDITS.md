@@ -21,6 +21,14 @@ released under CC0-1.0. The original source and license are retained in
 
 ---
 
+## TLS and Cryptography
+
+The TLS client library uses wolfSSL and wolfCrypt by wolfSSL Inc. and
+contributors. Upstream sources and GPLv3/commercial licensing notices are
+retained in `src/system/libraries/tls/vendor/wolfssl/`.
+
+---
+
 ## Browser Engine
 
 Thanks to **Dajo Frey**, creator of [Netzhaut](https://github.com/dajofrey/Netzhaut),

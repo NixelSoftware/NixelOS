@@ -189,3 +189,9 @@ commit's committer Unix timestamp (`git log -1 --format=%ct`). Rebuilding a
 commit keeps its build ID; uncommitted edits do not change it. Source archives
 without Git metadata report build ID `0` (unknown). The standalone Fastfetch
 build uses the same generator.
+
+## TLS library
+
+Nixel includes a freestanding TLS 1.2/1.3 client library with a user-space TCP
+adapter. Build it with `make tls` and run interoperability checks with
+`make test-tls`. See [TLS integration and platform requirements](src/system/libraries/tls/README.md).
