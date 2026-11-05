@@ -20,7 +20,6 @@
 #define COLOR_H2          0x00000080
 
 #define MAX_URL_LEN       512
-#define MAX_HTML_BUF      BROWSER_HTTP_RESPONSE_BODY_MAX
 #define MAX_RENDER_LINES  128
 #define LINE_MAX_CHARS    64
 #define MAX_PAGE_IMAGES   4
@@ -131,7 +130,7 @@ static char status_text[64] = "Ready";
 static int  scroll_y = 0;
 
 
-static uint8_t  document_body_buf[MAX_HTML_BUF];
+static void *document_body_buf;
 static uint32_t document_body_len = 0;
 
 static uint8_t  resource_body_buf[65536];
@@ -220,6 +219,16 @@ static void set_status(const char* msg) {
 
 static browser_document page_document;
 static browser_stylesheet page_stylesheet;
+static int grow_page_rules(browser_stylesheet *sheet) {
+    if ((unsigned)sheet->capacity > 0x7fffffffu / (2u * sizeof(browser_css_rule))) return 0;
+    unsigned capacity = (unsigned)sheet->capacity * 2u;
+    browser_css_rule *rules = sys_memory_alloc(capacity * sizeof(*rules));
+    if (!rules) return 0;
+    for (int i = 0; i < sheet->count; i++) rules[i] = sheet->rules[i];
+    if (sheet->rules != sheet->inline_rules) sys_memory_free(sheet->rules);
+    sheet->rules = rules; sheet->capacity = (int)capacity;
+    return 1;
+}
 static browser_style node_styles[BROWSER_DOM_NODES];
 static browser_box page_boxes[BROWSER_DOM_NODES];
 static int num_boxes, layout_y, layout_right, layout_height;
@@ -749,7 +758,9 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
             break;
         }
     }
-    browser_stylesheet_collect(&page_stylesheet, &page_document, load_stylesheet, 0);
+    if (page_stylesheet.rules && page_stylesheet.rules != page_stylesheet.inline_rules)
+        sys_memory_free(page_stylesheet.rules);
+    browser_stylesheet_collect_growing(&page_stylesheet, &page_document, load_stylesheet, 0, grow_page_rules);
     browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
                           .line_height = 12, .width = -1, .max_width = -1, .height = -1,
                           .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE,
@@ -759,7 +770,7 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
         browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
     for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0, 0);
     layout_flush(0);
-    if (page_document.truncated || page_stylesheet.truncated) layout_truncated = 1;
+    if (page_document.truncated) layout_truncated = 1;
 }
 
 static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t bg_col) {
@@ -933,13 +944,15 @@ static int copy_string(char* dst, int max_len, const char* src) {
 
 static browser_http_response_t document_response;
 static int fetch_http_document(const char* url, const char* host, const char* path) {
+    browser_http_free(document_body_buf);
+    document_body_buf = 0;
     document_body_len = 0;
     set_status("Requesting document...");
     browser_draw(&browser_win);
     browser_user_present();
-    int result = browser_http_request_scheme(browser_url_secure(url), host, path, "text/html, text/plain;q=0.9, */*;q=0.1",
+    int result = browser_http_request_alloc_scheme(browser_url_secure(url), host, path, "text/html, text/plain;q=0.9, */*;q=0.1",
                           request_post, request_body, (uint32_t)request_body_len,
-                          document_body_buf, sizeof(document_body_buf), &document_body_len, &document_response);
+                          &document_body_buf, &document_body_len, &document_response);
     return result == 1 ? (int)document_response.status : result;
 }
 
@@ -968,8 +981,9 @@ static void browser_fetch(void) {
             set_status(status == BROWSER_HTTP_TLS_PLATFORM ? "HTTPS unavailable: hardware RNG or UTC clock required" :
                        status == BROWSER_HTTP_TLS ? "HTTPS certificate or secure connection failed" :
                        status == BROWSER_HTTP_DNS ? "DNS lookup failed" :
-                       status == BROWSER_HTTP_HEADER_LIMIT ? "Response headers exceed 64 KiB" :
-                       status == BROWSER_HTTP_BODY_LIMIT ? "Page exceeds 512 KiB" :
+                       status == BROWSER_HTTP_HEADER_LIMIT ? "Response headers exceed addressable size" :
+                       status == BROWSER_HTTP_BODY_LIMIT ? "Page exceeds addressable size" :
+                       status == BROWSER_HTTP_MEMORY ? "Not enough memory to load page" :
                        status == BROWSER_HTTP_LIMIT ? "HTTP response exceeds browser limit" :
                        status == BROWSER_HTTP_ENCODING ? "Unsupported HTTP encoding" :
                        status == BROWSER_HTTP_PROTOCOL ? "Invalid or incomplete HTTP response" :
@@ -1023,7 +1037,9 @@ static void browser_fetch(void) {
             return;
         }
         parse_and_layout_html((const char*)document_body_buf, document_body_len);
-        set_status(layout_truncated ? "Document loaded (page limit reached)" : resource_unavailable ? "Document loaded (some styles unavailable)" : "Document Loaded");
+        set_status(page_document.truncated ? "Document loaded (HTML structure limit reached)" :
+                   layout_truncated ? "Document loaded (layout limit reached)" :
+                   page_stylesheet.truncated ? "Document loaded (not enough memory for styles)" : resource_unavailable ? "Document loaded (some styles unavailable)" : "Document Loaded");
         browser_draw(&browser_win);
         browser_user_present();
         return;

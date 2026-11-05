@@ -1,8 +1,8 @@
 #ifndef NIXPLORER_HTTP_RESPONSE_H
 #define NIXPLORER_HTTP_RESPONSE_H
 #include "http.h"
-#define HTTP_HEADER_MAX 65536u
-#define HTTP_RAW_MAX (BROWSER_HTTP_RESPONSE_BODY_MAX + HTTP_HEADER_MAX)
+#define HTTP_HEADER_MAX 0x3fffffffu
+#define HTTP_RAW_MAX 0x3fffffffu
 /* 0=incomplete, 1=complete, negative=BROWSER_HTTP_* error. Chunked data is
  * compacted only after the entire framed response has been validated. */
 int browser_http_parse_response(unsigned char *raw, unsigned length, int eof,

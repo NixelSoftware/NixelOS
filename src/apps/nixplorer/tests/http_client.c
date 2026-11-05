@@ -10,6 +10,7 @@
 #include "../engine/platform/tcp.h"
 #include "../engine/platform/tls.h"
 #include "../engine/platform/tls_heap.h"
+static unsigned allocations;
 static int fd, closed, secure, unavailable, calls;
 static unsigned char ca[300000];
 static int ca_size;
@@ -71,16 +72,27 @@ int main(int argc,char **argv) {
         nixel_tls_client_destroy(client);
         return 0;
     }
-    static unsigned char body[BROWSER_HTTP_RESPONSE_BODY_MAX]; unsigned length=0;
+    void *body = 0; unsigned length=0;
     browser_http_response_t response;
-    int result=browser_http_request_scheme(secure,argv[4],"/path?q=1","text/plain",
-        1,"a=b",3,body,sizeof(body),&length,&response);
+    int result=browser_http_request_alloc_scheme(secure,argv[4],"/path?q=1","text/plain",
+        1,"a=b",3,&body,&length,&response);
     if(result!=atoi(argv[6])) { fprintf(stderr,"HTTP result %d, expected %s (TLS %d)\n",result,argv[6],browser_http_tls_error()); return 14; }
     unsigned expected_length=argc==8?(unsigned)atoi(argv[7]):4;
     if(result==1 && (response.status!=200 || length!=expected_length)) return 15;
     if(result==1) {
         if(expected_length==4 && memcmp(body,"pong",4)) return 16;
-        if(expected_length!=4) for(unsigned i=0;i<length;i++) if(body[i]!='x') return 17;
+        if(expected_length!=4) for(unsigned i=0;i<length;i++) if(((unsigned char *)body)[i]!='x') return 17;
     }
+    browser_http_free(body);
+    if (allocations) return 18;
     return 0;
 }
+
+void *nix_http_alloc(unsigned bytes) {
+    const char *limit = getenv("NIX_TEST_ALLOC_MAX");
+    if (limit && bytes > (unsigned)atoi(limit)) return 0;
+    void *p = malloc(bytes);
+    if (p) allocations++;
+    return p;
+}
+void nix_http_free(void *allocation) { if (allocation) allocations--; free(allocation); }

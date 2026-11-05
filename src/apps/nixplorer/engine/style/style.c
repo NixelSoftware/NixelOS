@@ -44,7 +44,7 @@ static const char *find(const char *p, const char *end, char delim) {
     }
     return end;
 }
-static void add_sheet(browser_stylesheet *sheet, const char *p, const char *end) {
+static void add_sheet(browser_stylesheet *sheet, const char *p, const char *end, browser_css_grow grow) {
     while ((p = skip(p, end)) < end) {
         if (*p == '@') {
             const char *brace = find(p, end, '{'), *semi = find(p, end, ';');
@@ -70,7 +70,8 @@ static void add_sheet(browser_stylesheet *sheet, const char *p, const char *end)
             const char *comma = find(selector, brace, ',');
             const char *limit = trim(selector, comma);
             if (selector < limit) {
-                if (sheet->count == BROWSER_CSS_RULES) { sheet->truncated = 1; return; }
+                if (sheet->count == sheet->capacity &&
+                    (!grow || !grow(sheet) || sheet->count >= sheet->capacity)) { sheet->truncated = 1; return; }
                 browser_css_rule *rule = &sheet->rules[sheet->count++];
                 rule->selector = selector; rule->selector_end = limit;
                 rule->declarations = brace + 1; rule->declarations_end = close;
@@ -89,8 +90,9 @@ static int word_in(const char *list, const char *word) {
     }
     return 0;
 }
-void browser_stylesheet_collect(browser_stylesheet *sheet, const browser_document *doc,
-                                 browser_css_loader load, void *context) {
+void browser_stylesheet_collect_growing(browser_stylesheet *sheet, const browser_document *doc,
+                                 browser_css_loader load, void *context, browser_css_grow grow) {
+    sheet->rules = sheet->inline_rules; sheet->capacity = BROWSER_CSS_RULES;
     sheet->count = 0; sheet->truncated = 0;
     for (int i = 1; i < doc->count; i++) {
         const browser_node *node = &doc->nodes[i];
@@ -116,14 +118,14 @@ void browser_stylesheet_collect(browser_stylesheet *sheet, const browser_documen
         }
         if (embedded) {
             for (int child = node->first_child; child >= 0; child = doc->nodes[child].next)
-                add_sheet(sheet, doc->nodes[child].start, doc->nodes[child].end);
+                add_sheet(sheet, doc->nodes[child].start, doc->nodes[child].end, grow);
         } else if (load) {
             char rel[64], href[128];
             browser_node_attr(node, "rel", rel, sizeof(rel));
             browser_node_attr(node, "href", href, sizeof(href));
             if (!word_in(rel, "stylesheet") || word_in(rel, "alternate") || !href[0]) continue;
             const char *data; unsigned length;
-            if (load(context, href, &data, &length)) add_sheet(sheet, data, data + length);
+            if (load(context, href, &data, &length)) add_sheet(sheet, data, data + length, grow);
         }
     }
 }
@@ -634,4 +636,9 @@ void browser_style_compute(const browser_document *doc, int index,
     style->background = browser_css_blend(bg, bg_alpha, parent->painted_background);
     style->painted_background = style->visibility_hidden ? parent->painted_background : style->background;
     style->color = browser_css_blend(style->text_rgb, style->text_alpha, style->background);
+}
+
+void browser_stylesheet_collect(browser_stylesheet *sheet, const browser_document *doc,
+                                 browser_css_loader load, void *context) {
+    browser_stylesheet_collect_growing(sheet, doc, load, context, 0);
 }

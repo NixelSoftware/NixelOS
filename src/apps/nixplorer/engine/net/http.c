@@ -12,7 +12,7 @@
  * or user pointers survive the call. Framing stays entirely in this app. */
 static int tls_error;
 int browser_http_tls_error(void) { return tls_error; }
-static unsigned char raw_response[HTTP_RAW_MAX];
+void browser_http_free(void *allocation) { nix_http_free(allocation); }
 static int valid_text(const char *p, unsigned cap, int host, int path) {
     if (!p) return 0;
     for (unsigned i = 0; i < cap; i++) {
@@ -54,14 +54,16 @@ static int ipv4(const char *p, unsigned *address) {
     }
     *address = value; return 1;
 }
-int browser_http_request_scheme(unsigned secure, const char *host, const char *path, const char *accept,
+static int request_scheme(unsigned secure, const char *host, const char *path, const char *accept,
                            unsigned post, const void *body, unsigned body_length,
                            void *output, unsigned capacity, unsigned *length,
-                           browser_http_response_t *response) {
+                           browser_http_response_t *response, void **allocated) {
+    unsigned char *raw_response = 0;
+    unsigned raw_capacity = 0;
     tls_error = 0;
     if (length) *length = 0;
     if (response) *response = (browser_http_response_t){0};
-    if (!output || !capacity || !length || !response || (post && body_length && !body) ||
+    if ((!allocated && (!output || !capacity)) || !length || !response || (post && body_length && !body) ||
         !valid_text(host, BROWSER_HTTP_HOST_MAX, 1, 0) || !valid_text(path, BROWSER_HTTP_PATH_MAX, 0, 1) || path[0] != '/' ||
         !valid_text(accept, BROWSER_HTTP_ACCEPT_MAX, 0, 0)) return BROWSER_HTTP_INVALID;
     if (!post) body_length = 0;
@@ -127,8 +129,20 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
     }
     used = 0; started = nix_tcp_ticks(); polls = 0;
     for (;;) {
-        unsigned room = sizeof(raw_response) - used;
-        if (!room) { result = BROWSER_HTTP_LIMIT; goto done; }
+        if (used == raw_capacity) {
+            if (raw_capacity == HTTP_RAW_MAX) { result = BROWSER_HTTP_LIMIT; goto done; }
+            unsigned next = raw_capacity ? (raw_capacity > HTTP_RAW_MAX / 2 ? HTTP_RAW_MAX : raw_capacity * 2) : 16384u;
+            unsigned char *grown = nix_http_alloc(next);
+            /* Retry with a single page of growth when RAM cannot cover doubling. */
+            if (!grown && next - raw_capacity > 4096u) {
+                next = raw_capacity > HTTP_RAW_MAX - 4096u ? HTTP_RAW_MAX : raw_capacity + 4096u;
+                grown = nix_http_alloc(next);
+            }
+            if (!grown) { result = BROWSER_HTTP_MEMORY; goto done; }
+            for (unsigned i = 0; i < used; i++) grown[i] = raw_response[i];
+            nix_http_free(raw_response); raw_response = grown; raw_capacity = next;
+        }
+        unsigned room = raw_capacity - used;
         if (room > HTTP_READ_CHUNK) room = HTTP_READ_CHUNK;
         nix_tcp_yield();
         int tls_eof = 0;
@@ -150,6 +164,12 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
         result = browser_http_parse_response(raw_response, used, eof, response, &offset);
         if (result < 0) goto done;
         if (result == 1) {
+            if (allocated) {
+                /* Transfer the receive allocation rather than keeping two page copies. */
+                for (unsigned i = 0; i < response->body_length; i++) raw_response[i] = raw_response[offset + i];
+                *allocated = raw_response; raw_response = 0;
+                *length = response->body_length; goto done;
+            }
             if (response->body_length > capacity) { result = BROWSER_HTTP_LIMIT; goto done; }
             for (unsigned i = 0; i < response->body_length; i++) ((unsigned char*)output)[i] = raw_response[offset + i];
             *length = response->body_length; goto done;
@@ -158,6 +178,7 @@ int browser_http_request_scheme(unsigned secure, const char *host, const char *p
         if (++polls > HTTP_STALLED_POLLS || (unsigned)(nix_tcp_ticks() - started) > HTTP_TIMEOUT_TICKS) { result = BROWSER_HTTP_TIMEOUT; goto done; }
     }
 done:
+    nix_http_free(raw_response);
     if (tls) {
         if (result == BROWSER_HTTP_TLS) tls_error = nixel_tls_last_error(tls);
         /* Best effort close_notify; tcp_close drains bytes already queued. */
@@ -174,4 +195,20 @@ int browser_http_request(const char *host, const char *path, const char *accept,
                            browser_http_response_t *response) {
     return browser_http_request_scheme(0, host, path, accept, post, body, body_length,
         output, capacity, length, response);
+}
+
+int browser_http_request_scheme(unsigned secure, const char *host, const char *path, const char *accept,
+                           unsigned post, const void *body, unsigned body_length,
+                           void *output, unsigned capacity, unsigned *length,
+                           browser_http_response_t *response) {
+    return request_scheme(secure, host, path, accept, post, body, body_length,
+                          output, capacity, length, response, 0);
+}
+int browser_http_request_alloc_scheme(unsigned secure, const char *host, const char *path, const char *accept,
+                           unsigned post, const void *body, unsigned body_length,
+                           void **output, unsigned *length, browser_http_response_t *response) {
+    if (!output) return BROWSER_HTTP_INVALID;
+    *output = 0;
+    return request_scheme(secure, host, path, accept, post, body, body_length,
+                          0, 0, length, response, output);
 }

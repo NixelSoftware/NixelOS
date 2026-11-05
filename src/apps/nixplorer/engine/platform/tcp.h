@@ -2,6 +2,8 @@
 #define NIXPLORER_PLATFORM_TCP_H
 /* Transport boundary only: no HTTP parsing or request policy in the OS. */
 enum { NIX_TCP_CLOSED = 0, NIX_TCP_ESTABLISHED = 4, NIX_TCP_CLOSE_WAIT = 7 };
+void *nix_http_alloc(unsigned bytes);
+void nix_http_free(void *allocation);
 int nix_tcp_resolve(const char *host, unsigned *address);
 int nix_tcp_connect(unsigned address, unsigned port);
 int nix_tcp_state(unsigned handle);

@@ -36,11 +36,17 @@ typedef struct {
     const char *selector, *selector_end, *declarations, *declarations_end;
 } browser_css_rule;
 typedef struct {
-    browser_css_rule rules[BROWSER_CSS_RULES];
-    int count, truncated;
+    browser_css_rule inline_rules[BROWSER_CSS_RULES];
+    browser_css_rule *rules;
+    int count, capacity, truncated;
 } browser_stylesheet;
 
 typedef int (*browser_css_loader)(void *context, const char *url, const char **data, unsigned *length);
+/* grow preserves existing rules and increases capacity, returning 0 on OOM.
+ * The caller releases any external rule storage before collecting again. */
+typedef int (*browser_css_grow)(browser_stylesheet *sheet);
+void browser_stylesheet_collect_growing(browser_stylesheet *sheet, const browser_document *doc,
+                                 browser_css_loader load, void *context, browser_css_grow grow);
 void browser_stylesheet_collect(browser_stylesheet *sheet, const browser_document *doc,
                                  browser_css_loader load, void *context);
 void browser_style_compute(const browser_document *doc, int node,

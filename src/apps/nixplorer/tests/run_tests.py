@@ -22,6 +22,11 @@ with tempfile.TemporaryDirectory(prefix='nixplorer-https-') as directory:
     assert image[:8]==b'APP1\x03\0\0\0' and len(image)<=1048576
     run(CC+['-O2',str(B/'tests/response.c'),str(B/'engine/net/response.c'),'-o',str(tmp/'response')])
     run([str(tmp/'response')])
+    style_sources=['tests/styles.c','engine/dom/document.c','engine/parser/html.c',
+        'engine/font/font.c','engine/style/style.c','engine/style/selectors.c',
+        'engine/parser/css_grid.c','engine/parser/css_color.c']
+    run(CC+['-O2',*[str(B/source) for source in style_sources],'-o',str(tmp/'styles')])
+    run([str(tmp/'styles')])
     sources=subprocess.check_output(['make','-s','tls-sources'],cwd=ROOT,text=True).split()
     objects=[]
     for i,source in enumerate(sources):
@@ -49,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='nixplorer-https-') as directory:
     openssl('x509','-req','-in',tmp/'leaf.csr','-CA',tmp/'trusted.pem','-CAkey',tmp/'trusted.key',
         '-CAcreateserial','-days','2','-extfile',tmp/'leaf.ext','-out',tmp/'leaf.pem')
     (tmp/'chain.pem').write_bytes((tmp/'leaf.pem').read_bytes()+(tmp/'cross.pem').read_bytes())
-    def case(version=None,host='localhost',trust='trusted',cross=False,large=False,expected=1,unavailable=0):
+    def case(version=None,host='localhost',trust='trusted',cross=False,large=False,expected=1,unavailable=0,alloc_limit=None):
         left,right=socket.socketpair()
         errors=[]
         def server():
@@ -64,11 +69,11 @@ with tempfile.TemporaryDirectory(prefix='nixplorer-https-') as directory:
                     request=b''
                     while not request.endswith(b'\r\n\r\na=b'):
                         part=peer.recv(4096)
-                        if not part: raise RuntimeError('client disconnected')
+                        if not part: raise RuntimeError(f'client disconnected: {request!r}')
                         request+=part
                     assert request.startswith(b'POST /path?q=1 HTTP/1.1\r\n')
-                    body=b'x'*200000 if large else b'pong'
-                    header=b'X-Large: '+b'a'*20000+b'\r\n' if large else b''
+                    body=b'x'*2097152 if large else b'pong'
+                    header=b'X-Large: '+b'a'*300000+b'\r\n' if large else b''
                     response=b'HTTP/1.1 200 OK\r\n'+header+b'Content-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body
                     for i in range(0,len(response),4096): peer.sendall(response[i:i+4096])
             except (OSError,RuntimeError) as error:
@@ -77,15 +82,18 @@ with tempfile.TemporaryDirectory(prefix='nixplorer-https-') as directory:
         thread=threading.Thread(target=server,daemon=True);thread.start()
         try:
             result=subprocess.run([str(client),str(right.fileno()),str(tmp/f'{trust}.pem'),
-                str(int(version is not None)),host,str(unavailable),str(expected),'200000' if large else '4'],
+                str(int(version is not None)),host,str(unavailable),str(expected),'2097152' if large else '4'],
+                env={**os.environ, **({"NIX_TEST_ALLOC_MAX": str(alloc_limit)} if alloc_limit else {})},
                 pass_fds=(right.fileno(),),capture_output=True,text=True,timeout=40)
         finally: right.close()
         thread.join(5)
         assert not thread.is_alive(),'server hung'
+        assert result.returncode==0,(result.returncode,result.stderr,errors)
         assert not errors,errors
-        assert result.returncode==0,(result.returncode,result.stderr)
         print(f'PASS {version}: cross={cross}, large={large}, host={host}, expected={expected}',flush=True)
     case(large=True)
+    case(large=True,alloc_limit=4096,expected=-12)
+    case(large=True,alloc_limit=8192,expected=-12)
     case(ssl.TLSVersion.TLSv1_2,cross=True)
     case(ssl.TLSVersion.TLSv1_3,cross=True,large=True)
     case(ssl.TLSVersion.TLSv1_3,host='wrong.example',expected=-8)
