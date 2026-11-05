@@ -116,7 +116,7 @@ KERNEL_C := \
   src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
   src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
   src/kernel/net/realtek/r8169.c src/kernel/net/wireless/broadcom/b43/b43.c \
-  src/kernel/net/wireless/broadcom/b43/b43_firmware.c src/kernel/hal/wifi.c \
+  src/kernel/net/wireless/broadcom/b43/b43_firmware.c src/kernel/net/wireless/broadcom/b43/b43_boot.c src/kernel/hal/wifi.c \
   src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
   src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
   src/kernel/drivers/ps2.c src/kernel/hal/net.c \
@@ -439,13 +439,17 @@ src/system/graphics/dialog/shutdown.o src/system/graphics/session.o src/system/g
 
 src/kernel/drivers/display/font.o src/kernel/drivers/power.o src/system/graphics/fonts/univers85ebo_16.o src/system/graphics/widgets.o src/system/graphics/wm/wm.o src/system/graphics/wm/presentation.o src/system/graphics/text_layout.o: src/system/graphics/text_layout.h src/kernel/drivers/display/font.h
 
-# Native b43 firmware parser, exercised without hardware or privileged I/O.
+# Native b43 firmware parsing and boot, exercised with a register model.
 .PHONY: test-b43
 test-b43:
 	$(CC) -std=c99 -Wall -Wextra -Werror src/kernel/net/wireless/broadcom/b43/tests/firmware_test.c src/kernel/net/wireless/broadcom/b43/b43_firmware.c -o /tmp/nixel-test-b43
 	/tmp/nixel-test-b43
+	$(CC) -std=c99 -Wall -Wextra -Werror src/kernel/net/wireless/broadcom/b43/tests/boot_test.c src/kernel/net/wireless/broadcom/b43/b43_boot.c src/kernel/net/wireless/broadcom/b43/b43_firmware.c -o /tmp/nixel-test-b43-boot
+	/tmp/nixel-test-b43-boot
 
-src/kernel/net/wireless/broadcom/b43/b43.o src/kernel/net/wireless/broadcom/b43/b43_firmware.o src/kernel/hal/wifi.o: src/kernel/net/wireless/broadcom/b43/b43.h
+src/kernel/net/wireless/broadcom/b43/b43.o src/kernel/net/wireless/broadcom/b43/b43_firmware.o src/kernel/net/wireless/broadcom/b43/b43_boot.o src/kernel/hal/wifi.o: src/kernel/net/wireless/broadcom/b43/b43.h
+src/kernel/net/wireless/broadcom/b43/b43_boot.o: src/kernel/net/wireless/broadcom/b43/b43_boot.h
+src/system/shell/commands.o: src/kernel/hal/wifi.h src/kernel/net/wireless/broadcom/b43/b43.h
 src/kernel/hal/wifi.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: src/kernel/hal/wifi.h
 
 # Reusable user-space TLS library; applications opt in by linking this archive.

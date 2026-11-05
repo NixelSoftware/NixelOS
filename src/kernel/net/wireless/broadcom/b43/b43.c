@@ -39,6 +39,8 @@ void b43_probe(b43_info_t* info) {
                   dev->vendor_id == 0x14A4 && dev->device_id == 0x4318 ? 1 : 0;
         if (!bus) continue;
         info->vendor = dev->vendor_id; info->device = dev->device_id;
+        info->pci_bus = dev->bus; info->pci_slot = dev->slot;
+        info->pci_function = dev->function;
         info->state = B43_BUS_UNSUPPORTED;
         if (bus != 1) return;
         info->state = B43_PROBE_FAILED;

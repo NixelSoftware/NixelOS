@@ -11,6 +11,7 @@ typedef struct {
     b43_probe_state_t state;
     uint16_t vendor, device, chip;
     uint8_t core_revision, core_index;
+    uint8_t pci_bus, pci_slot, pci_function;
 } b43_info_t;
 /* Discovery only: does not reset the core, start DMA or transmit RF. */
 void b43_probe(b43_info_t* info);
