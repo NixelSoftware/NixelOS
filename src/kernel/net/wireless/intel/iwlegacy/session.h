@@ -6,9 +6,13 @@ typedef struct {
     uint32_t init_code, init_data, runtime_code, runtime_data;
 } il3945_fw_dma_t;
 typedef struct {
-    uint8_t init_alive, runtime_alive, major, minor;
+    uint8_t init_alive, runtime_alive, major, minor, stage;
     uint32_t event_log, error_log;
 } il3945_alive_t;
+enum {
+    IL_BOOT_BSM=1, IL_BOOT_INIT_ALIVE, IL_BOOT_INIT_VERIFY,
+    IL_BOOT_RUNTIME_ALIVE, IL_BOOT_RUNTIME_VERIFY, IL_BOOT_CALIBRATION, IL_BOOT_READY
+};
 /* RX must be active, TX rings configured, NIC clocks on and coherent firmware
  * DMA images pinned. Remains caller-owned on every return; stop/reset DMA
  * before releasing any memory. Success means runtime ALIVE, not association. */

@@ -12,7 +12,7 @@ static pci_device_t devices[3];
 static uint32_t registers[1024];
 static uint16_t command, subsystem;
 static unsigned count, bar_probes, config_writes;
-static int bar_bad, enable_bad;
+static int bar_bad, enable_bad, acknowledge_stop;
 uint32_t pci_device_count(void) { return count; }
 const pci_device_t* pci_device_at(uint32_t i) { return i < count ? devices + i : 0; }
 uint16_t pci_read16(const pci_device_t* dev, uint16_t reg) {
@@ -35,7 +35,11 @@ int pci_enable_device(const pci_device_t* dev, uint16_t decode) {
     if (enable_bad) return 0;
     command |= decode; return 1;
 }
-void driver_delay_us(uint32_t us) { (void)us; }
+void driver_delay_us(uint32_t us) {
+    (void)us;
+    if (acknowledge_stop && (registers[CSR_RESET/4] & CSR_RESET_REG_FLAG_STOP_MASTER))
+        registers[CSR_RESET/4] |= CSR_RESET_REG_FLAG_MASTER_DISABLED;
+}
 static void setup(void) {
     memset(devices,0,sizeof devices); memset(registers,0,sizeof registers);
     devices[0] = (pci_device_t){.vendor_id=0x8086,.device_id=0x100E,.class_code=2,.subclass=0};
@@ -43,14 +47,15 @@ static void setup(void) {
         .class_code=2,.subclass=0x80,.revision=2};
     devices[2] = (pci_device_t){.vendor_id=0x14E4,.device_id=0x4318,.class_code=2,.subclass=0x80};
     count = 3; command = 1; subsystem = 0x1005;
-    bar_probes = config_writes = 0; bar_bad = enable_bad = 0;
+    bar_probes = config_writes = 0; bar_bad = enable_bad = acknowledge_stop = 0;
 }
 int main(void) {
     iwlegacy_info_t info;
     setup(); count = 1;
     iwlegacy_probe(&info); assert(info.state == IL_ABSENT && !info.vendor && !bar_probes);
     setup(); command |= PCI_COMMAND_MASTER;
-    iwlegacy_probe(&info); assert(info.state == IL_DEVICE_BUSY && !bar_probes && !config_writes);
+    iwlegacy_probe(&info); assert(info.state == IL_CLOCK_TIMEOUT && info.error == IL_TIMEOUT);
+    assert(bar_probes == 1 && config_writes && !(command & PCI_COMMAND_MASTER));
     assert(info.vendor == 0x8086 && info.device == 0x4222 && info.bg_only);
     assert(info.pci_bus == 3 && info.pci_slot == 7 && info.pci_function == 1 && info.revision == 2);
     setup(); bar_bad = 1;
@@ -59,8 +64,16 @@ int main(void) {
     iwlegacy_probe(&info); assert(info.state == IL_ACCESS_FAILED && command == 1);
     setup(); registers[CSR_GP_CNTRL/4] = CSR_GP_CNTRL_REG_FLAG_INIT_DONE;
     registers[CSR_INT_MASK/4] = 0x1234;
-    iwlegacy_probe(&info); assert(info.state == IL_DEVICE_BUSY && command == 1);
-    assert(registers[CSR_INT_MASK/4] == 0x1234); /* No writes to an active NIC. */
+    iwlegacy_probe(&info); assert(info.state == IL_CLOCK_TIMEOUT && info.error == IL_TIMEOUT && command == 1);
+    assert(registers[CSR_INT_MASK/4] == 0 && (registers[CSR_RESET/4] & CSR_RESET_REG_FLAG_SW_RESET));
+    /* An actual native owner must still be left untouched. */
+    setup(); iwlegacy_native_owned = 1;
+    iwlegacy_probe(&info); assert(info.state == IL_DEVICE_BUSY && !bar_probes && !config_writes);
+    iwlegacy_native_owned = 0;
+    /* Inherited PCI DMA + INIT_DONE with acknowledged reset proceeds to EEPROM inspection. */
+    setup(); command |= PCI_COMMAND_MASTER; registers[CSR_GP_CNTRL/4] = CSR_GP_CNTRL_REG_FLAG_INIT_DONE;
+    registers[CSR_RESET/4] = CSR_RESET_REG_FLAG_MASTER_DISABLED;
+    iwlegacy_probe(&info); assert(info.state == IL_CLOCK_TIMEOUT && command == 1);
     setup(); registers[CSR_GP_CNTRL/4] = 0xFFFFFFFF;
     iwlegacy_probe(&info); assert(info.state == IL_ACCESS_FAILED && info.error == IL_ACCESS && command == 1);
     setup();

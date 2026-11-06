@@ -129,14 +129,17 @@ int il3945_firmware_run(const il_io_t* io, il_rx_queue_t* rx,
     io->write32(io->context,CSR_INT,0xFFFFFFFFu);
     io->write32(io->context,CSR_UCODE_DRV_GP1_CLR,
         CSR_UCODE_SW_BIT_RFKILL | CSR_UCODE_DRV_GP1_BIT_CMD_BLOCKED);
+    alive->stage = IL_BOOT_BSM;
     result = il3945_load_bsm(io,firmware,size,dma->init_code,dma->init_data);
     if (result) return result;
     __atomic_thread_fence(__ATOMIC_RELEASE);
     io->write32(io->context,CSR_RESET,0);
+    alive->stage = IL_BOOT_INIT_ALIVE;
     alive_wait_t wait = {alive,0,0,0};
     result = await_alive(io,rx,&wait);
     if (result) return result;
     io->delay_us(io->context,5000); /* Upstream RF-kill settling interval. */
+    alive->stage = IL_BOOT_INIT_VERIFY;
     if ((result = radio_enabled(io)) || (result = verify_image(io,&fw.init_code))) return result;
     result = il_grab(io);
     if (result) return result;
@@ -148,9 +151,33 @@ int il3945_firmware_run(const il_io_t* io, il_rx_queue_t* rx,
     il_prph_write(io,BSM_DRAM_INST_BYTECOUNT_REG,fw.runtime_code.length | BSM_DRAM_INST_LOAD);
     il_release(io);
     wait.stage = 1; wait.received = 0;
+    alive->stage = IL_BOOT_RUNTIME_ALIVE;
     result = await_alive(io,rx,&wait);
     if (result) return result;
     io->delay_us(io->context,5000);
     if ((result = radio_enabled(io))) return result;
-    return verify_image(io,&fw.runtime_code);
+    alive->stage = IL_BOOT_RUNTIME_VERIFY;
+    result = verify_image(io,&fw.runtime_code);
+    if (result) return result;
+    /* Runtime ALIVE precedes radio/thermal readiness (3945_alive_start).
+     * Do not submit firmware commands while calibration is still starting. */
+    alive->stage = IL_BOOT_CALIBRATION;
+    result = il_grab(io);
+    if (result) return result;
+    uint32_t rfkill = il_prph_read(io,APMG_RFKILL_REG);
+    il_release(io);
+    if (rfkill == 0xffffffffu) return IL_ACCESS;
+    if (!(rfkill & 1)) return IL_RFKILL;
+    for (unsigned tick=0; tick<10000; tick++) {
+        result = radio_enabled(io);
+        if (result) return result;
+        int32_t temperature=(int32_t)io->read32(io->context,CSR_UCODE_DRV_GP2);
+        if (temperature) {
+            if (temperature < -260 || temperature > 25) return IL_VERIFY;
+            alive->stage = IL_BOOT_READY;
+            return IL_OK;
+        }
+        io->delay_us(io->context,100);
+    }
+    return IL_TIMEOUT;
 }

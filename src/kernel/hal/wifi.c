@@ -27,17 +27,30 @@ const char* sys_wifi_status_text(void) {
         case IL_CONNECTION_FAILED: return status.intel.error==IL_RFKILL ?
             "Wi-Fi is blocked by the hardware switch." : "Wi-Fi connection failed.";
         case IL_SCAN_COMPLETE: return "Wi-Fi scan complete.";
-        case IL_SCAN_FAILED: return "Wi-Fi scan failed.";
+        case IL_SCAN_FAILED:
+            if (status.intel.error == IL_TIMEOUT) {
+                if (status.intel.last_command == 0x10 && status.intel.command_pending)
+                    return "Wi-Fi RXON command timed out.";
+                if (status.intel.last_command == 0x80 && !status.intel.command_pending)
+                    return "Wi-Fi scan completion timed out.";
+                return "Wi-Fi firmware command timed out.";
+            }
+            return "Wi-Fi scan failed.";
         case IL_FIRMWARE_READY: return "Wi-Fi firmware ready.";
         case IL_FIRMWARE_MISSING: return "Wi-Fi firmware is missing.";
         case IL_FIRMWARE_FAILED:
+            if (status.intel.error == IL_DMA_STOP) return "Wi-Fi DMA stop unconfirmed; reboot required.";
             return status.intel.error == IL_RFKILL ? "Wi-Fi is blocked by the hardware switch." :
                 "Wi-Fi firmware initialization failed.";
         case IL_EEPROM_READY: return "Wi-Fi adapter ready; scan to select a network.";
         case IL_DEVICE_BUSY: return "Wi-Fi adapter is already active.";
-        case IL_CLOCK_TIMEOUT:
+        case IL_CLOCK_TIMEOUT: return "Wi-Fi initialization: MAC clock timeout.";
         case IL_EEPROM_FAILED:
-        case IL_ACCESS_FAILED: return "Unable to initialize Wi-Fi adapter.";
+            return status.intel.error == IL_TIMEOUT ? "Wi-Fi initialization: EEPROM read timeout." :
+                "Wi-Fi initialization: invalid or inaccessible EEPROM.";
+        case IL_ACCESS_FAILED:
+            return status.intel.error == IL_TIMEOUT ? "Wi-Fi initialization: reset timeout." :
+                "Wi-Fi initialization: PCI/register access failed.";
         default: return "Wi-Fi adapter found; connection support unavailable.";
         }
     }

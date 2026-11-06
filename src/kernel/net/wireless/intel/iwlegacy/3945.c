@@ -81,6 +81,18 @@ int il3945_apm_stop(const il_io_t* io) {
         CSR_GP_CNTRL_REG_FLAG_INIT_DONE | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ, 0);
     return result ? result : reset;
 }
+/* Startup/EEPROM-only reset: caller has disabled PCI bus mastering and has
+ * never posted host DMA. Upstream logs STOP_MASTER timeout and still resets.
+ * Live-DMA teardown must keep using the strict apm_stop result for quarantine. */
+int il3945_reset_unowned(const il_io_t* io) {
+    int result = il3945_apm_stop(io);
+    if (result && result != IL_TIMEOUT) return result;
+    uint32_t gp = io->read32(io->context, CSR_GP_CNTRL);
+    if (gp == 0xFFFFFFFFu) return IL_ACCESS;
+    if (gp & (CSR_GP_CNTRL_REG_FLAG_INIT_DONE | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ))
+        return IL_TIMEOUT;
+    return IL_OK;
+}
 int il3945_inspect(const il_io_t* io, uint8_t bg_only, iwlegacy_info_t* info) {
     if (!il_io_valid(io) || !info) return IL_INVALID;
     info->eeprom = (il3945_eeprom_t){0};
@@ -119,7 +131,7 @@ int il3945_inspect(const il_io_t* io, uint8_t bg_only, iwlegacy_info_t* info) {
     info->rfkill = !(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW);
     info->state = IL_EEPROM_READY;
 stopped: {
-    int stopped_result = il3945_apm_stop(io);
+    int stopped_result = il3945_reset_unowned(io);
     if (!result && stopped_result) {
         result = stopped_result;
         info->state = IL_ACCESS_FAILED;

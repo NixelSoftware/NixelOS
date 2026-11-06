@@ -14,8 +14,11 @@ static inline uint32_t il_le32(const uint8_t* p) {
 static inline int il_io_valid(const il_io_t* io) {
     return io && io->read32 && io->write32 && io->delay_us;
 }
+extern int iwlegacy_native_owned;
 int il3945_apm_start(const il_io_t* io);
 int il3945_apm_stop(const il_io_t* io);
+/* PCI mastering disabled; no host DMA buffers have been posted. */
+int il3945_reset_unowned(const il_io_t* io);
 int il_poll(const il_io_t* io, uint32_t reg, uint32_t mask,
              uint32_t bits, unsigned timeout_us);
 int il_update(const il_io_t* io, uint32_t reg, uint32_t clear, uint32_t set);

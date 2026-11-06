@@ -23,6 +23,10 @@ static void alive_event(transport_t* t, unsigned subtype, unsigned valid) {
 }
 static uint32_t transport_read(void* ctx, uint32_t reg) {
     transport_t* t = ctx;
+    if (reg == CSR_UCODE_DRV_GP2) {
+        if (t->mode == 11 || (t->mode == 12 && t->m.delay < 12000)) return 0;
+        return (uint32_t)-100;
+    }
     if (reg == FH39_RSSR_STATUS) return t->mode == 10 ? 0 : FH39_RSSR_CHNL0_RX_STATUS_CHNL_IDLE;
     if (reg == HBUS_TARG_MEM_RDAT) {
         assert(t->memory_offset == 0); t->memory_offset += 4;
@@ -59,6 +63,7 @@ static void transport_delay(void* ctx, uint32_t us) {
 static il_io_t transport_setup(transport_t* t) {
     memset(t,0,sizeof(*t)); (void)setup(&t->m);
     firmware_image(t->firmware);
+    t->m.prph[APMG_RFKILL_REG/4] = 1;
     t->m.regs[CSR_GP_CNTRL / 4] |= CSR_GP_CNTRL_REG_FLAG_INIT_DONE;
     for (unsigned i = 0; i < 254; i++) buffers[i] = (il_rx_buffer_t){pages[i],0x200000 + i * IL_RX_BYTES};
     assert(il3945_rx_prepare(&t->rx,descriptors,0x10000,status,0x11000,buffers) == IL_OK);
@@ -120,6 +125,20 @@ int main(void) {
             assert(alive.init_alive && alive.runtime_alive && alive.major == 15 && alive.minor == 3);
             assert(alive.event_log == 0x800100 && alive.error_log == 0x800200);
         }
+        assert(il3945_rx_stop(&io,&t.rx) == IL_OK);
+    }
+    /* ALIVE is not sufficient: thermal startup may lag or radio may be killed. */
+    for (unsigned mode=11; mode<=13; mode++) {
+        io = transport_setup(&t); t.mode = mode;
+        if (mode == 13) t.m.prph[APMG_RFKILL_REG/4] = 0;
+        assert(il3945_rx_start(&io,&t.rx) == IL_OK);
+        il3945_fw_dma_t images = {0x100000,0x110000,0x120000,0x130000};
+        il3945_alive_t progress;
+        int r = il3945_firmware_run(&io,&t.rx,t.firmware,sizeof(t.firmware),&images,&progress);
+        assert(progress.init_alive && progress.runtime_alive);
+        assert(r == (mode == 11 ? IL_TIMEOUT : mode == 12 ? IL_OK : IL_RFKILL));
+        assert(progress.stage == (mode == 12 ? IL_BOOT_READY : IL_BOOT_CALIBRATION));
+        if (mode == 12) assert(t.m.delay >= 12000);
         assert(il3945_rx_stop(&io,&t.rx) == IL_OK);
     }
     io = transport_setup(&t); assert(il3945_rx_start(&io,&t.rx) == IL_OK);

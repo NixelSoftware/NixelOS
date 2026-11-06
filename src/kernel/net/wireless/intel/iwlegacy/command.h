@@ -9,6 +9,7 @@ typedef struct {
     uint16_t sequence;
     uint8_t command, pending, poisoned;
     int result;
+    uint32_t timeout_gp1, timeout_tx_config, timeout_tx_status;
     uint8_t response[256];
 } il_command_queue_t;
 /* Zero-initialize q before first use; reset it only after DMA is stopped. */

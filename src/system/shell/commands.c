@@ -128,6 +128,13 @@ static void print_hex_u16(uint16_t val) {
     print(out);
 }
 
+static void print_hex_u32(uint32_t value) {
+    char text[11] = "0x00000000";
+    const char* digits = "0123456789ABCDEF";
+    for (unsigned i=0; i<8; i++) text[2+i] = digits[(value >> (28-4*i)) & 15];
+    print(text);
+}
+
 static void print_u32(uint32_t value) {
     char digits[11];
     int count = 0;
@@ -183,6 +190,29 @@ static void print_wifi_device(void) {
                 print("\n  Error: ");
                 if (intel->error < 0) print("-");
                 print_u32(intel->error < 0 ? (unsigned)-intel->error : (unsigned)intel->error);
+            }
+            if (intel->stop_failures || intel->error == IL_DMA_STOP) {
+                print("\n  Original operation error: ");
+                if (intel->operation_error < 0) print("-");
+                print_u32(intel->operation_error < 0 ? (unsigned)-intel->operation_error : (unsigned)intel->operation_error);
+                print("\n  Stop failures:");
+                if (intel->stop_failures & 1) print(" RX");
+                if (intel->stop_failures & 2) print(" TX");
+                if (intel->stop_failures & 4) print(" global/reset");
+                if (intel->stop_failures & 8) print(" PCI-master");
+                print("\n  Firmware ALIVE: init="); print_u32(intel->init_alive);
+                print(" runtime="); print_u32(intel->runtime_alive);
+            }
+            if (intel->boot_stage) {
+                print("\n  Boot stage: "); print_u32(intel->boot_stage);
+                print("\n  Last command: "); print_hex_u16(intel->last_command);
+                print(" pending="); print_u32(intel->command_pending);
+                print(" poisoned="); print_u32(intel->command_poisoned);
+                if (intel->command_poisoned) {
+                    print("\n  Command GP1: "); print_hex_u32(intel->command_gp1);
+                    print("\n  TX queue 4 config: "); print_hex_u32(intel->command_tx_config);
+                    print("\n  TX hardware status: "); print_hex_u32(intel->command_tx_status);
+                }
             }
             if (intel->state == IL_SCAN_COMPLETE) {
                 print("\n  Networks found: "); print_u32(intel->scan_count);

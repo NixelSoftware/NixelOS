@@ -97,6 +97,10 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     if (!dev) return info->error = IL_ACCESS;
     info->state = IL_FIRMWARE_FAILED;
     info->firmware_version = 0; info->scan_count = 0;
+    info->operation_error = 0; info->stop_failures = 0;
+    info->init_alive = info->runtime_alive = info->boot_stage = 0;
+    info->last_command = info->command_pending = info->command_poisoned = 0;
+    info->command_gp1 = info->command_tx_config = info->command_tx_status = 0;
     dma_block_t raw = allocate(FW_MAX + 1);
     if (!raw.address) return info->error = IL_NOMEM;
     uint8_t* file = (uint8_t*)(unsigned long)raw.address;
@@ -147,8 +151,10 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     result = il3945_rx_prepare(&queue,(volatile uint32_t*)(unsigned long)control,control,
         (volatile uint16_t*)(unsigned long)(control + PAGE_SIZE),control + PAGE_SIZE,buffers);
     if (result) goto free_blocks;
-    uint16_t command = pci_read16(dev,4);
-    if (command & PCI_COMMAND_MASTER) { result = IL_ACCESS; goto free_blocks; }
+    uint16_t inherited = pci_read16(dev,4);
+    uint16_t command = inherited & ~PCI_COMMAND_MASTER;
+    pci_write16(dev,4,command);
+    if (pci_read16(dev,4) & PCI_COMMAND_MASTER) { result = IL_ACCESS; goto free_blocks; }
     pci_bar_t bar;
     if (!pci_probe_bar(dev,0,&bar) || bar.io || !bar.address || bar.address > 0xFFFFF000ull ||
         bar.size < PAGE_SIZE || !pci_enable_device(dev,PCI_COMMAND_MEMORY)) {
@@ -156,8 +162,13 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     }
     il_io_t io = {(void*)(unsigned long)bar.address,read_reg,write_reg,wait_us};
     uint32_t gp = read_reg(io.context,CSR_GP_CNTRL);
-    if (gp == 0xFFFFFFFFu || (gp & CSR_GP_CNTRL_REG_FLAG_INIT_DONE)) {
+    if (gp == 0xFFFFFFFFu) {
         pci_write16(dev,4,command); result = IL_ACCESS; goto free_blocks;
+    }
+    if ((inherited & PCI_COMMAND_MASTER) || (gp & CSR_GP_CNTRL_REG_FLAG_INIT_DONE)) {
+        write_reg(io.context,CSR_INT_MASK,0);
+        result = il3945_reset_unowned(&io);
+        if (result) { pci_write16(dev,4,command); goto free_blocks; }
     }
     info->rfkill = !(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW);
     if (info->rfkill) {
@@ -179,8 +190,9 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
         if (!(pci_read16(dev,4) & PCI_COMMAND_MASTER)) result = IL_ACCESS;
         else {
             il3945_fw_dma_t dma = {blocks[0].address,blocks[1].address,blocks[2].address,blocks[3].address};
-            il3945_alive_t alive;
+            il3945_alive_t alive = {0};
             result = il3945_firmware_run(&io,&queue,file,(uint32_t)bytes,&dma,&alive);
+            info->init_alive = alive.init_alive; info->runtime_alive = alive.runtime_alive; info->boot_stage = alive.stage;
             if (!result) info->firmware_version = fw.version;
             if (!result && connect) {
                 station = (il_station_t){0}; station.io = io; station.rx = queue;
@@ -192,7 +204,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                     connect->password,connect->password_length,connect->entropy,connect->entropy_context);
                 if (!result) {
                     for (unsigned i = 0; i < count; i++) retained[i] = blocks[i];
-                    poll_clock_set = 0; retained_count = count; retained_device = dev; retained_command = command;
+                    poll_clock_set = 0; retained_count = count; iwlegacy_native_owned = 1; retained_device = dev; retained_command = command;
                     release(raw); info->state = IL_CONNECTED; info->error = IL_OK;
                     return IL_OK;
                 }
@@ -201,6 +213,11 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                 il_command_queue_t commands = {0};
                 result = il3945_command_prepare(&commands,(void*)(unsigned long)rings[4],
                     (uint8_t*)(unsigned long)command_buffer,command_buffer);
+                /* Match runtime ALIVE startup: awake mode and BT configuration
+                 * precede the first RXON, including receive-only scanning. */
+                uint8_t awake[32] = {0}, bt[12] = {0};
+                if (!result) result = il3945_command_send(&io,&queue,&commands,0x77,awake,sizeof(awake),1000,0,0);
+                if (!result) result = il3945_command_send(&io,&queue,&commands,0x9b,bt,sizeof(bt),1000,0,0);
                 uint8_t rxon[44] = {0};
                 for (unsigned i = 0; i < 6; i++) rxon[i] = info->eeprom.mac[i];
                 rxon[24] = 3; rxon[25] = 10; rxon[28] = 0xFF; rxon[29] = 15;
@@ -215,15 +232,26 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                 }
                 if (!result) result = il3945_command_send(&io,&queue,&commands,0x10,rxon,sizeof(rxon),1000,0,0);
                 if (!result) result = il3945_scan_run(&io,&queue,&commands,&info->eeprom,results);
+                info->last_command = commands.command;
+                info->command_pending = commands.pending; info->command_poisoned = commands.poisoned;
+                info->command_gp1 = commands.timeout_gp1;
+                info->command_tx_config = commands.timeout_tx_config;
+                info->command_tx_status = commands.timeout_tx_status;
             }
         }
     }
+    info->operation_error = result;
     int rx_stopped = il3945_rx_stop(&io,&queue);
     int tx_stopped = tx_stop(&io);
     int stopped = il3945_apm_stop(&io);
     pci_set_master(dev,0);
     int master_off = !(pci_read16(dev,4) & PCI_COMMAND_MASTER);
-    if (touched_dma && (rx_stopped || tx_stopped || stopped || !master_off)) {
+    info->stop_failures = (rx_stopped ? 1 : 0) | (tx_stopped ? 2 : 0) |
+        (stopped ? 4 : 0) | (!master_off ? 8 : 0);
+    /* MASTER_DISABLED acknowledges the entire device's DMA engine, superseding
+     * individual queue-idle timeouts. PCI mastering must also be disabled.
+     * Without global acknowledgement, keep the posted allocations quarantined. */
+    if (touched_dma && (stopped || !master_off)) {
         for (unsigned i = 0; i < count; i++) quarantined[quarantine_count++] = blocks[i];
         count = 0; result = IL_DMA_STOP;
     }
@@ -264,13 +292,14 @@ int iwlegacy_disconnect(void) {
     int tx = tx_stop(&station.io);
     int apm = il3945_apm_stop(&station.io);
     pci_set_master(retained_device,0);
-    int stopped = !rx && !tx && !apm && !(pci_read16(retained_device,4)&PCI_COMMAND_MASTER);
+    (void)rx; (void)tx; /* Global stop acknowledgement supersedes queue-idle status. */
+    int stopped = !apm && !(pci_read16(retained_device,4)&PCI_COMMAND_MASTER);
     pci_write16(retained_device,4,retained_command & ~PCI_COMMAND_MASTER);
     for (unsigned i=0;i<retained_count;i++) {
         if(stopped) release(retained[i]);
         else quarantined[quarantine_count++]=retained[i];
     }
-    retained_count=0; retained_device=0;
+    retained_count=0; iwlegacy_native_owned=0; retained_device=0;
     return stopped ? IL_OK : IL_DMA_STOP;
 }
 int iwlegacy_poll(unsigned elapsed_ms) {

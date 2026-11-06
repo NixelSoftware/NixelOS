@@ -5,6 +5,7 @@
  */
 #include "internal.h"
 #include "command.h"
+#include "fh.h"
 static void store16(volatile uint8_t* p, unsigned value) { p[0] = value; p[1] = value >> 8; }
 static void store32(volatile uint8_t* p, uint32_t value) {
     p[0] = value; p[1] = value >> 8; p[2] = value >> 16; p[3] = value >> 24;
@@ -58,7 +59,9 @@ int il3945_command_send(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t
     q->next = (q->next + 1) & 255;
     __atomic_thread_fence(__ATOMIC_RELEASE);
     io->write32(io->context,HBUS_TARG_WRPTR,0x0400 | q->next);
-    il_release(io);
+    /* Flush the posted PCI doorbell before waiting. Keep MAC_ACCESS_REQ high
+     * until completion: dropping it here permits sleep before the TFD fetch. */
+    (void)io->read32(io->context,CSR_GP_CNTRL);
     command_dispatch_t d = {q,events,context};
     for (unsigned tick = 0; tick < timeout_ms * 10; tick++) {
         uint32_t irq = io->read32(io->context,CSR_INT);
@@ -69,11 +72,19 @@ int il3945_command_send(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t
         if (irq) io->write32(io->context,CSR_INT,irq);
         result = il3945_rx_poll(io,rx,dispatch,&d);
         if (result < 0) goto failed;
-        if (!q->pending) return q->result;
+        if (!q->pending) { il_release(io); return q->result; }
+        /* RX producer updates also grab/release NIC access; restore our wake
+         * request if such an update occurred while consuming notifications. */
+        result = il_update(io,CSR_GP_CNTRL,0,CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+        if (result) goto failed;
         io->delay_us(io->context,100);
     }
     result = IL_TIMEOUT;
 failed:
+    q->timeout_gp1 = io->read32(io->context,CSR_UCODE_DRV_GP1);
+    q->timeout_tx_config = io->read32(io->context,FH39_TCSR_CONFIG(4));
+    q->timeout_tx_status = io->read32(io->context,FH39_TSSR_TX_STATUS);
+    il_release(io);
     q->poisoned = 1; /* Firmware may still own the posted command/TFD. */
     q->result = result;
     return result;

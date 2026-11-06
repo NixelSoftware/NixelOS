@@ -71,13 +71,23 @@ int main(void) {
     il_scan_results_t found;
     assert(iwlegacy_scan(&info,&found) == IL_NOMEM && !pinned() && !bar_probes && !found.count);
     info = device_setup(); command |= PCI_COMMAND_MASTER;
-    assert(iwlegacy_firmware_check(&info) == IL_ACCESS && !pinned() && !bar_probes);
+    assert(iwlegacy_firmware_check(&info) == IL_TIMEOUT && !pinned() && bar_probes == 1 && command == 1);
     info = device_setup(); registers[CSR_GP_CNTRL/4] = 0;
     assert(iwlegacy_firmware_check(&info) == IL_RFKILL && !pinned() && command == 1 && info.rfkill);
     info = device_setup(); bar_bad = 1;
     assert(iwlegacy_firmware_check(&info) == IL_ACCESS && !pinned() && command == 1);
     info = device_setup();
     assert(iwlegacy_firmware_check(&info) == IL_TIMEOUT && !pinned() && command == 1);
+    /* Missing per-queue idle bits are superseded by the global DMA stop ACK.
+     * Preserve the original firmware error and safely release all allocations.
+     * This raw-MMIO fixture reads back the W1C interrupt write as all ones. */
+    info = device_setup(); acknowledge_stop = 1;
+    registers[CSR_GPIO_IN/4] = CSR_GPIO_IN_VAL_VMAIN_PWR_SRC;
+    registers[CSR_GP_CNTRL/4] = CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY | CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW;
+    int primary = iwlegacy_firmware_check(&info);
+    assert(primary == IL_ACCESS && !pinned());
+    assert(!quarantine_count && info.operation_error == IL_ACCESS);
+    assert(info.stop_failures == 3 && !info.init_alive && !info.runtime_alive);
     /* Clock-ready fixture reaches DMA activation. Missing idle acknowledgments
      * force quarantine, even though PCI bus mastering can be disabled. */
     info = device_setup();
@@ -85,6 +95,8 @@ int main(void) {
     registers[CSR_GP_CNTRL/4] = CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY | CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW;
     assert(iwlegacy_firmware_check(&info) == IL_DMA_STOP && pinned() > 254);
     assert(quarantine_count == 7 && command == 1);
+    assert(info.operation_error == IL_ACCESS && info.stop_failures == 7);
+    assert(!info.init_alive && !info.runtime_alive);
     unsigned saved = allocations, held = pinned();
     assert(iwlegacy_firmware_check(&info) == IL_DMA_STOP && allocations == saved && pinned() == held);
     puts("iwlegacy lifecycle: missing/bad firmware, OOM rollback, busy devices and DMA quarantine passed");

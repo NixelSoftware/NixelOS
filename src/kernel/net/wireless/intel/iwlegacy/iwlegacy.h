@@ -30,6 +30,11 @@ typedef struct {
     uint8_t pci_bus, pci_slot, pci_function, revision, bg_only, rfkill;
     uint32_t hardware_revision, firmware_version;
     int error;
+    int operation_error; /* Original failure before DMA cleanup. */
+    uint8_t stop_failures; /* RX=1, TX=2, global stop/reset=4, PCI master=8. */
+    uint8_t init_alive, runtime_alive, boot_stage;
+    uint8_t last_command, command_pending, command_poisoned;
+    uint32_t command_gp1, command_tx_config, command_tx_status;
     unsigned scan_count;
     il3945_eeprom_t eeprom;
 } iwlegacy_info_t;

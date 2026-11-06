@@ -3,7 +3,9 @@
  * from Intel's Linux iwlegacy driver; see README.md for scope and provenance.
  */
 #include "iwlegacy.h"
-#include "csr.h"
+#include "internal.h"
+/* Native lifecycle ownership, not inferred from firmware/PCI register bits. */
+int iwlegacy_native_owned;
 #include "../../../../mutex.h"
 #include "../../../../drivers/delay.h"
 static uint32_t mmio_read(void* base, uint32_t reg) {
@@ -27,9 +29,15 @@ void iwlegacy_probe(iwlegacy_info_t* info) {
         info->pci_function = dev->function; info->revision = dev->revision;
         info->subsystem_device = pci_read16(dev, 0x2E);
         info->bg_only = il3945_bg_only(info->device, info->subsystem_device);
-        uint16_t command = pci_read16(dev, 4);
-        /* Do not resize BARs, reset or claim EEPROM from a live DMA owner. */
-        if (command & PCI_COMMAND_MASTER) { info->state = IL_DEVICE_BUSY; return; }
+        if (iwlegacy_native_owned) { info->state = IL_DEVICE_BUSY; return; }
+        uint16_t inherited = pci_read16(dev, 4);
+        uint16_t command = inherited & ~PCI_COMMAND_MASTER;
+        /* BIOS/previous firmware can leave DMA enabled without a native owner.
+         * Disable PCI DMA before probing the BAR or resetting that state. */
+        pci_write16(dev, 4, command);
+        if (pci_read16(dev, 4) & PCI_COMMAND_MASTER) {
+            info->state = IL_ACCESS_FAILED; info->error = IL_ACCESS; return;
+        }
         info->state = IL_ACCESS_FAILED;
         info->error = IL_ACCESS;
         pci_bar_t bar;
@@ -42,12 +50,13 @@ void iwlegacy_probe(iwlegacy_info_t* info) {
         il_io_t io = {(void*)(unsigned long)bar.address, mmio_read, mmio_write, delay};
         uint32_t gp = mmio_read(io.context, CSR_GP_CNTRL);
         if (gp == 0xFFFFFFFFu) info->error = IL_ACCESS;
-        else if (gp & CSR_GP_CNTRL_REG_FLAG_INIT_DONE) {
-            info->state = IL_DEVICE_BUSY; info->error = 0;
-        }
         else {
             mmio_write(io.context, CSR_INT_MASK, 0);
-            (void)il3945_inspect(&io, info->bg_only, info);
+            int reset = IL_OK;
+            if ((inherited & PCI_COMMAND_MASTER) || (gp & CSR_GP_CNTRL_REG_FLAG_INIT_DONE))
+                reset = il3945_reset_unowned(&io);
+            if (reset) info->error = reset;
+            else (void)il3945_inspect(&io, info->bg_only, info);
         }
         /* Inspection leaves the NIC stopped, with no DMA buffers or live RF. */
         pci_write16(dev, 4, command);

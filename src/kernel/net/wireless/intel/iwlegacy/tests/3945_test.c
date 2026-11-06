@@ -134,6 +134,11 @@ int main(void) {
     assert(!(model.prph[APMG_PS_CTRL_REG / 4] & APMG_PS_CTRL_VAL_RESET_REQ));
     io = setup(&model); model.regs[CSR_GP_CNTRL / 4] = 0;
     assert(il3945_inspect(&io,1,&info) == IL_OK && info.rfkill && info.eeprom.valid_channels == 1);
+    io = setup(&model); model.stop_stall = 1;
+    assert(il3945_apm_stop(&io) == IL_TIMEOUT); /* Strict live-DMA stop. */
+    assert(il3945_reset_unowned(&io) == IL_OK); /* No posted host DMA. */
+    io = setup(&model); model.unavailable = CSR_RESET;
+    assert(il3945_reset_unowned(&io) == IL_ACCESS); /* Never hide bad MMIO. */
     for (unsigned mode = 0; mode < 7; mode++) {
         io = setup(&model);
         if (mode == 0) model.clock_stall = 1;
@@ -143,9 +148,10 @@ int main(void) {
         if (mode == 4) model.eeprom[136] = 0x2E;
         if (mode == 5) model.stop_stall = 1;
         if (mode == 6) model.unavailable = CSR_EEPROM_REG;
-        int expected = mode == 2 || mode == 4 ? IL_BAD_EEPROM : mode == 6 ? IL_ACCESS : IL_TIMEOUT;
+        int expected = mode == 5 ? IL_OK : mode == 2 || mode == 4 ? IL_BAD_EEPROM : mode == 6 ? IL_ACCESS : IL_TIMEOUT;
         assert(il3945_inspect(&io,0,&info) == expected);
-        assert(info.state != IL_EEPROM_READY && !info.eeprom.version);
+        if (expected) assert(info.state != IL_EEPROM_READY && !info.eeprom.version);
+        else assert(info.state == IL_EEPROM_READY && info.eeprom.version);
         assert(!(model.regs[CSR_GP_CNTRL / 4] & (CSR_GP_CNTRL_REG_FLAG_INIT_DONE | CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ)));
         assert(model.delay <= 41000 && (model.regs[CSR_RESET / 4] & CSR_RESET_REG_FLAG_SW_RESET));
     }

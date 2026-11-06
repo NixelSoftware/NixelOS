@@ -37,7 +37,7 @@ static void scan_write(void* ctx, uint32_t reg, uint32_t value) {
     unsigned length = il_le32(tfds + index * 64 + 8) - 4;
     assert((il_le32(tfds + index * 64) >> 24 & 15) == 1);
     assert((il_le32(tfds + index * 64) >> 28) == ((0u - length) & 3));
-    if (s->mode == 1) return;
+    if (s->mode == 1 || s->mode == 6) return;
     uint16_t seq = il_le16(cmd_buffer + 2);
     uint8_t response[4] = {s->mode == 4 ? 2 : 1,0,0,0};
     unsigned read = s->t.rx.read;
@@ -53,7 +53,16 @@ static void scan_write(void* ctx, uint32_t reg, uint32_t value) {
         status[0] = (read + 3) & 255;
     }
 }
-static void scan_delay(void* ctx, uint32_t us) { transport_delay(&((scan_model_t*)ctx)->t,us); }
+static void scan_delay(void* ctx, uint32_t us) {
+    scan_model_t* s=ctx; transport_delay(&s->t,us);
+    if (s->mode == 6 && !s->events) {
+        /* Real DMA completes later, not synchronously in the doorbell write. */
+        assert(s->t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+        uint8_t response[4]={1};
+        enqueue(s,s->t.rx.read,cmd_buffer[0],0,il_le16(cmd_buffer+2),response,4);
+        status[0]=(s->t.rx.read+1)&255; s->events++;
+    }
+}
 static il_io_t scan_setup(scan_model_t* s, il_command_queue_t* q) {
     memset(s,0,sizeof(*s)); memset(tfds,0,sizeof(tfds)); *q = (il_command_queue_t){0};
     (void)transport_setup(&s->t);
@@ -80,6 +89,15 @@ int main(void) {
             assert(il3945_command_prepare(&q,tfds,cmd_buffer,0x18000) == IL_INVALID);
         }
     }
+    io = scan_setup(&s,&q); s.mode=6;
+    assert(il3945_command_send(&io,&s.t.rx,&q,0x77,0,0,100,0,0) == IL_OK);
+    assert(s.events == 1 && !q.pending && !q.poisoned);
+    assert(!(s.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
+    io = scan_setup(&s,&q); s.mode=1;
+    s.t.m.regs[CSR_UCODE_DRV_GP1/4] = CSR_UCODE_DRV_GP1_BIT_CMD_BLOCKED;
+    assert(il3945_command_send(&io,&s.t.rx,&q,0x77,0,0,1,0,0) == IL_TIMEOUT);
+    assert(q.pending && q.poisoned && q.timeout_gp1 == CSR_UCODE_DRV_GP1_BIT_CMD_BLOCKED);
+    assert(!(s.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
     uint8_t ee[IL3945_EEPROM_SIZE]; eeprom_image(ee); il3945_eeprom_t eeprom;
     assert(il3945_eeprom_parse(ee,sizeof(ee),0,&eeprom));
     uint8_t out[1024]; unsigned length;
