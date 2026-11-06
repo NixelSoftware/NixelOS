@@ -314,9 +314,12 @@ src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin too
 
 RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(p.as_posix() for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
 
+# Include directories so adding/removing nested firmware also rebuilds the image.
+FIRMWARE_INPUTS := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(p.as_posix() for p in Path('firmware').rglob('*')))")
+
 DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
 
-os.img: $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
+os.img: firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
 	$(PYTHON) mkext4.py os.img.new
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build

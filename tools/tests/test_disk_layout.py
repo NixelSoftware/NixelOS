@@ -1,6 +1,7 @@
 """Regression checks for kernel/filesystem overlap and BIOS load bounds."""
 from pathlib import Path
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,46 @@ class DiskLayoutTest(unittest.TestCase):
                                     cwd=work, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((work / "invalid.img").exists())
+
+    @unittest.skipUnless(shutil.which("debugfs"), "debugfs needed to inspect ext4 payloads")
+    def test_firmware_is_installed_by_both_builders(self):
+        builders = ["python"]
+        if shutil.which("mke2fs"):
+            builders.append("e2fsprogs")
+        for builder in builders:
+            with self.subTest(builder=builder), tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                source = work / "firmware"
+                (source / "vendor").mkdir(parents=True)
+                payload = bytes(range(256)) * 25
+                (source / "iwlwifi-3945-2.ucode").write_bytes(payload)
+                (source / "vendor/radio.bin").write_bytes(b"nested firmware\x00")
+                (source / "README.md").write_text("build instructions")
+                (source / ".private").write_text("not firmware")
+                if builder == "python":
+                    script = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
+                              "import mkext4; mkext4.shutil.which=lambda tool: None; "
+                              "mkext4.main('test.img')")
+                    command = [sys.executable, "-c", script]
+                else:
+                    command = [sys.executable, str(ROOT / "mkext4.py"), "test.img"]
+                result = subprocess.run(command, cwd=work, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                image = (work / "test.img").read_bytes()
+                partition = work / "partition.img"
+                partition.write_bytes(image[FILESYSTEM_LBA * SECTOR_SIZE:])
+                for name, expected in (("iwlwifi-3945-2.ucode", payload),
+                                       ("vendor/radio.bin", b"nested firmware\x00"),
+                                       ("README.md", b""), (".private", b"")):
+                    extracted = subprocess.run(
+                        ["debugfs", "-R", f"cat /lib/firmware/{name}", str(partition)],
+                        capture_output=True)
+                    self.assertEqual(extracted.stdout, expected)
+                metadata = subprocess.run(
+                    ["debugfs", "-R", "stat /lib/firmware/iwlwifi-3945-2.ucode", str(partition)],
+                    capture_output=True, text=True)
+                self.assertIn("Mode:  0644", metadata.stdout)
+                self.assertRegex(metadata.stdout, r"User:\s+0\s+Group:\s+0")
 
     def test_stage2_uses_same_volume_lba_and_rejects_oversize_kernel(self):
         with tempfile.TemporaryDirectory() as directory:

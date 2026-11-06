@@ -42,6 +42,36 @@ def inode_metadata(path, name, directories):
     return owner, kind | mode
 
 
+
+def stage_firmware(root, directories, source=Path("firmware")):
+    """Copy user-supplied firmware into the image, retaining vendor subfolders."""
+    if not source.exists():
+        return
+    destinations = set()
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        if any(part.startswith(".") for part in relative.parts) or relative.name == "README.md":
+            continue
+        if path.is_symlink():
+            raise ValueError(f"Firmware must be a regular file or directory: {path}")
+        for part in relative.parts:
+            if len(part.encode()) >= 32 or any(c in part for c in '\n\r"\\'):
+                raise ValueError(f"Unsupported firmware filename: {path}")
+        destination = root / "lib/firmware" / relative
+        name = destination.relative_to(root).as_posix()
+        if name.lower() in destinations:
+            raise ValueError(f"Duplicate firmware filename: {path}")
+        destinations.add(name.lower())
+        if path.is_dir():
+            destination.mkdir(mode=0o755)
+            directories[name] = (0, 0o755)
+        elif path.is_file():
+            shutil.copyfile(path, destination)
+            destination.chmod(0o644)
+        else:
+            raise ValueError(f"Firmware must be a regular file or directory: {path}")
+
+
 def main(output):
     missing = [tool for tool in ("mke2fs", "debugfs") if not shutil.which(tool)]
     if missing:
@@ -86,7 +116,7 @@ def main(output):
             "usr/share/games/doom": (0, 0o755), "var": (0, 0o755),
             "var/log": (0, 0o755), "var/cache": (0, 0o755), "var/lib": (0, 0o755),
             "var/lib/nixel": (1000, 0o755), "var/www": (1000, 0o755), "sbin": (0, 0o755),
-            "bin": (0, 0o755)
+            "bin": (0, 0o755), "lib": (0, 0o755), "lib/firmware": (0, 0o755)
         }
         for home, owner in (("home/user", 1000), ("root", 0)):
             for child in ("Desktop", "Documents", "Downloads", "Pictures", "Music",
@@ -95,6 +125,7 @@ def main(output):
         for name, (_, mode) in directories.items():
             (root / name).mkdir(mode=mode)
             (root / name).chmod(mode)
+        stage_firmware(root, directories)
         files = [Path(name) for name in BUNDLED_FILES if Path(name).is_file()]
         files += sorted(p for p in Path("resources").rglob("*")
                         if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav", ".mp3"})
@@ -156,5 +187,5 @@ def main(output):
 if __name__ == "__main__":
     try:
         main(sys.argv[1] if len(sys.argv) > 1 else "disk.img")
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         sys.exit(f"Image creation failed: {error}")
