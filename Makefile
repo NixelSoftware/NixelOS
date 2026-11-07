@@ -538,3 +538,22 @@ test-mmio-paging:
 	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_mmio_paging.py
 
 $(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o: src/kernel/paging.h
+
+# Upstream timing-noise collection MUST be built without optimization.
+JITTER_DIR := src/kernel/crypto/vendor/jitterentropy
+JITTER_C := $(wildcard $(JITTER_DIR)/src/*.c)
+ENTROPY_OBJ := src/kernel/crypto/entropy.o src/kernel/crypto/entropy-platform.o src/kernel/crypto/div64.o $(JITTER_C:.c=.o)
+$(JITTER_C:.c=.o): CFLAGS += -O0 -fwrapv -DJENT_NIXEL -Isrc/kernel/crypto -I$(JITTER_DIR)
+src/kernel/crypto/entropy.o: CFLAGS += -DJENT_NIXEL -Isrc/kernel/crypto -I$(JITTER_DIR)
+$(ENTROPY_OBJ): src/kernel/crypto/entropy.h src/kernel/crypto/jitterentropy-platform.h $(JITTER_DIR)/jitterentropy.h $(wildcard $(JITTER_DIR)/src/*.h)
+src/kernel/hal/wifi.o: src/kernel/crypto/entropy.h
+src/kernel/kernel.bin: $(ENTROPY_OBJ)
+
+src/kernel/crypto/div64.o: src/system/libraries/tls/div64.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+.PHONY: test-entropy test-entropy-qemu
+test-entropy:
+	CC="$(CC)" $(PYTHON) tools/tests/test_entropy.py
+test-entropy-qemu:
+	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_entropy_qemu.py

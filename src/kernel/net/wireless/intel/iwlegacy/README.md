@@ -115,12 +115,14 @@ mode, roaming, suspend/resume, QoS negotiation and adaptive rate selection are
 not implemented. TX is single-inflight and polled; contention returns busy.
 A failed connection can be retried after a new scan; there is no automatic roam.
 
-The HAL currently obtains strong WPA2 nonces only from CPUID-checked RDRAND.
-CPUs without RDRAND cannot establish WPA2 connections with this HAL; this
-includes many machines originally shipped with a 3945. They need another
-cryptographic entropy provider. The native station API accepts an injected
-provider, but never substitutes predictable clock/PRNG values. Open connections
-do not need entropy. Firmware is still an external prerequisite.
+The HAL obtains WPA2 nonces from CPUID-checked RDRAND when available, with
+upstream Jitterentropy 3.6.3 as a fallback on older CPUs with a TSC. The fallback
+collects CPU execution timing variation, conditions it with SHA3-256, and keeps
+startup and runtime health tests enabled. It never seeds a PRNG from a clock,
+MAC address or password. Health/allocation failures erase the output and refuse
+the connection. Entropy startup runs outside the shared UI/network mutex.
+Open connections do not need entropy. Firmware is still an external prerequisite.
+See `src/kernel/crypto/README.md` for the port and validation details.
 
 ## Validation and provenance
 

@@ -3,6 +3,7 @@
 #include "net.h"
 #include "../net/wireless/security/wpa2.h"
 #include "../scheduler.h"
+#include "../crypto/entropy.h"
 #include "../net/wireless/intel/iwlegacy/station.h"
 static wifi_status_t status;
 static il_scan_results_t scan_results;
@@ -95,20 +96,6 @@ int sys_wifi_get_network(unsigned index, il_network_t* out) {
     *out = scan_results.networks[index]; return 1;
 }
 
-static int nonce(void* context, uint8_t* out, unsigned length) {
-    (void)context;
-    unsigned a,b,c,d;
-    __asm__ volatile("cpuid" : "=a"(a),"=b"(b),"=c"(c),"=d"(d) : "a"(1),"c"(0));
-    if(!(c & (1u<<30))) return -1;
-    while(length) {
-        unsigned value=0; uint8_t ok=0;
-        for(unsigned tries=0;tries<10 && !ok;tries++)
-            __asm__ volatile("rdrand %0; setc %1" : "=r"(value),"=qm"(ok) :: "cc");
-        if(!ok) return -1;
-        for(unsigned i=0;i<4 && length;i++,length--) { *out++=value; value>>=8; }
-    }
-    return 0;
-}
 const char* sys_wifi_connect(unsigned index,const uint8_t* password,unsigned length) {
     iwlegacy_info_t adapter; il_network_t ap;
     {
@@ -118,14 +105,19 @@ const char* sys_wifi_connect(unsigned index,const uint8_t* password,unsigned len
         if(!scan_valid || index>=scan_results.count) return "Scan and select a network first.";
         ap=scan_results.networks[index]; adapter=status.intel;
         if(ap.security==IL_SECURITY_UNSUPPORTED) return "This network security is not supported.";
-        if(ap.security==IL_SECURITY_WPA2_PSK) {
-            uint8_t probe[32]; int r=nonce(0,probe,sizeof(probe));
-            wifi_crypto_erase(probe,sizeof(probe));
-            if(r) return "WPA2 requires a cryptographic entropy source on this CPU.";
-        }
         scan_busy=1;
     }
-    int result=iwlegacy_connect(&adapter,&ap,password,length,nonce,0);
+    /* Entropy startup may collect timing samples; never hold the shared
+     * window/network mutex while it runs. Reserve the operation first. */
+    if(ap.security==IL_SECURITY_WPA2_PSK) {
+        uint8_t probe[32]; int r=kernel_entropy(0,probe,sizeof(probe));
+        wifi_crypto_erase(probe,sizeof(probe));
+        if(r) {
+            MUTEX_GUARD(kernel_mutex); scan_busy=0;
+            return "WPA2 entropy health check failed; retry connecting.";
+        }
+    }
+    int result=iwlegacy_connect(&adapter,&ap,password,length,kernel_entropy,0);
     {
         MUTEX_GUARD(kernel_mutex);
         status.intel=adapter; status.generation++; scan_busy=0;
