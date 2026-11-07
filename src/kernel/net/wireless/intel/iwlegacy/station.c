@@ -56,8 +56,10 @@ static int rxon(il_station_t* s,unsigned aid) {
     put32(p+32,flags|(1<<15)); put32(p+36,4|8|16|64|(aid?32:0)); p[40]=s->ap.channel;
     int r=command(s,0x10,p,sizeof(p));
     if(!r) r=power(s);
-    /* RXON destroys station tables; add broadcast and AP after each commit. */
-    for(unsigned i=0;!r && i<2;i++) {
+    /* An unassociated RXON clears the firmware station table. Enabling
+     * association preserves it (Linux commit_rxon only restores stations
+     * when !new_assoc). Re-adding the same IDs can return NO_ROOM_IN_TBL. */
+    for(unsigned i=0;!aid && !r && i<2;i++) {
         uint8_t sta[64]={0};
         if(!i) for(unsigned j=0;j<6;j++) sta[4+j]=255;
         else copy(sta+4,s->ap.bssid,6);

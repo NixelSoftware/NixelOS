@@ -193,3 +193,10 @@ following an accepted C_SCAN, wifid-status includes completion length, completed
 and expected channel counts, and firmware completion status. The register model
 uses a 12-byte padded notification; separate parser tests cover truncation,
 11-byte packed notifications and incomplete scans.
+
+An unassociated RXON clears the firmware station table; the transition to an
+associated RXON preserves it. The station path adds broadcast/AP entries only
+after the unassociated RXON, avoiding duplicate C_ADD_STA requests during
+association. Tests model this lifecycle and return status 0x02 for duplicate
+entries. Genuine C_ADD_STA rejection still fails the connection and preserves
+the firmware reply in diagnostics.
