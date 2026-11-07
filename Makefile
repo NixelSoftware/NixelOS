@@ -557,3 +557,10 @@ test-entropy:
 	CC="$(CC)" $(PYTHON) tools/tests/test_entropy.py
 test-entropy-qemu:
 	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_entropy_qemu.py
+
+.PHONY: test-wifi-network
+test-wifi-network:
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -Wno-pointer-to-int-cast src/kernel/net/tests/wifi_delivery_test.c src/kernel/net/ipv4.c src/kernel/net/udp.c src/kernel/net/dns.c -o /tmp/nixel-wifi-delivery
+	/tmp/nixel-wifi-delivery
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror src/kernel/net/tests/dhcp_options_test.c -o /tmp/nixel-dhcp-options
+	/tmp/nixel-dhcp-options

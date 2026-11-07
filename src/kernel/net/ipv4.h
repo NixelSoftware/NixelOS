@@ -42,7 +42,7 @@ void ipv4_clear_handlers_for_directory(uint32_t directory_address);
 void ipv4_set_configuration(uint32_t local_ip, uint32_t gateway_ip,
                             uint32_t subnet_mask);
 
-/* Retries bounded packets awaiting ARP without blocking UI or applications. */
+/* Retries bounded packets awaiting ARP or NIC transmit capacity without blocking UI or applications. */
 void ipv4_poll(void);
 uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length);
 uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,

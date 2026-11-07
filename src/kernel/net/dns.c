@@ -9,6 +9,8 @@
 #define DNS_PACKET_SIZE 512
 #define PRIMARY_DNS_SERVER 0x01010101
 #define DNS_ASYNC_TIMEOUT_TICKS 500u
+#define DNS_RETRY_TICKS 100u
+#define DNS_MAX_SENDS 3u
 extern volatile uint32_t frame_timer;
 
 static udp_socket_t* dns_socket;
@@ -23,6 +25,8 @@ static uint8_t dns_async_fallback_tried;
 static uint32_t dns_async_server;
 static uint32_t dns_async_started_tick;
 static uint16_t dns_async_query_length;
+static uint32_t dns_last_send_tick;
+static unsigned dns_sends;
 
 static void dns_receive(udp_socket_t* socket, uint32_t source_ip,
                         uint16_t source_port, const uint8_t* data,
@@ -37,6 +41,7 @@ static uint8_t start_query_server(uint32_t server, uint16_t id, uint16_t length)
     dns_socket = udp_connect(server, DNS_PORT);
     if (!dns_socket) return 0;
     udp_bind(dns_socket, dns_receive);
+    dns_last_send_tick = frame_timer; dns_sends = 1;
     if (udp_send(dns_socket, dns_packet, length)) return 1;
     udp_disconnect(dns_socket);
     dns_socket = 0;
@@ -187,7 +192,16 @@ int dns_resolve_async_poll(uint32_t* address) {
     MUTEX_GUARD(kernel_mutex);
     if (!dns_async_active || !address) return -1;
     if (!dns_done && (uint32_t)(frame_timer - dns_async_started_tick) <
-                     DNS_ASYNC_TIMEOUT_TICKS) return 0;
+                     DNS_ASYNC_TIMEOUT_TICKS) {
+        if (dns_sends < DNS_MAX_SENDS &&
+            (uint32_t)(frame_timer - dns_last_send_tick) >= DNS_RETRY_TICKS) {
+            /* Reuse the socket/ID so delayed replies still match. Bound even
+             * failed sends; the overall timeout and fallback remain intact. */
+            dns_last_send_tick = frame_timer; dns_sends++;
+            udp_send(dns_socket,dns_packet,dns_async_query_length);
+        }
+        return 0;
+    }
     if (dns_done && dns_success) {
         *address = dns_address;
         udp_disconnect(dns_socket);

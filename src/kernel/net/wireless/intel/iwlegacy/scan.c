@@ -70,7 +70,7 @@ int il3945_scan_configure(const il_io_t* io, il_rx_queue_t* rx,
     /* RXON clears the station table; restore the broadcast entry. */
     uint8_t sta[64] = {0};
     for (unsigned i = 0; i < 6; i++) sta[4+i] = 255;
-    sta[12] = 24; sta[58] = band == 2 ? 10 : 13;
+    sta[12] = 24; sta[58] = band == 2 ? 10 : 13; sta[59] = 0xc0; /* RATE_MCS_ANT_AB */
     if (!r) r = il3945_command_send(io,rx,q,0x18,sta,sizeof(sta),1000,0,0);
     /* Status is one byte; the RX payload may include DMA padding. */
     if (!r && (q->response_length < 1 || q->response[0] != 1)) r = IL_VERIFY;

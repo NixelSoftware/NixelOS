@@ -57,6 +57,13 @@ int main(void) {
     assert(strstr(captured,"Scan completion bytes: 12"));
     assert(strstr(captured,"Scan channels completed/expected: 12/13"));
     assert(strstr(captured,"Scan completion status: 0x0000"));
+    snapshot.intel.runtime_error=IL_VERIFY;
+    snapshot.intel.runtime_irq=0x02000000;
+    snapshot.intel.data_tx_pending=1;
+    snapshot.intel.data_tx_poisoned=0;
+    captured[0]=0; shell_wifi_status(output);
+    assert(strstr(captured,"Runtime IRQ/FH status: 0x02000000/0x00000000"));
+    assert(strstr(captured,"Data TX pending/poisoned: 1/0"));
     shell_wifi_status(0);
     puts("Wi-Fi status: absent adapter and complete command-failure snapshot passed");
 }

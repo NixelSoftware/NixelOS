@@ -30,8 +30,9 @@ int il3945_tx_submit(const il_io_t* io, il_tx_queue_t* q, const uint8_t* frame,
     q->sequence=(uint16_t)q->next;
     b[0]=0x1c; put16(b+2,q->sequence); put16(b+4,length);
     uint32_t flags=(frame[4]&1) ? 0 : (1u<<3);
-    /* Keep the caller's software sequence for data/CCMP; firmware sequences management. */
-    if (!type) flags|=1u<<13;
+    /* Linux requests firmware sequence control for all non-QoS frames.
+     * CCMP authenticates only the fragment bits, not the sequence number. */
+    if (type!=8 || !(fc&0x80)) flags|=1u<<13;
     put32(b+8,flags); b[12]=plcp; b[13]=station;
     if (header==26) b[14]=frame[24]&15;
     put32(b+44,0xffffffffu); b[48]=0xff; b[49]=0x0f; b[50]=7; b[51]=15;
@@ -48,7 +49,10 @@ int il3945_tx_submit(const il_io_t* io, il_tx_queue_t* q, const uint8_t* frame,
     if (second) { put32(t+12,q->dma+128); put32(t+16,second); }
     q->pending=1; q->result=IL_TIMEOUT; q->next=(q->next+1)&255;
     __atomic_thread_fence(__ATOMIC_RELEASE);
-    io->write32(io->context,HBUS_TARG_WRPTR,q->next); il_release(io);
+    io->write32(io->context,HBUS_TARG_WRPTR,q->next);
+    /* As for queue-4 commands, DMA may fetch after this function returns.
+     * Keep MAC access requested until completion or failure cleanup. */
+    (void)io->read32(io->context,CSR_GP_CNTRL);
     return IL_OK;
 }
 void il3945_tx_event(il_tx_queue_t* q, uint8_t id, uint16_t sequence,

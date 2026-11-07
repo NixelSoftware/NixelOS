@@ -200,3 +200,24 @@ after the unassociated RXON, avoiding duplicate C_ADD_STA requests during
 association. Tests model this lifecycle and return status 0x02 for duplicate
 entries. Genuine C_ADD_STA rejection still fails the connection and preserves
 the firmware reply in diagnostics.
+
+Data TX holds the MAC wake request through delayed DMA completion, flushes the
+doorbell and restores access after RX-ring updates. Completion and teardown
+release the request. The station model exercises a delayed data completion and
+retained wake ownership. TX status and AP deauthentication reason
+codes are retained in netdiag; CCMP receive failures increment RX errors.
+
+IPv4 queues packets when a resolved destination encounters a busy NIC, as well
+as while awaiting ARP. This preserves DNS/ICMP/UDP traffic on the single-inflight
+Wi-Fi transmitter. DHCP requests DNS/gateway settings in option 55; DNS retries
+lost queries with the same socket and transaction ID, within its existing timeout.
+`make test-wifi-network` exercises the real IPv4/UDP/DNS path with a busy-slot
+peer, lost queries, queue bounds/copy/expiry, ARP, and DHCP option negotiation.
+
+Non-QoS TX requests firmware sequence control, matching Intel's Linux driver;
+QoS TX retains software sequence control. Tests verify a firmware sequence
+rewrite does not invalidate software CCMP. Station entries enable both antenna
+bits in rate_n_flags as upstream does. After a live disconnect wifid-status
+preserves runtime IRQ/FH status and data-queue pending/poisoned flags, separately
+from the last connection-setup command reply (often 0x47). Regression cases
+separate firmware SW_ERR from malformed TX completions before reset.

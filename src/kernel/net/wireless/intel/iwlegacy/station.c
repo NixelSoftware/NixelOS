@@ -19,6 +19,9 @@ static void event(void* context,uint8_t id,uint8_t flags,uint16_t seq,const uint
         unsigned pending=s->tx.pending;
         il3945_tx_event(&s->tx,id,seq,data,length);
         if (pending && !s->tx.pending) {
+            il_release(&s->io);
+            s->diagnostics.last_tx_status=il_le32(data+8)&0xffff;
+            s->diagnostics.last_tx_misc=il_le32(data+8);
             s->diagnostics.tx_completed++;
             if(s->tx.result) s->diagnostics.tx_errors++;
         }
@@ -63,7 +66,7 @@ static int rxon(il_station_t* s,unsigned aid) {
         uint8_t sta[64]={0};
         if(!i) for(unsigned j=0;j<6;j++) sta[4+j]=255;
         else copy(sta+4,s->ap.bssid,6);
-        sta[12]=i?0:24; sta[58]=s->tx_plcp;
+        sta[12]=i?0:24; sta[58]=s->tx_plcp; sta[59]=0xc0; /* RATE_MCS_ANT_AB */
         r=command(s,0x18,sta,sizeof(sta));
         /* Status is one byte; the RX payload may include DMA padding. */
         if(!r && (s->commands.response_length<1 || s->commands.response[0]!=1)) r=IL_VERIFY;
@@ -82,6 +85,7 @@ static int rxon(il_station_t* s,unsigned aid) {
     return r;
 }
 static int pump(il_station_t* s) {
+    if (s->tx.pending) { int r=il_grab(&s->io); if(r) return r; }
     uint32_t gp=s->io.read32(s->io.context,CSR_GP_CNTRL),irq=s->io.read32(s->io.context,CSR_INT);
     if(gp==0xffffffffu || irq==0xffffffffu) return IL_ACCESS;
     if(!(gp&CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) return IL_RFKILL;
@@ -89,6 +93,9 @@ static int pump(il_station_t* s) {
     int ack=il_ack_interrupts(&s->io,irq);
     if(ack) return ack;
     int r=il3945_rx_poll(&s->io,&s->rx,event,s);
+    if(r>=0 && s->tx.pending && !s->tx.poisoned) {
+        int wake=il_grab(&s->io); if(wake) return wake;
+    }
     return r<0?r:(s->tx.poisoned ? IL_VERIFY : s->error);
 }
 static int transmit(il_station_t* s,const uint8_t* frame,unsigned n) {
@@ -126,7 +133,10 @@ static int process(il_station_t* s) {
                 unsigned aid=il_le16(frame+28)&0x3fff;
                 if(il_le16(frame+26) || !aid || aid>2007) return IL_VERIFY;
                 s->aid=aid; s->phase=4;
-            } else if((fc&0xf0)==0xc0 || (fc&0xf0)==0xa0) return IL_ACCESS;
+            } else if((fc&0xf0)==0xc0 || (fc&0xf0)==0xa0) {
+                if(n>=26) s->diagnostics.last_error_status=il_le16(frame+24);
+                return IL_ACCESS;
+            }
             continue;
         }
         if((fc&12)!=8 || s->phase<4) continue;
@@ -135,11 +145,15 @@ static int process(il_station_t* s) {
         if(fc&0x4000) {
             uint8_t decoded[2320];
             if(s->ap.security!=IL_SECURITY_WPA2_PSK ||
-               wifi_wpa2_station_decrypt(&s->security,frame,n,decoded,sizeof(decoded),&plain)) continue;
+               wifi_wpa2_station_decrypt(&s->security,frame,n,decoded,sizeof(decoded),&plain)) {
+                s->diagnostics.rx_errors++; continue;
+            }
             copy(frame,decoded,plain);
         }
         unsigned ethlen;
-        if(wifi_ethernet_decapsulate(s->eeprom.mac,s->ap.bssid,frame,plain,ethernet,sizeof(ethernet),&ethlen)) continue;
+        if(wifi_ethernet_decapsulate(s->eeprom.mac,s->ap.bssid,frame,plain,ethernet,sizeof(ethernet),&ethlen)) {
+            s->diagnostics.rx_invalid++; continue;
+        }
         if(ethernet[12]==0x88 && ethernet[13]==0x8e && s->ap.security==IL_SECURITY_WPA2_PSK) {
             if(!same(ethernet,s->eeprom.mac,6)) continue;
             unsigned answer;
@@ -273,7 +287,12 @@ int il3945_station_poll(il_station_t* s,unsigned now) {
         s->thermal_ms=now;
     }
     s->processing=0;
-    if(r) il3945_station_clear(s);
+    if(r) {
+        s->runtime_error=r;
+        s->runtime_irq=s->io.read32(s->io.context,CSR_INT);
+        s->runtime_fh=s->io.read32(s->io.context,CSR_FH_INT_STATUS);
+        il3945_station_clear(s);
+    }
     return r;
 }
 int il3945_station_send(il_station_t* s,const uint8_t* eth,unsigned length) {
@@ -291,6 +310,7 @@ int il3945_station_send(il_station_t* s,const uint8_t* eth,unsigned length) {
 }
 void il3945_station_clear(il_station_t* s) {
     if(!s) return;
+    if(il_io_valid(&s->io)) il_release(&s->io);
     s->active=0; s->phase=0; s->count=0; s->diagnostics.initialized=0;
     wifi_wpa2_station_clear(&s->security);
 }

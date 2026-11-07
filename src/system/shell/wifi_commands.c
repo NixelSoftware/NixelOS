@@ -76,6 +76,12 @@ void shell_wifi_status(shell_output_fn out) {
                 emit(out,"/"); put_unsigned(out,intel->command_rx_closed);
             }
         }
+        if (intel->runtime_error) {
+            emit(out,"\n  Runtime IRQ/FH status: "); put_hex32(out,intel->runtime_irq);
+            emit(out,"/"); put_hex32(out,intel->runtime_fh);
+            emit(out,"\n  Data TX pending/poisoned: "); put_unsigned(out,intel->data_tx_pending);
+            emit(out,"/"); put_unsigned(out,intel->data_tx_poisoned);
+        }
         if (intel->state == IL_SCAN_COMPLETE) {
             emit(out,"\n  Networks found: "); put_unsigned(out,intel->scan_count);
         }

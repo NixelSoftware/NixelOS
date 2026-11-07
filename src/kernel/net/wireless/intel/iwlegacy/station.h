@@ -22,6 +22,8 @@ typedef struct {
     unsigned head, count, sequence, now_ms, tx_started, last_rx, thermal_ms;
     unsigned phase;
     int error, temperature;
+    uint32_t runtime_irq, runtime_fh;
+    int runtime_error;
     uint16_t aid;
     uint8_t awake_flags; /* PCI_PM (bit 3), derived from PCIe Link Control. */
     uint8_t active, processing, tx_plcp, fallback, ofdm_basic, cck_basic, management[512];
@@ -45,4 +47,5 @@ int iwlegacy_send(const uint8_t*,unsigned);
 int iwlegacy_connected(void);
 void iwlegacy_set_receiver(net_receive_handler_t);
 void iwlegacy_get_diagnostics(net_diagnostics_t*);
+void iwlegacy_get_runtime_status(iwlegacy_info_t*);
 #endif

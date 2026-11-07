@@ -127,6 +127,8 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     info->scan_completion_length = 0;
     info->scan_expected_channels = info->scan_completed_channels = info->scan_completion_status = 0;
     info->operation_error = 0; info->stop_failures = 0;
+    info->runtime_error = 0; info->runtime_irq = info->runtime_fh = 0;
+    info->data_tx_pending = info->data_tx_poisoned = 0;
     info->init_alive = info->runtime_alive = info->boot_stage = 0;
     info->last_command = info->command_pending = info->command_poisoned = 0;
     command_snapshot(info,&(il_command_queue_t){0});
@@ -353,3 +355,10 @@ int iwlegacy_send(const uint8_t* frame,unsigned size) { return il3945_station_se
 int iwlegacy_connected(void) { return station.active; }
 void iwlegacy_set_receiver(net_receive_handler_t receive) { station.receive=receive; }
 void iwlegacy_get_diagnostics(net_diagnostics_t* out) { if(out) *out=station.diagnostics; }
+
+void iwlegacy_get_runtime_status(iwlegacy_info_t* info) {
+    if (!info) return;
+    info->runtime_error=station.runtime_error;
+    info->runtime_irq=station.runtime_irq; info->runtime_fh=station.runtime_fh;
+    info->data_tx_pending=station.tx.pending; info->data_tx_poisoned=station.tx.poisoned;
+}

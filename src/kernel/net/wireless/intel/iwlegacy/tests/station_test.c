@@ -26,6 +26,11 @@ static void ap_eapol(station_model_t* m,const uint8_t* key,unsigned length) {
 }
 static uint32_t station_read(void* context,uint32_t reg) {
     station_model_t* m=context;
+    if(reg==CSR_INT && m->mode==5 && m->station->tx.pending) {
+        assert(m->t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+        uint8_t done[12]={0}; done[8]=1;
+        post(m,0x1c,m->station->tx.sequence,done,sizeof(done)); m->mode=0;
+    }
     if(reg==CSR_UCODE_DRV_GP2) return (uint32_t)-100;
     return transport_read(&m->t,reg);
 }
@@ -39,6 +44,7 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
         if (cmd_buffer[0]==0x10 && !(cmd_buffer[4+36]&32)) m->stations=0;
         if (cmd_buffer[0]==0x18) {
             unsigned id=cmd_buffer[4+12]; assert(id==0 || id==24);
+            assert(cmd_buffer[4+59]==0xc0);
             m->station_adds++;
             if (m->mode==4 || (m->stations & (1u<<id))) answer[0]=2; /* Duplicate firmware entry. */
             else m->stations |= 1u<<id;
@@ -54,9 +60,10 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
     assert(il_le32(t+4)==0x19000 && il_le32(t+8)==((56+h+3)&~3u));
     assert(il_le32(t+12)==0x19080 && il_le32(t+16)==n-h);
     assert(tx_data[12]==10 && !tx_data[13] && !tx_data[15]);
-    if(m->mode==2) return; /* Firmware retains ownership indefinitely. */
+    assert((il_le32(tx_data+8)&(1u<<13)) == (h==24 ? 1u<<13 : 0));
+    if(m->mode==2 || m->mode==5) return; /* Firmware retains ownership indefinitely. */
     uint8_t done[12]={0}; done[8]=m->mode==3?0x83:1;
-    post(m,0x1c,il_le16(tx_data+2),done,sizeof(done));
+    post(m,0x1c,il_le16(tx_data+2),done,m->mode==6?8:sizeof(done));
     if(m->secure && (tx_data[56]&12)==8 && tx_data[134]==0x88 && tx_data[135]==0x8e) {
         unsigned keylen=n-h-8; const uint8_t* key=tx_data+136;
         assert(wifi_wpa2_eapol_verify(ap_ptk,key,keylen)==1);
@@ -128,6 +135,11 @@ int main(void) {
     station_setup(&m,&e,&ap); m.mode=1;
     assert(il3945_station_connect(&native,&e,&ap,0,0,0,0)==IL_TIMEOUT && !native.active);
     station_setup(&m,&e,&ap); assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
+    m.mode=5;
+    assert(!il3945_station_send(&native,eth,sizeof(eth)));
+    assert(m.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+    assert(!il3945_station_poll(&native,native.now_ms+1));
+    assert(!native.tx.pending && !(m.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
     m.mode=2; assert(!il3945_station_send(&native,eth,sizeof(eth)));
     assert(il3945_station_poll(&native,native.tx_started+2000)==IL_TIMEOUT && native.tx.poisoned && native.tx.pending);
     station_setup(&m,&e,&ap); m.secure=1;
@@ -138,6 +150,15 @@ int main(void) {
     assert(!memcmp(native.security.ptk,ap_ptk,64));
     assert(!il3945_station_send(&native,eth,sizeof(eth)) && (tx_data[57]&0x40));
     assert(native.security.pairwise.next_tx_pn==2);
+    /* Hardware may rewrite non-QoS sequence numbers after software CCMP.
+     * The AP must still authenticate/decrypt the transmitted packet. */
+    uint8_t on_air[256], verified[256]; unsigned verified_length;
+    unsigned on_air_length=il_le16(tx_data+4);
+    memcpy(on_air,tx_data+56,24); memcpy(on_air+24,tx_data+128,on_air_length-24);
+    on_air[22]=0x70; on_air[23]=0x42;
+    wifi_ccmp_key_t tx_check={0};
+    assert(!wifi_ccmp_install(&tx_check,ap_ptk+32,0,ap.bssid,e.mac));
+    assert(!wifi_ccmp_decrypt(&tx_check,on_air,on_air_length,verified,sizeof(verified),&verified_length));
     assert(!il3945_station_poll(&native,1000));
     /* Full MTU software-decrypted RX must pass through the native event queue,
      * while replayed or unauthenticated frames never reach the Ethernet stack. */
@@ -158,6 +179,15 @@ int main(void) {
     assert(!il3945_station_poll(&native,1002) && received==2);
     il3945_station_leave(&native);
     assert(!native.active && !native.security.initialized && !native.security.pairwise.active);
+    station_setup(&m,&e,&ap); assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
+    m.t.m.regs[CSR_INT/4]=CSR_INT_BIT_SW_ERR;
+    assert(il3945_station_poll(&native,native.now_ms+1)==IL_VERIFY);
+    assert(native.runtime_irq==CSR_INT_BIT_SW_ERR && native.runtime_error==IL_VERIFY);
+    station_setup(&m,&e,&ap); assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
+    m.mode=6; assert(!il3945_station_send(&native,eth,sizeof(eth)));
+    assert(il3945_station_poll(&native,native.now_ms+1)==IL_VERIFY);
+    assert(!native.runtime_irq && native.tx.pending && native.tx.poisoned);
+    assert(!(m.t.m.regs[CSR_GP_CNTRL/4]&CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
     puts("iwlegacy station: association, split TFDs, 4300-frame wrap, RX, regulatory refusal, RF-kill, retained TX timeout, WPA2 M1-M4 and CCMP TX passed");
     return 0;
 }

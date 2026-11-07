@@ -42,6 +42,9 @@ typedef struct {
     uint8_t command_response_id, command_response_flags;
     unsigned scan_completion_length;
     uint8_t scan_expected_channels, scan_completed_channels, scan_completion_status;
+    int runtime_error;
+    uint32_t runtime_irq, runtime_fh;
+    uint8_t data_tx_pending, data_tx_poisoned;
     unsigned scan_count;
     il3945_eeprom_t eeprom;
 } iwlegacy_info_t;

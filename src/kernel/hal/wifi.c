@@ -149,6 +149,7 @@ void sys_wifi_poll(void) {
     }
     int r=iwlegacy_poll(ms);
     if(r) {
+        iwlegacy_get_runtime_status(&status.intel);
         /* Drop stale addressing immediately when the authorized port closes. */
         sys_net_shutdown();
         status.intel.state=IL_CONNECTION_FAILED; status.intel.error=r; status.generation++;
