@@ -18,6 +18,8 @@ typedef struct {
     il_network_t networks[IL_SCAN_NETWORKS];
     unsigned count, malformed, dropped;
     uint8_t active_band, complete, expected_channels, completed_channels;
+    unsigned completion_length;
+    uint8_t completion_status;
     int error;
     uint8_t allowed_channels[256];
 } il_scan_results_t;

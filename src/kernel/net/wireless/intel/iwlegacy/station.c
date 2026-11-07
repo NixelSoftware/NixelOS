@@ -63,7 +63,8 @@ static int rxon(il_station_t* s,unsigned aid) {
         else copy(sta+4,s->ap.bssid,6);
         sta[12]=i?0:24; sta[58]=s->tx_plcp;
         r=command(s,0x18,sta,sizeof(sta));
-        if(!r && (s->commands.response_length!=1 || !(s->commands.response[0]&1))) r=IL_VERIFY;
+        /* Status is one byte; the RX payload may include DMA padding. */
+        if(!r && (s->commands.response_length<1 || s->commands.response[0]!=1)) r=IL_VERIFY;
     }
     /* Conservative fixed basic-rate fallback. Both control/data tables use
      * firmware table order OFDM 6..54 then CCK 1..11, as in upstream. */

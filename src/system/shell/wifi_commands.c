@@ -51,6 +51,18 @@ void shell_wifi_status(shell_output_fn out) {
             emit(out,"\n  Last command: "); put_hex16(out,intel->last_command);
             emit(out," pending="); put_unsigned(out,intel->command_pending);
             emit(out," poisoned="); put_unsigned(out,intel->command_poisoned);
+            if (intel->error && intel->last_command && !intel->command_pending) {
+                emit(out,"\n  Command reply ID/flags: "); put_hex16(out,intel->command_response_id);
+                emit(out,"/"); put_hex16(out,intel->command_response_flags);
+                emit(out,"\n  Command reply bytes: "); put_unsigned(out,intel->command_response_length);
+                emit(out,"\n  Command reply status: "); put_hex32(out,intel->command_response_status);
+            }
+            if (intel->error && intel->last_command == 0x80 && !intel->command_pending) {
+                emit(out,"\n  Scan completion bytes: "); put_unsigned(out,intel->scan_completion_length);
+                emit(out,"\n  Scan channels completed/expected: "); put_unsigned(out,intel->scan_completed_channels);
+                emit(out,"/"); put_unsigned(out,intel->scan_expected_channels);
+                emit(out,"\n  Scan completion status: "); put_hex16(out,intel->scan_completion_status);
+            }
             if (intel->command_poisoned) {
                 emit(out,"\n  Command GP1: "); put_hex32(out,intel->command_gp1);
                 emit(out,"\n  TX queue 4 config: "); put_hex32(out,intel->command_tx_config);

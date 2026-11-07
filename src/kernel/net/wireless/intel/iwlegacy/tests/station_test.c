@@ -35,7 +35,7 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
     if(value&0x400) {
         m->commands++;
         if (cmd_buffer[0]==0x77) assert(cmd_buffer[4]==(m->station->awake_flags & 8));
-        uint8_t answer[4]={1}; unsigned n=cmd_buffer[0]==0x18?1:4;
+        uint8_t answer[4]={1}; unsigned n=4; /* firmware status may be DMA-padded */
         post(m,cmd_buffer[0],il_le16(cmd_buffer+2),answer,n);
         if(m->secure && cmd_buffer[0]==0x10 && (cmd_buffer[4+36]&32)) ap_eapol(m,ap_m1,sizeof(ap_m1));
         return;

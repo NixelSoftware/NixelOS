@@ -104,6 +104,10 @@ static void command_snapshot(iwlegacy_info_t* info, const il_command_queue_t* q)
     info->command_scd_fifos = q->timeout_scd_fifos;
     info->command_rx_read = q->timeout_rx_read;
     info->command_rx_closed = q->timeout_rx_closed;
+    info->command_response_length = q->response_length;
+    info->command_response_status = il_le32(q->response);
+    info->command_response_id = q->response_id;
+    info->command_response_flags = q->response_flags;
 }
 static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, const connect_options_t* connect) {
     MUTEX_GUARD(device_mutex);
@@ -120,6 +124,8 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     if (!dev) return info->error = IL_ACCESS;
     info->state = IL_FIRMWARE_FAILED;
     info->firmware_version = 0; info->scan_count = 0;
+    info->scan_completion_length = 0;
+    info->scan_expected_channels = info->scan_completed_channels = info->scan_completion_status = 0;
     info->operation_error = 0; info->stop_failures = 0;
     info->init_alive = info->runtime_alive = info->boot_stage = 0;
     info->last_command = info->command_pending = info->command_poisoned = 0;
@@ -267,6 +273,10 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                     info->eeprom.channels[first].band,info->eeprom.channels[first].number);
                 if (!result) result = il3945_scan_run(&io,&queue,&commands,&info->eeprom,results);
                 command_snapshot(info,&commands);
+                info->scan_completion_length = results->completion_length;
+                info->scan_expected_channels = results->expected_channels;
+                info->scan_completed_channels = results->completed_channels;
+                info->scan_completion_status = results->completion_status;
             }
         }
     }

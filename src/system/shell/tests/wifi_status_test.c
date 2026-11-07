@@ -39,6 +39,24 @@ int main(void) {
     assert(strstr(captured,"Scheduler mode: 0x00000002"));
     assert(strstr(captured,"Scheduler active FIFOs: 0x0000003F"));
     assert(strstr(captured,"RX read/closed: 2/3"));
+    snapshot.intel.last_command=0x18;
+    snapshot.intel.error=IL_VERIFY;
+    snapshot.intel.command_pending=snapshot.intel.command_poisoned=0;
+    snapshot.intel.command_response_id=0x18;
+    snapshot.intel.command_response_length=4;
+    snapshot.intel.command_response_status=2;
+    captured[0]=0; shell_wifi_status(output);
+    assert(strstr(captured,"Command reply ID/flags: 0x0018/0x0000"));
+    assert(strstr(captured,"Command reply bytes: 4"));
+    assert(strstr(captured,"Command reply status: 0x00000002"));
+    snapshot.intel.last_command=0x80;
+    snapshot.intel.scan_completion_length=12;
+    snapshot.intel.scan_completed_channels=12;
+    snapshot.intel.scan_expected_channels=13;
+    captured[0]=0; shell_wifi_status(output);
+    assert(strstr(captured,"Scan completion bytes: 12"));
+    assert(strstr(captured,"Scan channels completed/expected: 12/13"));
+    assert(strstr(captured,"Scan completion status: 0x0000"));
     shell_wifi_status(0);
     puts("Wi-Fi status: absent adapter and complete command-failure snapshot passed");
 }

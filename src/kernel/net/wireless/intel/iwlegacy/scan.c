@@ -72,7 +72,8 @@ int il3945_scan_configure(const il_io_t* io, il_rx_queue_t* rx,
     for (unsigned i = 0; i < 6; i++) sta[4+i] = 255;
     sta[12] = 24; sta[58] = band == 2 ? 10 : 13;
     if (!r) r = il3945_command_send(io,rx,q,0x18,sta,sizeof(sta),1000,0,0);
-    if (!r && (q->response_length != 1 || !(q->response[0] & 1))) r = IL_VERIFY;
+    /* Status is one byte; the RX payload may include DMA padding. */
+    if (!r && (q->response_length < 1 || q->response[0] != 1)) r = IL_VERIFY;
     static const uint8_t plcp[12] = {13,15,5,7,9,11,1,3,10,20,55,110};
     for (unsigned t = 0; !r && t < 2; t++) {
         uint8_t rates[52] = {0}; rates[0] = t;
@@ -173,7 +174,12 @@ void il3945_scan_event(void* context, uint8_t command, uint8_t flags, uint16_t s
     (void)flags; (void)sequence;
     if (command == 2) { r->error = IL_VERIFY; return; }
     if (command == 0x84) {
-        if (length != 11 || payload[0] != r->expected_channels) r->error = IL_VERIFY;
+        r->completion_length = length;
+        if (length >= 3) {
+            r->completed_channels = payload[0]; r->completion_status = payload[1];
+        }
+        /* Packed 11-byte notification may carry trailing DMA padding. */
+        if (length < 11 || payload[0] != r->expected_channels) r->error = IL_VERIFY;
         else { r->complete = 1; r->completed_channels = payload[0]; }
         return;
     }
@@ -199,6 +205,7 @@ int il3945_scan_run(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t* co
         unsigned size;
         if (il3945_scan_build(eeprom,band,payload,sizeof(payload),&size)) continue;
         results->active_band = band; results->complete = 0; results->expected_channels = payload[3];
+        results->completion_length = 0; results->completed_channels = results->completion_status = 0;
         for (unsigned i = 0; i < 256; i++) results->allowed_channels[i] = 0;
         for (unsigned i = 0; i < IL3945_CHANNEL_COUNT; i++) {
             const il3945_channel_t* ch = &eeprom->channels[i];

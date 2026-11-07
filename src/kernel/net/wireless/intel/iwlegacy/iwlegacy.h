@@ -37,6 +37,11 @@ typedef struct {
     uint32_t command_gp1, command_tx_config, command_tx_status;
     uint32_t command_gp, command_fh, command_tx_base, command_scd_mode, command_scd_fifos;
     unsigned command_rx_read, command_rx_closed;
+    unsigned command_response_length;
+    uint32_t command_response_status;
+    uint8_t command_response_id, command_response_flags;
+    unsigned scan_completion_length;
+    uint8_t scan_expected_channels, scan_completed_channels, scan_completion_status;
     unsigned scan_count;
     il3945_eeprom_t eeprom;
 } iwlegacy_info_t;

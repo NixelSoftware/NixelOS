@@ -177,3 +177,17 @@ Every channel type remains zero and good_CRC_th remains 0xffff, so the template
 is not transmitted and reception cannot promote the scan to active probing.
 Tests validate these ABI fields, small-scan huge sequencing, setup ordering,
 and calibration/setup failures before scanning.
+
+C_ADD_STA replies are validated by their first status byte (exactly 1 means
+success), accepting trailing RX padding. An empty or rejected reply still
+fails. Both scan and connection setup use this rule. For a completed command
+that fails validation, wifid-status shows reply ID/flags, payload length and the
+first four payload bytes as a little-endian status word. This distinguishes
+reply framing from a firmware rejection without disabling error handling.
+
+Scan completion accepts the packed 11-byte notification and trailing RX padding.
+Truncated notifications and incomplete channel counts still fail. On a failure
+following an accepted C_SCAN, wifid-status includes completion length, completed
+and expected channel counts, and firmware completion status. The register model
+uses a 12-byte padded notification; separate parser tests cover truncation,
+11-byte packed notifications and incomplete scans.

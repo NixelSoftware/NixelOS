@@ -41,8 +41,15 @@ static void scan_write(void* ctx, uint32_t reg, uint32_t value) {
     if (s->mode == 1 || s->mode == 6 || s->mode == 7) return;
     uint16_t seq = il_le16(cmd_buffer + 2);
     uint8_t response[4] = {s->mode == 4 ? 2 : 1,0,0,0};
+    unsigned reply_length = cmd_buffer[0] == 0x18 ? 1 : 4;
+    if (cmd_buffer[0] == 0x18) {
+        if (s->mode == 8) reply_length = 4; /* DMA-padded status */
+        if (s->mode == 9) reply_length = 0; /* missing status */
+        if (s->mode == 10) response[0] = 3; /* not Linux's success value */
+        if (s->mode == 11) response[0] = 2; /* firmware table full */
+    }
     unsigned read = s->t.rx.read;
-    enqueue(s,read,cmd_buffer[0],s->mode == 3 ? 0x40 : 0,seq ^ (s->mode == 2 ? 1 : 0),response,cmd_buffer[0] == 0x18 ? 1 : 4);
+    enqueue(s,read,cmd_buffer[0],s->mode == 3 ? 0x40 : 0,seq ^ (s->mode == 2 ? 1 : 0),response,reply_length);
     status[0] = (read + 1) & 255;
     if (cmd_buffer[0] == 0x80 && s->mode != 4 && s->mode != 5) {
         /* Validate the upstream ABI, rather than echoing the builder's offsets. */
@@ -63,7 +70,7 @@ static void scan_write(void* ctx, uint32_t reg, uint32_t value) {
         unsigned channel = scan[216 + probe + 1];
         uint8_t payload[256]; unsigned n = make_beacon(payload,channel,band,1);
         enqueue(s,(read + 1) & 255,0x1B,0,0x8000,payload,n);
-        uint8_t complete[11] = {0}; complete[0] = cmd_buffer[7];
+        uint8_t complete[12] = {0}; complete[0] = cmd_buffer[7];
         enqueue(s,(read + 2) & 255,0x84,0,0x8000,complete,sizeof(complete));
         status[0] = (read + 3) & 255;
     }
@@ -78,7 +85,7 @@ static void scan_delay(void* ctx, uint32_t us) {
         /* Real DMA completes later, not synchronously in the doorbell write. */
         assert(s->t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
         uint8_t response[4]={1};
-        enqueue(s,s->t.rx.read,cmd_buffer[0],0,il_le16(cmd_buffer+2),response,cmd_buffer[0] == 0x18 ? 1 : 4);
+        enqueue(s,s->t.rx.read,cmd_buffer[0],0,il_le16(cmd_buffer+2),response,4);
         status[0]=(s->t.rx.read+1)&255; s->events++;
     }
 }
@@ -166,9 +173,28 @@ int main(void) {
     io = scan_setup(&s,&q); s.mode = 1;
     assert(il3945_scan_configure(&io,&s.t.rx,&q,&eeprom,2,1) == IL_TIMEOUT);
     assert(s.commands == 1 && q.command == 0x97 && q.poisoned);
+    for (unsigned mode = 8; mode <= 11; mode++) {
+        io = scan_setup(&s,&q); s.mode = mode;
+        assert(il3945_scan_configure(&io,&s.t.rx,&q,&eeprom,2,1) ==
+               (mode == 8 ? IL_OK : IL_VERIFY));
+        if (mode != 8) assert(q.command == 0x18 && !q.pending && !q.poisoned);
+    }
     io = scan_setup(&s,&q); eeprom.calibration[60] = 0;
     assert(il3945_scan_configure(&io,&s.t.rx,&q,&eeprom,2,1) == IL_BAD_EEPROM);
     assert(!s.commands);
+    /* Independently validate packed and DMA-padded completion notifications. */
+    for (unsigned n = 0; n <= 12; n++) {
+        il_scan_results_t completion = {0}; completion.expected_channels = 13;
+        uint8_t bytes[12] = {13};
+        il3945_scan_event(&completion,0x84,0,0x8000,bytes,n);
+        assert(completion.completion_length == n);
+        assert(completion.complete == (n >= 11));
+        assert(completion.error == (n < 11 ? IL_VERIFY : IL_OK));
+    }
+    il_scan_results_t mismatch = {0}; mismatch.expected_channels = 13;
+    uint8_t short_scan[12] = {12};
+    il3945_scan_event(&mismatch,0x84,0,0x8000,short_scan,sizeof(short_scan));
+    assert(mismatch.error == IL_VERIFY && !mismatch.complete && mismatch.completed_channels == 12);
     il_scan_results_t results = {0}; results.active_band = 2; results.allowed_channels[6] = 1;
     uint8_t payload[256]; unsigned size = make_beacon(payload,6,2,0);
     il3945_scan_event(&results,0x1B,0,0x8000,payload,size);
