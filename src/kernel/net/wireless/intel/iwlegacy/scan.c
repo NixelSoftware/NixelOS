@@ -6,6 +6,8 @@
 #include "internal.h"
 #include "scan.h"
 #define SCAN_HEADER 216u /* fixed header 28 + TX command 52 + four SSID IEs 136 */
+#define SCAN_TEMPLATE 26u /* wildcard probe header + empty SSID, never sent */
+#define SCAN_CHANNELS (SCAN_HEADER + SCAN_TEMPLATE)
 static void put16(uint8_t* p, unsigned value) { p[0] = value; p[1] = value >> 8; }
 static void put32(uint8_t* p, uint32_t value) {
     p[0] = value; p[1] = value >> 8; p[2] = value >> 16; p[3] = value >> 24;
@@ -22,24 +24,65 @@ int il3945_scan_build(const il3945_eeprom_t* eeprom, unsigned band,
     for (unsigned i = 0; i < IL3945_CHANNEL_COUNT; i++)
         if ((eeprom->channels[i].flags & 1) && eeprom->channels[i].band == band) count++;
     if (!count) return IL_INVALID;
-    unsigned size = SCAN_HEADER + count * 8;
+    unsigned size = SCAN_CHANNELS + count * 8;
     if (size > capacity) return IL_INVALID;
     for (unsigned i = 0; i < size; i++) out[i] = 0;
     put16(out,size); out[3] = count; put16(out + 8,0xFFFF); /* never promote to active */
     put32(out + 20,band == 2 ? 5u : 0u); /* band 2.4 / auto detect */
     put32(out + 24,4u | 8u | 16u | 64u); /* group, no decrypt, beacon aware */
-    unsigned offset = SCAN_HEADER;
+    /* Linux supplies a valid template even for passive scans. Channel type
+     * and good_CRC_th below prevent its transmission or active promotion. */
+    put16(out + 4,10); put16(out + 6,1);
+    put16(out + 28,SCAN_TEMPLATE);
+    put32(out + 32,1u << 13); /* TX_CMD_FLG_SEQ_CTL */
+    out[36] = band == 2 ? 10 : 13; out[37] = 24; /* basic rate, broadcast */
+    put32(out + 68,0xffffffffu); /* infinite lifetime */
+    out[SCAN_HEADER] = 0x40; /* probe request frame control */
+    for (unsigned i = 0; i < 6; i++) {
+        out[SCAN_HEADER + 4 + i] = 255;
+        out[SCAN_HEADER + 10 + i] = eeprom->mac[i];
+        out[SCAN_HEADER + 16 + i] = 255;
+    }
+    unsigned offset = SCAN_CHANNELS;
     for (unsigned i = 0; i < IL3945_CHANNEL_COUNT; i++) {
         const il3945_channel_t* ch = &eeprom->channels[i];
         if (!(ch->flags & 1) || ch->band != band) continue;
         out[offset + 1] = ch->number;
-        /* Type 0, gain 0, TX command 0: passive reception only. */
+        /* Type remains zero: passive only. Match Linux's radio defaults. */
+        out[offset + 2] = band == 2 ? 0x48 : 0x3b;
+        out[offset + 3] = 110;
         put16(out + offset + 4,10);
         put16(out + offset + 6,band == 2 ? 120 : 110);
         offset += 8;
     }
     *length = size;
     return IL_OK;
+}
+/* Complete a full RXON just as Linux commit_rxon does before C_SCAN. */
+int il3945_scan_configure(const il_io_t* io, il_rx_queue_t* rx,
+                         il_command_queue_t* q, const il3945_eeprom_t* e,
+                         unsigned band, unsigned channel) {
+    if (!il_io_valid(io) || !e) return IL_INVALID;
+    int temperature = (int32_t)io->read32(io->context,CSR_UCODE_DRV_GP2);
+    uint8_t table[52];
+    int r = il3945_power_table(e,band,channel,temperature,31,table);
+    if (!r) r = il3945_command_send(io,rx,q,0x97,table,sizeof(table),1000,0,0);
+    /* RXON clears the station table; restore the broadcast entry. */
+    uint8_t sta[64] = {0};
+    for (unsigned i = 0; i < 6; i++) sta[4+i] = 255;
+    sta[12] = 24; sta[58] = band == 2 ? 10 : 13;
+    if (!r) r = il3945_command_send(io,rx,q,0x18,sta,sizeof(sta),1000,0,0);
+    if (!r && (q->response_length != 1 || !(q->response[0] & 1))) r = IL_VERIFY;
+    static const uint8_t plcp[12] = {13,15,5,7,9,11,1,3,10,20,55,110};
+    for (unsigned t = 0; !r && t < 2; t++) {
+        uint8_t rates[52] = {0}; rates[0] = t;
+        for (unsigned i = 0; i < 12; i++) {
+            rates[4+4*i] = plcp[i]; rates[6+4*i] = 1;
+            rates[7+4*i] = band == 2 ? 8 : 0;
+        }
+        r = il3945_command_send(io,rx,q,0x47,rates,sizeof(rates),1000,0,0);
+    }
+    return r;
 }
 static int suite(const uint8_t* p, unsigned type) {
     return p[0] == 0 && p[1] == 0x0F && p[2] == 0xAC && p[3] == type;
@@ -151,7 +194,7 @@ int il3945_scan_run(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t* co
                      const il3945_eeprom_t* eeprom, il_scan_results_t* results) {
     if (!il_io_valid(io) || !rx || !commands || !eeprom || !results) return IL_INVALID;
     *results = (il_scan_results_t){0};
-    uint8_t payload[SCAN_HEADER + IL3945_CHANNEL_COUNT * 8];
+    uint8_t payload[SCAN_CHANNELS + IL3945_CHANNEL_COUNT * 8];
     for (unsigned band = 2; band <= 5; band += 3) {
         unsigned size;
         if (il3945_scan_build(eeprom,band,payload,sizeof(payload),&size)) continue;
@@ -169,7 +212,8 @@ int il3945_scan_run(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t* co
             if (gp == 0xFFFFFFFFu || irq == 0xFFFFFFFFu) return IL_ACCESS;
             if (!(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) return IL_RFKILL;
             if (irq & (CSR_INT_BIT_HW_ERR | CSR_INT_BIT_SW_ERR)) return IL_VERIFY;
-            if (irq) io->write32(io->context,CSR_INT,irq);
+            int ack = il_ack_interrupts(io,irq);
+            if (ack) return ack;
             result = il3945_rx_poll(io,rx,il3945_scan_event,results);
             if (result < 0) return result;
             io->delay_us(io->context,100);

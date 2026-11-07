@@ -35,6 +35,8 @@ typedef struct {
     uint8_t init_alive, runtime_alive, boot_stage;
     uint8_t last_command, command_pending, command_poisoned;
     uint32_t command_gp1, command_tx_config, command_tx_status;
+    uint32_t command_gp, command_fh, command_tx_base, command_scd_mode, command_scd_fifos;
+    unsigned command_rx_read, command_rx_closed;
     unsigned scan_count;
     il3945_eeprom_t eeprom;
 } iwlegacy_info_t;

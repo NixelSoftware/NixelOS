@@ -46,7 +46,7 @@ int il3945_command_send(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t
     if (!(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) return IL_RFKILL;
     int result = il_grab(io);
     if (result) return result;
-    q->sequence = (uint16_t)(0x0400 | q->next | (length > 320 ? 0x4000 : 0));
+    q->sequence = (uint16_t)(0x0400 | q->next | ((command == 0x80 || length > 320) ? 0x4000 : 0));
     q->buffer[0] = command; q->buffer[1] = 0; store16(q->buffer + 2,q->sequence);
     for (unsigned i = 0; i < length; i++) q->buffer[4 + i] = ((const uint8_t*)payload)[i];
     unsigned padding = (0u - length) & 3u;
@@ -69,7 +69,8 @@ int il3945_command_send(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t
         if (irq == 0xFFFFFFFFu || gp == 0xFFFFFFFFu) { result = IL_ACCESS; goto failed; }
         if (!(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) { result = IL_RFKILL; goto failed; }
         if (irq & (CSR_INT_BIT_HW_ERR | CSR_INT_BIT_SW_ERR)) { result = IL_VERIFY; goto failed; }
-        if (irq) io->write32(io->context,CSR_INT,irq);
+        result = il_ack_interrupts(io,irq);
+        if (result) goto failed;
         result = il3945_rx_poll(io,rx,dispatch,&d);
         if (result < 0) goto failed;
         if (!q->pending) { il_release(io); return q->result; }
@@ -84,6 +85,16 @@ failed:
     q->timeout_gp1 = io->read32(io->context,CSR_UCODE_DRV_GP1);
     q->timeout_tx_config = io->read32(io->context,FH39_TCSR_CONFIG(4));
     q->timeout_tx_status = io->read32(io->context,FH39_TSSR_TX_STATUS);
+    q->timeout_gp = io->read32(io->context,CSR_GP_CNTRL);
+    q->timeout_fh = io->read32(io->context,CSR_FH_INT_STATUS);
+    q->timeout_tx_base = io->read32(io->context,FH39_TSSR_CBB_BASE);
+    q->timeout_rx_read = rx->read;
+    q->timeout_rx_closed = rx->status[0] & 0xfff;
+    q->timeout_scd_mode = q->timeout_scd_fifos = 0xffffffffu;
+    if (!il_grab(io)) {
+        q->timeout_scd_mode = il_prph_read(io,ALM_SCD_MODE_REG);
+        q->timeout_scd_fifos = il_prph_read(io,ALM_SCD_TXFACT_REG);
+    }
     il_release(io);
     q->poisoned = 1; /* Firmware may still own the posted command/TFD. */
     q->result = result;

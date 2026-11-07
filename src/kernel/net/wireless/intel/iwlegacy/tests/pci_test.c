@@ -11,14 +11,30 @@ static mutex_t kernel_mutex;
 static pci_device_t devices[3];
 static uint32_t registers[1024];
 static uint16_t command, subsystem;
+static uint8_t retry_timeout;
 static unsigned count, bar_probes, config_writes;
-static int bar_bad, enable_bad, acknowledge_stop;
+static int bar_bad, enable_bad, acknowledge_stop, map_bad;
+static uint16_t link_control;
+int paging_map_mmio_page(uint32_t physical) {
+    assert(physical == (uint32_t)(unsigned long)registers);
+    assert(!(command & PCI_COMMAND_MASTER));
+    return !map_bad;
+}
+uint8_t pci_find_capability(const pci_device_t* dev, uint8_t cap) {
+    assert(dev == devices + 1 && cap == PCI_CAP_PCIE); return 0x40;
+}
 uint32_t pci_device_count(void) { return count; }
 const pci_device_t* pci_device_at(uint32_t i) { return i < count ? devices + i : 0; }
 uint16_t pci_read16(const pci_device_t* dev, uint16_t reg) {
     assert(dev == &devices[1]);
     if (reg == 4) return command;
+    if (reg == 0x50) return link_control;
     assert(reg == 0x2E); return subsystem;
+}
+void pci_write8(const pci_device_t* dev, uint16_t reg, uint8_t value) {
+    assert(dev == &devices[1] && reg == 0x41);
+    assert(!(command & PCI_COMMAND_MASTER));
+    retry_timeout = value;
 }
 void pci_write16(const pci_device_t* dev, uint16_t reg, uint16_t value) {
     assert(dev == &devices[1] && reg == 4); config_writes++; command = value;
@@ -46,11 +62,13 @@ static void setup(void) {
     devices[1] = (pci_device_t){.bus=3,.slot=7,.function=1,.vendor_id=0x8086,.device_id=0x4222,
         .class_code=2,.subclass=0x80,.revision=2};
     devices[2] = (pci_device_t){.vendor_id=0x14E4,.device_id=0x4318,.class_code=2,.subclass=0x80};
-    count = 3; command = 1; subsystem = 0x1005;
-    bar_probes = config_writes = 0; bar_bad = enable_bad = acknowledge_stop = 0;
+    count = 3; command = 1; subsystem = 0x1005; retry_timeout = 0x80;
+    bar_probes = config_writes = 0; bar_bad = enable_bad = acknowledge_stop = map_bad = 0; link_control = 0;
 }
 int main(void) {
     iwlegacy_info_t info;
+    setup(); map_bad = 1;
+    iwlegacy_probe(&info); assert(info.error == IL_ACCESS && command == 1);
     setup(); count = 1;
     iwlegacy_probe(&info); assert(info.state == IL_ABSENT && !info.vendor && !bar_probes);
     setup(); command |= PCI_COMMAND_MASTER;

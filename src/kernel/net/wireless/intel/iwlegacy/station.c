@@ -83,7 +83,8 @@ static int pump(il_station_t* s) {
     if(gp==0xffffffffu || irq==0xffffffffu) return IL_ACCESS;
     if(!(gp&CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) return IL_RFKILL;
     if(irq&(CSR_INT_BIT_HW_ERR|CSR_INT_BIT_SW_ERR)) return IL_VERIFY;
-    if(irq) s->io.write32(s->io.context,CSR_INT,irq);
+    int ack=il_ack_interrupts(&s->io,irq);
+    if(ack) return ack;
     int r=il3945_rx_poll(&s->io,&s->rx,event,s);
     return r<0?r:(s->tx.poisoned ? IL_VERIFY : s->error);
 }
@@ -197,6 +198,7 @@ int il3945_station_connect(il_station_t* s,const il3945_eeprom_t* e,const il_net
     /* Keep PCI/radio awake: the native poll transport does not implement sleep
      * wakeups. Configure legacy EDCA and disable Bluetooth arbitration. */
     uint8_t awake[32]={0},bt[12]={0},qos[36]={1};
+    awake[0]=s->awake_flags & 8;
     int r=command(s,0x77,awake,sizeof(awake)); if(r) goto failed;
     r=command(s,0x9b,bt,sizeof(bt)); if(r) goto failed;
     for(unsigned i=0;i<4;i++) {

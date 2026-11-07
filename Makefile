@@ -104,7 +104,7 @@ NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
 KERNEL_C := \
   src/kernel/memory.c src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
-  src/system/shell/network_commands.c src/system/init/main.c \
+  src/system/shell/network_commands.c src/system/shell/wifi_commands.c src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/text_layout.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/services/audio/mixer.c src/system/loader/app_loader.c \
@@ -524,3 +524,17 @@ src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/s
 $(WIFI_SECURITY_DIR)/%.o: $(WIFI_SECURITY_DIR)/%.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 -include $(WIFI_SECURITY_DIR)/wpa2.d $(WIFI_SECURITY_DIR)/ccmp.d $(WIFI_SECURITY_DIR)/handshake.d
+
+# Dedicated read-only Wi-Fi diagnostics command.
+src/system/shell/commands.o src/system/shell/wifi_commands.o: src/system/shell/wifi_commands.h
+src/system/shell/wifi_commands.o: src/kernel/hal/wifi.h src/kernel/net/wireless/broadcom/b43/b43.h $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/scan.h
+.PHONY: test-wifi-status
+test-wifi-status:
+	$(CC) -std=c99 -O2 -Wall -Wextra -Werror src/system/shell/tests/wifi_status_test.c src/system/shell/wifi_commands.c -o /tmp/nixel-test-wifi-status
+	/tmp/nixel-test-wifi-status
+
+.PHONY: test-mmio-paging
+test-mmio-paging:
+	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_mmio_paging.py
+
+$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o: src/kernel/paging.h

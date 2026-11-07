@@ -42,10 +42,11 @@ before shutdown changes those registers.
 `device.c` loads `/lib/firmware/iwlwifi-3945-2.ucode`, with an API-1 filename
 fallback when that file cannot be read. Firmware is not bundled. It prepares
 coherent physical firmware/ring storage, starts runtime firmware, then runs the
-requested operation. The scan path configures unassociated RXON and sends
-awake power/BT setup commands, then passive C_SCAN commands separately for each
-permitted band. It does not send
-probes or promote a passive channel to active transmission.
+requested operation. The scan path sends awake power/BT setup commands,
+configures unassociated RXON, programs calibrated TX power, restores the
+broadcast station and programs both rate fallback tables. It then sends passive
+C_SCAN commands separately for each permitted band. It does not send probes
+or promote a passive channel to active transmission.
 
 `scan.c` bounds-checks RX metadata, FCS/error flags and beacon/probe-response
 IEs; validates BSSIDs; retains up to 32 infrastructure networks; and recognizes
@@ -59,7 +60,9 @@ global DMA stop/reset or PCI bus-master shutdown cannot be confirmed, posted all
 quarantined until reboot. Long firmware operations use a private device mutex;
 the HAL publishes snapshots under the shared kernel mutex, allowing the window
 manager to run during the scan. Connections retain the firmware, DMA rings and
-command/frame storage until disconnect or failure. Scans require disconnecting
+command/frame storage until disconnect or failure. Before enabling PCI DMA,
+it clears the 3945 RETRY_TIMEOUT configuration byte (0x41), matching Linux’s
+workaround for PCI TX retries interacting with CPU C3 state. Scans require disconnecting
 first, so an active data interface is never reset by discovery.
 
 ## Infrastructure station path
@@ -93,7 +96,7 @@ keys/addressing, stop DMA and release or quarantine its allocations. Raw
 temperature is checked every minute and power recomputed for changes of 6 units.
 
 For a `-9` (`IL_DMA_STOP`) failure, reboot before retrying: pinned buffers are
-quarantined until reboot. `netdev` preserves the original operation error,
+quarantined until reboot. `wifid-status` preserves the original operation error,
 failed shutdown checks (RX, TX, global/reset, PCI-master), and init/runtime ALIVE
 progress. It also shows the boot stage (1 BSM, 2 init ALIVE, 3 init verification,
 4 runtime ALIVE, 5 runtime verification, 6 radio/thermal calibration, 7 ready)
@@ -136,3 +139,41 @@ The firmware/register/power algorithms adapt Linux `3945.c`, `3945-mac.c`,
 `common.c`, `common.h`, `commands.h` and `3945.h`, copyright (c) 2003–2011 Intel
 Corporation. Native adaptations retain GPL-2.0-only licensing; see `COPYING`.
 The copied `csr.h`/`prph.h` retain their complete dual BSD/GPLv2 notices.
+
+## Shell diagnostics
+
+`netdev` lists PCI hardware identities and matching drivers. Run `wifid-status`
+for the cached radio/firmware state, original errors, ALIVE progress, last
+command and command-transport register snapshots. This read-only command does
+not reset the device or start a scan. For a first-command 0x77 timeout, include
+Command GP1, TX queue 4 config and TX hardware status when reporting the failure.
+
+## First-command timeout handling
+
+The PCI register BAR is mapped with PCD/PWT (uncached) before the first MMIO
+access, including EEPROM discovery. Only the BAR's 4 KiB page changes memory
+type; neighboring mappings retain their flags. Existing and new app address
+spaces share the kernel MMIO table. RAM and private app mappings are rejected.
+`make test-mmio-paging` exercises this mapping at ring 0 in QEMU.
+
+Polled boot, command, scan and station loops acknowledge both CSR_INT and
+CSR_FH_INT_STATUS, matching the Linux interrupt tasklet. Startup repeats the
+software RF-kill clear handshake before BSM. The initial 0x77 power table keeps
+firmware sleep disabled and derives PCI_PM from PCIe Link Control, as Linux
+does, for both scans and connections.
+
+On command failure, wifid-status additionally preserves GP control, flow-handler
+interrupt status, the TX shared-table base, scheduler mode/active FIFOs, and RX
+read/closed positions before shutdown. Connection failures now retain the same
+command diagnostics as scan failures. These changes address startup/transport
+differences; resolving a specific physical-card timeout still requires a boot
+and scan on that hardware. Queue poisoning and DMA quarantine remain enforced.
+
+A scan command always uses SEQ_HUGE_FRAME, including a short channel list.
+The passive command includes the same basic-rate TX metadata, wildcard probe
+frame template and per-channel radio defaults used by Linux's passive path.
+The channel list follows the 26-byte template, rather than the fixed header.
+Every channel type remains zero and good_CRC_th remains 0xffff, so the template
+is not transmitted and reception cannot promote the scan to active probing.
+Tests validate these ABI fields, small-scan huge sequencing, setup ordering,
+and calibration/setup failures before scanning.

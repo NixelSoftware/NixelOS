@@ -34,6 +34,7 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
     if(reg!=HBUS_TARG_WRPTR) return;
     if(value&0x400) {
         m->commands++;
+        if (cmd_buffer[0]==0x77) assert(cmd_buffer[4]==(m->station->awake_flags & 8));
         uint8_t answer[4]={1}; unsigned n=cmd_buffer[0]==0x18?1:4;
         post(m,cmd_buffer[0],il_le16(cmd_buffer+2),answer,n);
         if(m->secure && cmd_buffer[0]==0x10 && (cmd_buffer[4+36]&32)) ap_eapol(m,ap_m1,sizeof(ap_m1));
@@ -71,6 +72,7 @@ static void station_setup(station_model_t* m,il3945_eeprom_t* e,il_network_t* ap
     memset(m,0,sizeof(*m)); memset(&native,0,sizeof(native)); memset(e,0,sizeof(*e)); memset(ap,0,sizeof(*ap));
     transport_setup(&m->t); m->station=&native; native.rx=m->t.rx;
     native.io=(il_io_t){m,station_read,station_write,station_delay};
+    native.awake_flags=8;
     assert(!il3945_rx_start(&native.io,&native.rx));
     assert(!il3945_command_prepare(&native.commands,tfds,cmd_buffer,0x18000));
     assert(!il3945_tx_prepare(&native.tx,tx_ring,tx_data,0x19000));

@@ -38,7 +38,7 @@ static uint32_t transport_read(void* ctx, uint32_t reg) {
 }
 static void transport_write(void* ctx, uint32_t reg, uint32_t value) {
     transport_t* t = ctx;
-    if (reg == CSR_INT) { t->m.regs[reg / 4] = 0; return; } /* W1C */
+    if (reg == CSR_INT || reg == CSR_FH_INT_STATUS) { t->m.regs[reg / 4] = 0; return; } /* W1C */
     write32(&t->m,reg,value);
     if (reg == HBUS_TARG_MEM_RADDR) { assert(value == 0); t->memory_offset = 0; }
     if (reg == CSR_RESET && !value) {

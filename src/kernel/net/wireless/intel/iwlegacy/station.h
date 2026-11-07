@@ -23,6 +23,7 @@ typedef struct {
     unsigned phase;
     int error, temperature;
     uint16_t aid;
+    uint8_t awake_flags; /* PCI_PM (bit 3), derived from PCIe Link Control. */
     uint8_t active, processing, tx_plcp, fallback, ofdm_basic, cck_basic, management[512];
 } il_station_t;
 /* Caller serializes access, supplies initialized firmware and pinned rings.

@@ -3,7 +3,7 @@
 #include "../scan.h"
 static uint8_t tfds[256 * 64] __attribute__((aligned(256)));
 static uint8_t cmd_buffer[4096] __attribute__((aligned(4096)));
-typedef struct { transport_t t; unsigned mode, events, commands; } scan_model_t;
+typedef struct { transport_t t; unsigned mode, events, commands; uint8_t ids[16]; } scan_model_t;
 static unsigned make_beacon(uint8_t* p, unsigned channel, unsigned band, int secure) {
     memset(p,0,256);
     uint8_t* f = p + 16;
@@ -31,21 +31,36 @@ static void scan_write(void* ctx, uint32_t reg, uint32_t value) {
     scan_model_t* s = ctx;
     transport_write(&s->t,reg,value);
     if (reg != HBUS_TARG_WRPTR) return;
+    if (s->commands < 16) s->ids[s->commands] = cmd_buffer[0];
     s->commands++;
     unsigned index = (value - 1) & 255;
     assert((value & 0xFF00) == 0x400 && il_le32(tfds + index * 64 + 4) == 0x18000);
     unsigned length = il_le32(tfds + index * 64 + 8) - 4;
     assert((il_le32(tfds + index * 64) >> 24 & 15) == 1);
     assert((il_le32(tfds + index * 64) >> 28) == ((0u - length) & 3));
-    if (s->mode == 1 || s->mode == 6) return;
+    if (s->mode == 1 || s->mode == 6 || s->mode == 7) return;
     uint16_t seq = il_le16(cmd_buffer + 2);
     uint8_t response[4] = {s->mode == 4 ? 2 : 1,0,0,0};
     unsigned read = s->t.rx.read;
-    enqueue(s,read,cmd_buffer[0],s->mode == 3 ? 0x40 : 0,seq ^ (s->mode == 2 ? 1 : 0),response,4);
+    enqueue(s,read,cmd_buffer[0],s->mode == 3 ? 0x40 : 0,seq ^ (s->mode == 2 ? 1 : 0),response,cmd_buffer[0] == 0x18 ? 1 : 4);
     status[0] = (read + 1) & 255;
     if (cmd_buffer[0] == 0x80 && s->mode != 4 && s->mode != 5) {
-        unsigned band = cmd_buffer[4 + 20] & 1 ? 2 : 5;
-        unsigned channel = cmd_buffer[4 + 216 + 1];
+        /* Validate the upstream ABI, rather than echoing the builder's offsets. */
+        assert(il_le16(cmd_buffer + 2) & 0x4000); /* even a one-channel scan */
+        const uint8_t* scan = cmd_buffer + 4;
+        unsigned band = scan[20] & 1 ? 2 : 5;
+        unsigned probe = il_le16(scan + 28);
+        assert(probe == 26 && scan[216] == 0x40 && !scan[240] && !scan[241]);
+        assert(il_le16(scan + 8) == 0xffff);
+        assert(il_le32(scan + 32) == (1u << 13) && scan[37] == 24);
+        assert(scan[36] == (band == 2 ? 10 : 13));
+        assert(il_le32(scan + 68) == 0xffffffffu);
+        for (unsigned i = 0; i < scan[3]; i++) {
+            const uint8_t* channel = scan + 216 + probe + i * 8;
+            assert(!channel[0]); /* no active or directed probe bits */
+            assert(channel[2] == (band == 2 ? 0x48 : 0x3b) && channel[3] == 110);
+        }
+        unsigned channel = scan[216 + probe + 1];
         uint8_t payload[256]; unsigned n = make_beacon(payload,channel,band,1);
         enqueue(s,(read + 1) & 255,0x1B,0,0x8000,payload,n);
         uint8_t complete[11] = {0}; complete[0] = cmd_buffer[7];
@@ -55,11 +70,15 @@ static void scan_write(void* ctx, uint32_t reg, uint32_t value) {
 }
 static void scan_delay(void* ctx, uint32_t us) {
     scan_model_t* s=ctx; transport_delay(&s->t,us);
-    if (s->mode == 6 && !s->events) {
+    if (s->mode == 7 && !s->events) {
+        /* Hold the asynchronous reply until both interrupt banks are acked. */
+        if (s->t.m.regs[CSR_INT/4] || s->t.m.regs[CSR_FH_INT_STATUS/4]) return;
+    }
+    if ((s->mode == 6 || s->mode == 7) && !s->events) {
         /* Real DMA completes later, not synchronously in the doorbell write. */
         assert(s->t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
         uint8_t response[4]={1};
-        enqueue(s,s->t.rx.read,cmd_buffer[0],0,il_le16(cmd_buffer+2),response,4);
+        enqueue(s,s->t.rx.read,cmd_buffer[0],0,il_le16(cmd_buffer+2),response,cmd_buffer[0] == 0x18 ? 1 : 4);
         status[0]=(s->t.rx.read+1)&255; s->events++;
     }
 }
@@ -93,19 +112,31 @@ int main(void) {
     assert(il3945_command_send(&io,&s.t.rx,&q,0x77,0,0,100,0,0) == IL_OK);
     assert(s.events == 1 && !q.pending && !q.poisoned);
     assert(!(s.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
+    io = scan_setup(&s,&q); s.mode=7;
+    s.t.m.regs[CSR_INT/4] = CSR_INT_BIT_FH_RX;
+    s.t.m.regs[CSR_FH_INT_STATUS/4] = 1u << 16;
+    assert(il3945_command_send(&io,&s.t.rx,&q,0x77,0,0,100,0,0) == IL_OK);
+    assert(s.events == 1);
+    io = scan_setup(&s,&q); s.mode=1;
+    s.t.m.regs[CSR_FH_INT_STATUS/4] = CSR_FH_INT_BIT_ERR;
+    assert(il3945_command_send(&io,&s.t.rx,&q,0x77,0,0,100,0,0) == IL_VERIFY);
+    assert(q.pending && q.poisoned && q.timeout_fh == (uint32_t)CSR_FH_INT_BIT_ERR);
     io = scan_setup(&s,&q); s.mode=1;
     s.t.m.regs[CSR_UCODE_DRV_GP1/4] = CSR_UCODE_DRV_GP1_BIT_CMD_BLOCKED;
     assert(il3945_command_send(&io,&s.t.rx,&q,0x77,0,0,1,0,0) == IL_TIMEOUT);
     assert(q.pending && q.poisoned && q.timeout_gp1 == CSR_UCODE_DRV_GP1_BIT_CMD_BLOCKED);
+    assert(q.timeout_gp & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+    assert(q.timeout_rx_read == s.t.rx.read && q.timeout_rx_closed == status[0]);
     assert(!(s.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
     uint8_t ee[IL3945_EEPROM_SIZE]; eeprom_image(ee); il3945_eeprom_t eeprom;
     assert(il3945_eeprom_parse(ee,sizeof(ee),0,&eeprom));
     uint8_t out[1024]; unsigned length;
     assert(il3945_scan_build(&eeprom,2,out,sizeof(out),&length) == IL_OK);
-    assert(length == 224 && out[3] == 1 && out[8] == 0xFF && out[9] == 0xFF);
-    assert(!out[216] && out[217] == 1 && !out[218] && !out[219]);
-    for (unsigned i = 28; i < 216; i++) assert(out[i] == 0); /* no TX/probes */
-    assert(il3945_scan_build(&eeprom,2,out,223,&length) == IL_INVALID && !length);
+    assert(length == 250 && out[3] == 1 && out[8] == 0xFF && out[9] == 0xFF);
+    assert(!out[242] && out[243] == 1 && out[244] == 0x48 && out[245] == 110);
+    for (unsigned i = 80; i < 216; i++) assert(out[i] == 0); /* no directed SSIDs */
+    assert(!memcmp(out + 226,eeprom.mac,6));
+    assert(il3945_scan_build(&eeprom,2,out,249,&length) == IL_INVALID && !length);
     for (unsigned mode = 0; mode <= 5; mode += mode < 4 ? 4 : 1) {
         io = scan_setup(&s,&q); s.mode = mode;
         il_scan_results_t results;
@@ -117,6 +148,27 @@ int main(void) {
             assert(results.networks[0].channel == 1 && results.networks[1].channel == 183);
         }
     }
+    /* Verify the missing post-RXON commands precede scanning, and calibration
+     * failure never posts an uncalibrated power table or scan. */
+    for (unsigned g = 0; g < 5; g++) {
+        uint8_t* group = eeprom.calibration + 64*g;
+        for (unsigned i = 0; i < 5; i++) { group[4*i] = 10+i*10; group[4*i+1] = 40-i*10; }
+        group[60] = 40; group[61] = 40+g*20;
+        group[62] = (uint8_t)-100; group[63] = 255;
+    }
+    io = scan_setup(&s,&q);
+    assert(!il3945_scan_configure(&io,&s.t.rx,&q,&eeprom,2,1));
+    assert(s.commands == 4 && s.ids[0] == 0x97 && s.ids[1] == 0x18 &&
+           s.ids[2] == 0x47 && s.ids[3] == 0x47);
+    il_scan_results_t configured;
+    assert(!il3945_scan_run(&io,&s.t.rx,&q,&eeprom,&configured));
+    assert(s.ids[4] == 0x80 && s.ids[5] == 0x80);
+    io = scan_setup(&s,&q); s.mode = 1;
+    assert(il3945_scan_configure(&io,&s.t.rx,&q,&eeprom,2,1) == IL_TIMEOUT);
+    assert(s.commands == 1 && q.command == 0x97 && q.poisoned);
+    io = scan_setup(&s,&q); eeprom.calibration[60] = 0;
+    assert(il3945_scan_configure(&io,&s.t.rx,&q,&eeprom,2,1) == IL_BAD_EEPROM);
+    assert(!s.commands);
     il_scan_results_t results = {0}; results.active_band = 2; results.allowed_channels[6] = 1;
     uint8_t payload[256]; unsigned size = make_beacon(payload,6,2,0);
     il3945_scan_event(&results,0x1B,0,0x8000,payload,size);

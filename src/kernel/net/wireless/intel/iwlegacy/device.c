@@ -69,6 +69,16 @@ static int nic_config(const il_io_t* io, const iwlegacy_info_t* info) {
     if (info->eeprom.radio_revision > 1) set |= CSR39_HW_IF_CONFIG_REG_BITS_SILICON_TYPE_B;
     return il_update(io,CSR_HW_IF_CONFIG_REG,clear,set);
 }
+/* Linux power_initialize/build_powertable: PCI PM is independent of the
+ * firmware's allow-sleep flag. Leave allow-sleep clear for polled operation. */
+static int awake_flags(const pci_device_t* dev, uint8_t* flags) {
+    uint8_t cap = pci_find_capability(dev,PCI_CAP_PCIE);
+    if (!cap || cap > 0xec) return IL_ACCESS;
+    uint16_t link = pci_read16(dev,cap + 0x10);
+    if (link == 0xffffu) return IL_ACCESS;
+    *flags = (link & 1) ? 0 : 8;
+    return IL_OK;
+}
 static int tx_stop(const il_io_t* io) {
     int result = il_grab(io);
     if (result) return result;
@@ -81,6 +91,19 @@ static int tx_stop(const il_io_t* io) {
     }
     il_release(io);
     return result;
+}
+static void command_snapshot(iwlegacy_info_t* info, const il_command_queue_t* q) {
+    info->last_command = q->command;
+    info->command_pending = q->pending; info->command_poisoned = q->poisoned;
+    info->command_gp1 = q->timeout_gp1;
+    info->command_tx_config = q->timeout_tx_config;
+    info->command_tx_status = q->timeout_tx_status;
+    info->command_gp = q->timeout_gp; info->command_fh = q->timeout_fh;
+    info->command_tx_base = q->timeout_tx_base;
+    info->command_scd_mode = q->timeout_scd_mode;
+    info->command_scd_fifos = q->timeout_scd_fifos;
+    info->command_rx_read = q->timeout_rx_read;
+    info->command_rx_closed = q->timeout_rx_closed;
 }
 static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, const connect_options_t* connect) {
     MUTEX_GUARD(device_mutex);
@@ -100,7 +123,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     info->operation_error = 0; info->stop_failures = 0;
     info->init_alive = info->runtime_alive = info->boot_stage = 0;
     info->last_command = info->command_pending = info->command_poisoned = 0;
-    info->command_gp1 = info->command_tx_config = info->command_tx_status = 0;
+    command_snapshot(info,&(il_command_queue_t){0});
     dma_block_t raw = allocate(FW_MAX + 1);
     if (!raw.address) return info->error = IL_NOMEM;
     uint8_t* file = (uint8_t*)(unsigned long)raw.address;
@@ -157,9 +180,14 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     if (pci_read16(dev,4) & PCI_COMMAND_MASTER) { result = IL_ACCESS; goto free_blocks; }
     pci_bar_t bar;
     if (!pci_probe_bar(dev,0,&bar) || bar.io || !bar.address || bar.address > 0xFFFFF000ull ||
-        bar.size < PAGE_SIZE || !pci_enable_device(dev,PCI_COMMAND_MEMORY)) {
+        bar.size < PAGE_SIZE || !pci_enable_device(dev,PCI_COMMAND_MEMORY) ||
+        !paging_map_mmio_page((uint32_t)bar.address)) {
         pci_write16(dev,4,command); result = IL_ACCESS; goto free_blocks;
     }
+    /* Upstream 3945 PCI probe disables RETRY_TIMEOUT: PCI TX retries can
+     * interfere with CPU C3 transitions and stall command/data DMA. Apply
+     * after D0/BAR setup and before any bus-master activation. */
+    pci_write8(dev,0x41,0);
     il_io_t io = {(void*)(unsigned long)bar.address,read_reg,write_reg,wait_us};
     uint32_t gp = read_reg(io.context,CSR_GP_CNTRL);
     if (gp == 0xFFFFFFFFu) {
@@ -177,7 +205,9 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     pci_write16(dev,4,command | PCI_COMMAND_MEMORY | PCI_COMMAND_INTX_OFF);
     write_reg(io.context,CSR_INT_MASK,0);
     int touched_dma = 0;
-    result = il3945_apm_start(&io);
+    uint8_t power_flags = 0;
+    result = awake_flags(dev,&power_flags);
+    if (!result) result = il3945_apm_start(&io);
     if (!result) result = nic_config(&io,info);
     if (!result) result = il3945_rx_start(&io,&queue);
     uint32_t rings[5];
@@ -195,13 +225,14 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
             info->init_alive = alive.init_alive; info->runtime_alive = alive.runtime_alive; info->boot_stage = alive.stage;
             if (!result) info->firmware_version = fw.version;
             if (!result && connect) {
-                station = (il_station_t){0}; station.io = io; station.rx = queue;
+                station = (il_station_t){0}; station.io = io; station.rx = queue; station.awake_flags = power_flags;
                 result = il3945_command_prepare(&station.commands,(void*)(unsigned long)rings[4],
                     (uint8_t*)(unsigned long)command_buffer,command_buffer);
                 if (!result) result = il3945_tx_prepare(&station.tx,(void*)(unsigned long)rings[0],
                     (uint8_t*)(unsigned long)tx_buffer,tx_buffer);
                 if (!result) result = il3945_station_connect(&station,&info->eeprom,connect->ap,
                     connect->password,connect->password_length,connect->entropy,connect->entropy_context);
+                command_snapshot(info,&station.commands);
                 if (!result) {
                     for (unsigned i = 0; i < count; i++) retained[i] = blocks[i];
                     poll_clock_set = 0; retained_count = count; iwlegacy_native_owned = 1; retained_device = dev; retained_command = command;
@@ -216,6 +247,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                 /* Match runtime ALIVE startup: awake mode and BT configuration
                  * precede the first RXON, including receive-only scanning. */
                 uint8_t awake[32] = {0}, bt[12] = {0};
+                awake[0] = power_flags;
                 if (!result) result = il3945_command_send(&io,&queue,&commands,0x77,awake,sizeof(awake),1000,0,0);
                 if (!result) result = il3945_command_send(&io,&queue,&commands,0x9b,bt,sizeof(bt),1000,0,0);
                 uint8_t rxon[44] = {0};
@@ -231,12 +263,10 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                     rxon[40] = info->eeprom.channels[first].number;
                 }
                 if (!result) result = il3945_command_send(&io,&queue,&commands,0x10,rxon,sizeof(rxon),1000,0,0);
+                if (!result) result = il3945_scan_configure(&io,&queue,&commands,&info->eeprom,
+                    info->eeprom.channels[first].band,info->eeprom.channels[first].number);
                 if (!result) result = il3945_scan_run(&io,&queue,&commands,&info->eeprom,results);
-                info->last_command = commands.command;
-                info->command_pending = commands.pending; info->command_poisoned = commands.poisoned;
-                info->command_gp1 = commands.timeout_gp1;
-                info->command_tx_config = commands.timeout_tx_config;
-                info->command_tx_status = commands.timeout_tx_status;
+                command_snapshot(info,&commands);
             }
         }
     }

@@ -22,6 +22,9 @@ typedef struct {
 /* Enable the kernel's supervisor-only identity map. */
 void paging_init(void);
 uint8_t paging_is_enabled(void);
+/* Map one aligned PCI register page uncached in every address space.
+ * Only non-RAM above the private app heap is accepted. Returns 0 on failure. */
+int paging_map_mmio_page(uint32_t physical);
 
 /* Allocate and release 4 KiB physical frames from the reserved app pool. */
 uint32_t paging_frame_alloc(void);
