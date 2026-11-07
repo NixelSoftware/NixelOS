@@ -10,6 +10,7 @@ typedef struct {
     uint16_t sequence;
     uint8_t pending, poisoned;
     int result;
+    il3945_tx_snapshot_t submitted; /* retained independently of DMA storage */
 } il_tx_queue_t;
 /* Queue 0, one in-flight frame. DMA storage remains pinned until completion
  * or confirmed device stop. A timeout must poison rather than recycle it.

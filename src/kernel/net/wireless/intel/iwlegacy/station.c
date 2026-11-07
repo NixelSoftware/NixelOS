@@ -10,11 +10,28 @@ static void copy(uint8_t* d, const uint8_t* s, unsigned n) { while(n--) *d++=*s+
 static int same(const uint8_t* a,const uint8_t* b,unsigned n) { while(n--) if(*a++!=*b++) return 0; return 1; }
 static void put16(uint8_t* p,unsigned v) { p[0]=v; p[1]=v>>8; }
 static void put32(uint8_t* p,uint32_t v) { put16(p,v); put16(p+2,v>>16); }
+/* Error notifications identify the actual offending command. They are not
+ * command-queue replies and may arrive with the software-error interrupt. */
+static void firmware_error(void* context,uint8_t id,uint8_t flags,uint16_t seq,
+                           const uint8_t* data,unsigned length) {
+    il_station_t* s=context; (void)flags; (void)seq;
+    if(id!=2) return;
+    s->error=IL_VERIFY;
+    if(length<20 || s->error_reply.valid) return;
+    s->error_reply.type=il_le32(data);
+    s->error_reply.command=data[4]; s->error_reply.sequence=il_le16(data+6);
+    s->error_reply.info=il_le32(data+8); s->error_reply.valid=1;
+}
+static void snapshot_tx(il_station_t* s) {
+    /* Submission metadata lives in software, not in a DMA buffer that may
+     * already be reset, reclaimed or corrupted by the time we report it. */
+    s->last_data_tx=s->tx.submitted;
+}
 /* Firmware callback only copies borrowed RX data. Never recurse into RX polling
  * or call the network stack while a ring buffer is being recycled. */
 static void event(void* context,uint8_t id,uint8_t flags,uint16_t seq,const uint8_t* data,unsigned length) {
     il_station_t* s=context; (void)flags;
-    if (id==2) { s->error=IL_VERIFY; return; }
+    if (id==2) { firmware_error(s,id,flags,seq,data,length); return; }
     if (id==0x1c) {
         unsigned pending=s->tx.pending;
         il3945_tx_event(&s->tx,id,seq,data,length);
@@ -37,8 +54,20 @@ static void event(void* context,uint8_t id,uint8_t flags,uint16_t seq,const uint
     if(s->count==8) { s->diagnostics.rx_errors++; return; }
     unsigned i=(s->head+s->count)&7; copy(s->frames[i],f,n); s->lengths[i]=n; s->count++;
 }
+static int pump(il_station_t* s);
+static int wait_tx(il_station_t* s) {
+    for(unsigned tick=0;s->tx.pending && tick<20000;tick++) {
+        int r=pump(s); if(r) return r;
+        s->io.delay_us(s->io.context,100);
+    }
+    if(s->tx.pending) { s->tx.poisoned=1; return IL_TIMEOUT; }
+    return s->tx.poisoned ? IL_VERIFY : s->error;
+}
 static int command(il_station_t* s,uint8_t id,const void* data,unsigned size) {
-    int r=il3945_command_send(&s->io,&s->rx,&s->commands,id,data,size,1000,event,s);
+    /* Association replies can arrive before the matching host TX completion.
+     * Finish that TX before changing RXON, timing, rates or radio power. */
+    int r=wait_tx(s);
+    if(!r) r=il3945_command_send(&s->io,&s->rx,&s->commands,id,data,size,1000,event,s);
     if(r) s->error=r;
     return r;
 }
@@ -89,7 +118,18 @@ static int pump(il_station_t* s) {
     uint32_t gp=s->io.read32(s->io.context,CSR_GP_CNTRL),irq=s->io.read32(s->io.context,CSR_INT);
     if(gp==0xffffffffu || irq==0xffffffffu) return IL_ACCESS;
     if(!(gp&CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) return IL_RFKILL;
-    if(irq&(CSR_INT_BIT_HW_ERR|CSR_INT_BIT_SW_ERR)) return IL_VERIFY;
+    if(irq&(CSR_INT_BIT_HW_ERR|CSR_INT_BIT_SW_ERR)) {
+        /* Consume only error notifications already completed by DMA. Do not
+         * dispatch network traffic or new TX work after a firmware fault. */
+        if((irq&CSR_INT_BIT_SW_ERR) && !(irq&CSR_INT_BIT_HW_ERR)) {
+            /* The interrupt may precede the final RX producer DMA write. */
+            for(unsigned tick=0;tick<10 && !s->error_reply.valid;tick++) {
+                if(il3945_rx_poll(&s->io,&s->rx,firmware_error,s)<0) break;
+                s->io.delay_us(s->io.context,100);
+            }
+        }
+        return IL_VERIFY;
+    }
     int ack=il_ack_interrupts(&s->io,irq);
     if(ack) return ack;
     int r=il3945_rx_poll(&s->io,&s->rx,event,s);
@@ -99,12 +139,8 @@ static int pump(il_station_t* s) {
     return r<0?r:(s->tx.poisoned ? IL_VERIFY : s->error);
 }
 static int transmit(il_station_t* s,const uint8_t* frame,unsigned n) {
-    for(unsigned tick=0;s->tx.pending && tick<20000;tick++) {
-        int r=pump(s); if(r) return r;
-        s->io.delay_us(s->io.context,100);
-    }
-    if(s->tx.pending) { s->tx.poisoned=1; return IL_TIMEOUT; }
-    int r=il3945_tx_submit(&s->io,&s->tx,frame,n,0,s->tx_plcp);
+    int r=wait_tx(s); if(r) return r;
+    r=il3945_tx_submit(&s->io,&s->tx,frame,n,0,s->tx_plcp);
     if(!r) { s->tx_started=s->now_ms; s->diagnostics.tx_submitted++; }
     return r;
 }
@@ -288,9 +324,11 @@ int il3945_station_poll(il_station_t* s,unsigned now) {
     }
     s->processing=0;
     if(r) {
+        snapshot_tx(s);
         s->runtime_error=r;
         s->runtime_irq=s->io.read32(s->io.context,CSR_INT);
         s->runtime_fh=s->io.read32(s->io.context,CSR_FH_INT_STATUS);
+        if(r==IL_VERIFY) (void)il3945_read_error_log(&s->io,s->error_log_base,&s->firmware_error);
         il3945_station_clear(s);
     }
     return r;

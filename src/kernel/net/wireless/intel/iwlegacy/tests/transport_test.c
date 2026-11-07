@@ -7,7 +7,7 @@
 typedef struct {
     model_t m;
     il_rx_queue_t rx;
-    unsigned phase, memory_offset, mode, dispatched;
+    unsigned phase, memory_offset, mode, dispatched, wake_drops;
     uint8_t firmware[44];
 } transport_t;
 static uint8_t pages[254][IL_RX_BYTES];
@@ -38,6 +38,8 @@ static uint32_t transport_read(void* ctx, uint32_t reg) {
 }
 static void transport_write(void* ctx, uint32_t reg, uint32_t value) {
     transport_t* t = ctx;
+    if (reg == CSR_GP_CNTRL && (t->m.regs[reg/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ) &&
+        !(value & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ)) t->wake_drops++;
     if (reg == CSR_INT || reg == CSR_FH_INT_STATUS) { t->m.regs[reg / 4] = 0; return; } /* W1C */
     write32(&t->m,reg,value);
     if (reg == HBUS_TARG_MEM_RADDR) { assert(value == 0); t->memory_offset = 0; }
@@ -91,7 +93,13 @@ int main(void) {
             put32(p + 8,0xABCDEF01);
         }
         status[0] = (t.rx.read + 16) & 255;
+        unsigned held = round & 1;
+        if (held) assert(!il_grab(&io));
+        unsigned drops = t.wake_drops;
         assert(il3945_rx_poll(&io,&t.rx,packet,&t) == 16);
+        assert(t.wake_drops == drops + !held);
+        assert(!!(t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ) == held);
+        if (held) il_release(&io);
     }
     assert(t.dispatched == 1024 && t.rx.read == 0 && t.rx.write == 254 && t.rx.published == 248);
     put32(t.rx.slots[0].data,0x3FFF); status[0] = 1;

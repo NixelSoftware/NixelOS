@@ -39,6 +39,13 @@ completion/error path releases the wake request. Command timeout diagnostics
 capture GP1 (sleep/block state), queue-4 configuration and global TX status
 before shutdown changes those registers.
 
+RX ring replenishment preserves wake requests held by command/TX callers.
+Station configuration waits for outstanding TX before changing radio state,
+including association timing/RXON and thermal power updates. Software-error
+handling briefly drains late error notifications before shutdown, without
+dispatching normal traffic after a fault. These sequencing repairs require
+physical-card validation against the reported runtime firmware stall.
+
 `device.c` loads `/lib/firmware/iwlwifi-3945-2.ucode`, with an API-1 filename
 fallback when that file cannot be read. Firmware is not bundled. It prepares
 coherent physical firmware/ring storage, starts runtime firmware, then runs the
@@ -221,3 +228,28 @@ bits in rate_n_flags as upstream does. After a live disconnect wifid-status
 preserves runtime IRQ/FH status and data-queue pending/poisoned flags, separately
 from the last connection-setup command reply (often 0x47). Regression cases
 separate firmware SW_ERR from malformed TX completions before reset.
+
+Runtime firmware faults also capture the first Intel 3945 error-table record
+before DMA shutdown/reset, using the error-log pointer from runtime ALIVE.
+`wifid-status` reports the error category (FAIL, BAD_PARAM, BAD_CHECKSUM,
+NMI_INTERRUPT, SYSASSERT or FATAL_ERROR), assertion PC/line and link registers.
+Reads are bounded to SRAM, reject invalid counts and avoid reading sleeping
+SRAM. A log-read failure preserves the original operation error. Tests cover
+snapshot retention, invalid pointers/counts and sleeping SRAM; the 30-second
+receive watchdog is separately verified to return IL_TIMEOUT rather than a
+firmware software-error result.
+
+A software-error interrupt no longer skips the accompanying N_ERROR notification.
+The fatal path drains only already-completed RX notifications through a handler
+that records the first error type, offending command/sequence and error info;
+it does not dispatch network traffic or submit new TX. Hardware DMA errors skip
+this drain. Before teardown, the driver also snapshots the last data TX command
+metadata and TFD lengths/control. Packet payloads, keys and passwords are not
+included. `wifid-status` shows these separately from the last setup command.
+
+Diagnostics format 3 prints missing error notifications/TX snapshots explicitly
+as `not captured`, including connection-setup failures without a runtime
+snapshot. TX metadata is saved at submission, independently of DMA-buffer
+contents or teardown. The format marker near the top of wifid-status identifies
+the running diagnostic build; rebuilding kernel.bin alone does not update an
+existing boot image or USB device.

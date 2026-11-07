@@ -127,6 +127,9 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     info->scan_completion_length = 0;
     info->scan_expected_channels = info->scan_completed_channels = info->scan_completion_status = 0;
     info->operation_error = 0; info->stop_failures = 0;
+    info->error_reply=(il3945_error_reply_t){0};
+    info->last_data_tx=(il3945_tx_snapshot_t){0};
+    info->firmware_error=(il3945_error_log_t){0};
     info->runtime_error = 0; info->runtime_irq = info->runtime_fh = 0;
     info->data_tx_pending = info->data_tx_poisoned = 0;
     info->init_alive = info->runtime_alive = info->boot_stage = 0;
@@ -234,6 +237,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
             if (!result) info->firmware_version = fw.version;
             if (!result && connect) {
                 station = (il_station_t){0}; station.io = io; station.rx = queue; station.awake_flags = power_flags;
+                station.error_log_base = alive.error_log;
                 result = il3945_command_prepare(&station.commands,(void*)(unsigned long)rings[4],
                     (uint8_t*)(unsigned long)command_buffer,command_buffer);
                 if (!result) result = il3945_tx_prepare(&station.tx,(void*)(unsigned long)rings[0],
@@ -358,6 +362,9 @@ void iwlegacy_get_diagnostics(net_diagnostics_t* out) { if(out) *out=station.dia
 
 void iwlegacy_get_runtime_status(iwlegacy_info_t* info) {
     if (!info) return;
+    info->error_reply=station.error_reply;
+    info->last_data_tx=station.last_data_tx.valid ? station.last_data_tx : station.tx.submitted;
+    info->firmware_error=station.firmware_error;
     info->runtime_error=station.runtime_error;
     info->runtime_irq=station.runtime_irq; info->runtime_fh=station.runtime_fh;
     info->data_tx_pending=station.tx.pending; info->data_tx_poisoned=station.tx.poisoned;

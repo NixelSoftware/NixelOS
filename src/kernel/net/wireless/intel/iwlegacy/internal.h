@@ -24,6 +24,7 @@ int il_poll(const il_io_t* io, uint32_t reg, uint32_t mask,
 int il_update(const il_io_t* io, uint32_t reg, uint32_t clear, uint32_t set);
 int il_grab(const il_io_t* io);
 int il_ack_interrupts(const il_io_t* io, uint32_t irq);
+int il3945_read_error_log(const il_io_t*, uint32_t base, il3945_error_log_t*);
 void il_release(const il_io_t* io);
 uint32_t il_prph_read(const il_io_t* io, uint32_t reg);
 void il_prph_write(const il_io_t* io, uint32_t reg, uint32_t value);

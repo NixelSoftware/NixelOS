@@ -47,6 +47,12 @@ int il3945_tx_submit(const il_io_t* io, il_tx_queue_t* q, const uint8_t* frame,
     put32(t,((second ? 2u : 1u)<<24)|(pad<<28));
     put32(t+4,q->dma); put32(t+8,first);
     if (second) { put32(t+12,q->dma+128); put32(t+16,second); }
+    q->submitted=(il3945_tx_snapshot_t){
+        .flags=flags, .tfd_control=((second?2u:1u)<<24)|(pad<<28),
+        .first_length=first, .payload_length=second,
+        .sequence=q->sequence, .frame_length=length,
+        .rate=plcp, .station=station, .security=b[15], .valid=1
+    };
     q->pending=1; q->result=IL_TIMEOUT; q->next=(q->next+1)&255;
     __atomic_thread_fence(__ATOMIC_RELEASE);
     io->write32(io->context,HBUS_TARG_WRPTR,q->next);

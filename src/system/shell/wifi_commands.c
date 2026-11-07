@@ -19,6 +19,17 @@ static void put_hex16(shell_output_fn out, uint16_t value) {
     for(unsigned i=0;i<4;i++) text[2+i]=digits[(value>>(12-4*i))&15];
     emit(out,text);
 }
+static const char* firmware_error_text(uint32_t code) {
+    switch(code) {
+    case 1: return "FAIL";
+    case 2: return "BAD_PARAM";
+    case 3: return "BAD_CHECKSUM";
+    case 4: return "NMI_INTERRUPT";
+    case 5: return "SYSASSERT";
+    case 6: return "FATAL_ERROR";
+    default: return "UNKNOWN";
+    }
+}
 /* Read-only snapshot; status never probes, resets or starts the radio. Keep
  * output local to each call so concurrent terminals cannot redirect it. */
 void shell_wifi_status(shell_output_fn out) {
@@ -28,6 +39,7 @@ void shell_wifi_status(shell_output_fn out) {
     const iwlegacy_info_t* intel=&status.intel;
     if(intel->vendor) {
         emit(out,"  Driver: iwl3945 / iwlegacy");
+        emit(out,"\n  Diagnostics format: 3");
         emit(out,"\n  Status: "); emit(out,iwlegacy_description(intel->state));
         if (intel->error) {
             emit(out,"\n  Error: ");
@@ -76,11 +88,50 @@ void shell_wifi_status(shell_output_fn out) {
                 emit(out,"/"); put_unsigned(out,intel->command_rx_closed);
             }
         }
-        if (intel->runtime_error) {
+        if (intel->runtime_error || (intel->state==IL_CONNECTION_FAILED && intel->error)) {
+            if (!intel->runtime_error) emit(out,"\n  Runtime snapshot: not captured (connection setup failure)");
             emit(out,"\n  Runtime IRQ/FH status: "); put_hex32(out,intel->runtime_irq);
             emit(out,"/"); put_hex32(out,intel->runtime_fh);
             emit(out,"\n  Data TX pending/poisoned: "); put_unsigned(out,intel->data_tx_pending);
             emit(out,"/"); put_unsigned(out,intel->data_tx_poisoned);
+            if (intel->error_reply.valid) {
+                emit(out,"\n  Firmware bad command/sequence: "); put_hex16(out,intel->error_reply.command);
+                emit(out,"/"); put_hex16(out,intel->error_reply.sequence);
+                emit(out,"\n  Firmware error type/info: "); put_hex32(out,intel->error_reply.type);
+                emit(out,"/"); put_hex32(out,intel->error_reply.info);
+            } else {
+                emit(out,"\n  Firmware bad command/sequence: not captured");
+                emit(out,"\n  Firmware error type/info: not captured");
+            }
+            if (intel->last_data_tx.valid) {
+                emit(out,"\n  Last data TX sequence/length: "); put_hex16(out,intel->last_data_tx.sequence);
+                emit(out,"/"); put_unsigned(out,intel->last_data_tx.frame_length);
+                emit(out,"\n  Data TX flags/rate/station/security: "); put_hex32(out,intel->last_data_tx.flags);
+                emit(out,"/"); put_hex16(out,intel->last_data_tx.rate);
+                emit(out,"/"); put_unsigned(out,intel->last_data_tx.station);
+                emit(out,"/"); put_hex16(out,intel->last_data_tx.security);
+                emit(out,"\n  Data TFD control/first/payload: "); put_hex32(out,intel->last_data_tx.tfd_control);
+                emit(out,"/"); put_unsigned(out,intel->last_data_tx.first_length);
+                emit(out,"/"); put_unsigned(out,intel->last_data_tx.payload_length);
+            } else {
+                emit(out,"\n  Last data TX sequence/length: not captured");
+                emit(out,"\n  Data TX flags/rate/station/security: not captured");
+                emit(out,"\n  Data TFD control/first/payload: not captured");
+            }
+            if (intel->firmware_error.read_error) emit(out,"\n  Firmware error log: unavailable");
+            else {
+                emit(out,"\n  Firmware error entries: "); put_unsigned(out,intel->firmware_error.count);
+                if (intel->firmware_error.count) {
+                    emit(out,"\n  Firmware error code: "); put_hex32(out,intel->firmware_error.entry[0]);
+                    emit(out," ("); emit(out,firmware_error_text(intel->firmware_error.entry[0])); emit(out,")");
+                    emit(out,"\n  Firmware assert PC/line: "); put_hex32(out,intel->firmware_error.entry[2]);
+                    emit(out,"/"); put_unsigned(out,intel->firmware_error.entry[6]);
+                    emit(out,"\n  Firmware blink2/ilink1/nmiPC: ");
+                    put_hex32(out,intel->firmware_error.entry[3]); emit(out,"/");
+                    put_hex32(out,intel->firmware_error.entry[4]); emit(out,"/");
+                    put_hex32(out,intel->firmware_error.entry[5]);
+                }
+            }
         }
         if (intel->state == IL_SCAN_COMPLETE) {
             emit(out,"\n  Networks found: "); put_unsigned(out,intel->scan_count);

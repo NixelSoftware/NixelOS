@@ -152,3 +152,25 @@ stopped: {
     return result;
 }
 }
+
+/* Bounded first-record adaptation of Linux il3945_dump_nic_error_log.
+ * Capture before reset; an invalid pointer/count must never walk SRAM. */
+int il3945_read_error_log(const il_io_t* io, uint32_t base, il3945_error_log_t* out) {
+    if (!out) return IL_INVALID;
+    *out=(il3945_error_log_t){0};
+    if (!il_io_valid(io) || (base&3) || base<0x800000u || base>0x808000u-32) {
+        out->read_error=IL_INVALID; return IL_INVALID;
+    }
+    int r=il_grab(io);
+    if (r) { out->read_error=r; return r; }
+    uint32_t gp1=io->read32(io->context,CSR_UCODE_DRV_GP1);
+    if (gp1==0xffffffffu || (gp1&CSR_UCODE_DRV_GP1_BIT_MAC_SLEEP)) r=IL_ACCESS;
+    else {
+        io->write32(io->context,HBUS_TARG_MEM_RADDR,base);
+        out->count=io->read32(io->context,HBUS_TARG_MEM_RDAT);
+        if (out->count>(0x808000u-base-4)/28) r=IL_VERIFY;
+        else if (out->count)
+            for (unsigned i=0;i<7;i++) out->entry[i]=io->read32(io->context,HBUS_TARG_MEM_RDAT);
+    }
+    il_release(io); out->read_error=r; return r;
+}

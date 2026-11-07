@@ -22,7 +22,10 @@ typedef struct {
     unsigned head, count, sequence, now_ms, tx_started, last_rx, thermal_ms;
     unsigned phase;
     int error, temperature;
-    uint32_t runtime_irq, runtime_fh;
+    uint32_t runtime_irq, runtime_fh, error_log_base;
+    il3945_error_reply_t error_reply;
+    il3945_tx_snapshot_t last_data_tx;
+    il3945_error_log_t firmware_error;
     int runtime_error;
     uint16_t aid;
     uint8_t awake_flags; /* PCI_PM (bit 3), derived from PCIe Link Control. */

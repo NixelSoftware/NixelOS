@@ -21,6 +21,11 @@ int il3945_command_prepare(il_command_queue_t* q, volatile void* descriptors,
 typedef struct {
     il_command_queue_t* queue; il_rx_handler_t events; void* context;
 } command_dispatch_t;
+static void error_dispatch(void* ctx, uint8_t id, uint8_t flags, uint16_t sequence,
+                           const uint8_t* data, unsigned length) {
+    command_dispatch_t* d = ctx;
+    if (id == 2 && d->events) d->events(d->context,id,flags,sequence,data,length);
+}
 static void dispatch(void* ctx, uint8_t id, uint8_t flags, uint16_t sequence,
                        const uint8_t* data, unsigned length) {
     command_dispatch_t* d = ctx; il_command_queue_t* q = d->queue;
@@ -70,7 +75,17 @@ int il3945_command_send(const il_io_t* io, il_rx_queue_t* rx, il_command_queue_t
         gp = io->read32(io->context,CSR_GP_CNTRL);
         if (irq == 0xFFFFFFFFu || gp == 0xFFFFFFFFu) { result = IL_ACCESS; goto failed; }
         if (!(gp & CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW)) { result = IL_RFKILL; goto failed; }
-        if (irq & (CSR_INT_BIT_HW_ERR | CSR_INT_BIT_SW_ERR)) { result = IL_VERIFY; goto failed; }
+        if (irq & (CSR_INT_BIT_HW_ERR | CSR_INT_BIT_SW_ERR)) {
+            /* Retain N_ERROR even if its producer DMA trails SW_ERR. Never
+             * deliver normal traffic or accept command success after fault. */
+            if (!(irq & CSR_INT_BIT_HW_ERR)) {
+                for (unsigned drain = 0; drain < 10; drain++) {
+                    if (il3945_rx_poll(io,rx,error_dispatch,&d) < 0) break;
+                    io->delay_us(io->context,100);
+                }
+            }
+            result = IL_VERIFY; goto failed;
+        }
         result = il_ack_interrupts(io,irq);
         if (result) goto failed;
         result = il3945_rx_poll(io,rx,dispatch,&d);

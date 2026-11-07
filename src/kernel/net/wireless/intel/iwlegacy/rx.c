@@ -87,12 +87,16 @@ int il3945_rx_poll(const il_io_t* io, il_rx_queue_t* q, il_rx_handler_t handler,
     }
     int result = IL_OK;
     if (q->published != (q->write & ~7u)) {
-        result = il_grab(io);
+        /* RX shares MAC access with command/TX owners. Do not drop their
+         * wake request when returning receive buffers to the device. */
+        uint32_t gp = io->read32(io->context,CSR_GP_CNTRL);
+        unsigned held = gp & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ;
+        result = gp == 0xffffffffu ? IL_ACCESS : il_grab(io);
         if (!result) {
             __atomic_thread_fence(__ATOMIC_RELEASE);
             q->published = q->write & ~7u;
             io->write32(io->context, FH39_RCSR_WPTR(0), q->published);
-            il_release(io);
+            if (!held) il_release(io);
         }
     }
     q->polling = 0;
