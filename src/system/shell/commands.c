@@ -7,6 +7,7 @@
 #include "../../kernel/hal/usb.h"
 #include "../../kernel/hal/wifi.h"
 #include "network_commands.h"
+#include "wifi_commands.h"
 #include "../loader/app_loader.h"
 #include "../graphics/terminal/terminal.h"
 
@@ -128,13 +129,6 @@ static void print_hex_u16(uint16_t val) {
     print(out);
 }
 
-static void print_hex_u32(uint32_t value) {
-    char text[11] = "0x00000000";
-    const char* digits = "0123456789ABCDEF";
-    for (unsigned i=0; i<8; i++) text[2+i] = digits[(value >> (28-4*i)) & 15];
-    print(text);
-}
-
 static void print_u32(uint32_t value) {
     char digits[11];
     int count = 0;
@@ -185,59 +179,6 @@ static void print_wifi_device(void) {
             print("iwl3945 / iwlegacy (incomplete)");
             print("\n  Name: Intel PRO/Wireless "); print(intel->bg_only ? "3945BG" : "3945ABG");
             print("\n  Subsystem device: "); print_hex_u16(intel->subsystem_device);
-            print("\n  Status: "); print(iwlegacy_description(intel->state));
-            if (intel->error) {
-                print("\n  Error: ");
-                if (intel->error < 0) print("-");
-                print_u32(intel->error < 0 ? (unsigned)-intel->error : (unsigned)intel->error);
-            }
-            if (intel->stop_failures || intel->error == IL_DMA_STOP) {
-                print("\n  Original operation error: ");
-                if (intel->operation_error < 0) print("-");
-                print_u32(intel->operation_error < 0 ? (unsigned)-intel->operation_error : (unsigned)intel->operation_error);
-                print("\n  Stop failures:");
-                if (intel->stop_failures & 1) print(" RX");
-                if (intel->stop_failures & 2) print(" TX");
-                if (intel->stop_failures & 4) print(" global/reset");
-                if (intel->stop_failures & 8) print(" PCI-master");
-                print("\n  Firmware ALIVE: init="); print_u32(intel->init_alive);
-                print(" runtime="); print_u32(intel->runtime_alive);
-            }
-            if (intel->boot_stage) {
-                print("\n  Boot stage: "); print_u32(intel->boot_stage);
-                print("\n  Last command: "); print_hex_u16(intel->last_command);
-                print(" pending="); print_u32(intel->command_pending);
-                print(" poisoned="); print_u32(intel->command_poisoned);
-                if (intel->command_poisoned) {
-                    print("\n  Command GP1: "); print_hex_u32(intel->command_gp1);
-                    print("\n  TX queue 4 config: "); print_hex_u32(intel->command_tx_config);
-                    print("\n  TX hardware status: "); print_hex_u32(intel->command_tx_status);
-                }
-            }
-            if (intel->state == IL_SCAN_COMPLETE) {
-                print("\n  Networks found: "); print_u32(intel->scan_count);
-            }
-            if (intel->firmware_version) {
-                print("\n  Firmware version: ");
-                for (int shift = 24; shift >= 0; shift -= 8) {
-                    if (shift != 24) print(".");
-                    print_u32((intel->firmware_version >> shift) & 255);
-                }
-            }
-            if (intel->eeprom.version) {
-                print("\n  MAC: ");
-                for (unsigned octet = 0; octet < 6; octet++) {
-                    const char* hex = "0123456789ABCDEF";
-                    uint8_t byte = intel->eeprom.mac[octet];
-                    char text[3] = {hex[byte >> 4], hex[byte & 15], 0};
-                    if (octet) print(":");
-                    print(text);
-                }
-                print("\n  EEPROM version: "); print_hex_u16(intel->eeprom.version);
-                print("\n  Board revision: "); print_hex_u16(intel->eeprom.board_revision);
-                print("\n  Allowed channels: "); print_u32(intel->eeprom.valid_channels);
-                print("\n  Radio switch: "); print(intel->rfkill ? "Blocked" : "Enabled");
-            }
             print("\n");
             continue;
         }
@@ -253,7 +194,6 @@ static void print_wifi_device(void) {
             print("\n  Core index:    "); print_u32(adapter->core_index);
             print("\n  Core revision: "); print_u32(adapter->core_revision);
         }
-        print("\n  Status: "); print(b43_probe_description(adapter->state));
         print("\n");
     }
     if (!found) print("No PCI Wi-Fi or other network controller found.\n");
@@ -514,6 +454,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ping <host>     Ping an IPv4 address or DNS hostname\n"
                     " ifconfig        Show network configuration\n"
                     " netdev          Show detected network hardware\n"
+                    " wifid-status    Show Wi-Fi state and diagnostics\n"
                     " clear           Clear screen\n");
     } else if (has_prefix(command, "ver") && (!command[3] || command[3] == ' ')) {
         print(OS_VERSION_DESCRIPTION "\n");
@@ -586,6 +527,8 @@ void shell_execute_command(const char* command, shell_output_fn output,
         } else print("Failed to load BMP!\n");
     } else if ((has_prefix(command, "ifconfig") && (!command[8] || command[8] == ' '))) {
         shell_network_ifconfig(shell_output);
+    } else if (has_prefix(command, "wifid-status") && (!command[12] || command[12] == ' ')) {
+        shell_wifi_status(shell_output);
     } else if ((has_prefix(command, "netdev") && (!command[6] || command[6] == ' '))) {
         if (!shell_api || !shell_api->network.get_device_info) {
             print("Network API unavailable.\n");

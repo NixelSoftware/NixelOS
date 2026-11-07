@@ -7,6 +7,7 @@
 /* Native lifecycle ownership, not inferred from firmware/PCI register bits. */
 int iwlegacy_native_owned;
 #include "../../../../mutex.h"
+#include "../../../../paging.h"
 #include "../../../../drivers/delay.h"
 static uint32_t mmio_read(void* base, uint32_t reg) {
     return *(volatile uint32_t*)((volatile uint8_t*)base + reg);
@@ -43,7 +44,8 @@ void iwlegacy_probe(iwlegacy_info_t* info) {
         pci_bar_t bar;
         if (!pci_probe_bar(dev, 0, &bar) || bar.io || !bar.address ||
             bar.address > 0xFFFFF000ull || bar.size < 4096 ||
-            !pci_enable_device(dev, PCI_COMMAND_MEMORY)) {
+            !pci_enable_device(dev, PCI_COMMAND_MEMORY) ||
+            !paging_map_mmio_page((uint32_t)bar.address)) {
             pci_write16(dev, 4, command); return;
         }
         pci_write16(dev, 4, command | PCI_COMMAND_MEMORY | PCI_COMMAND_INTX_OFF);

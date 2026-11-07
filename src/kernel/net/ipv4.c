@@ -336,8 +336,10 @@ uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,
     uint32_t route = destination_ip == 0xFFFFFFFF ? destination_ip :
         (destination_ip & subnet_mask) == (local_ip & subnet_mask) ? destination_ip : gateway_ip;
     uint8_t mac[6];
-    if (mac_resolver(route, mac))
-        return transmit_resolved(destination_ip, protocol, payload, length, mac);
+    if (mac_resolver(route, mac) &&
+        transmit_resolved(destination_ip, protocol, payload, length, mac)) return 1;
+    /* A resolved destination can still encounter a busy single-inflight NIC.
+     * Retain the packet for the network pump just as on an ARP cache miss. */
     for (uint32_t i = 0; i < IPV4_PENDING_MAX; i++) {
         pending_packet_t* p = &pending_packets[i];
         if (p->active) continue;

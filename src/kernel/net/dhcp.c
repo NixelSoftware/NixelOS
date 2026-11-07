@@ -20,6 +20,7 @@
 #define DHCP_OPTION_LEASE_TIME 51
 #define DHCP_OPTION_MESSAGE_TYPE 53
 #define DHCP_OPTION_SERVER_ID 54
+#define DHCP_OPTION_PARAMETER_REQUEST_LIST 55
 #define DHCP_OPTION_END 255
 #define DHCP_MAGIC 0x63825363
 
@@ -144,6 +145,13 @@ static uint8_t send_message(uint8_t message_type, uint32_t requested_ip) {
     }
     write_be32(request_packet + 236, DHCP_MAGIC);
     add_option(&offset, DHCP_OPTION_MESSAGE_TYPE, &type, 1);
+    /* Routers may omit DNS/gateway options unless the client requests them. */
+    static const uint8_t requested_options[] = {
+        DHCP_OPTION_SUBNET_MASK, DHCP_OPTION_ROUTER,
+        DHCP_OPTION_DNS, DHCP_OPTION_LEASE_TIME
+    };
+    add_option(&offset,DHCP_OPTION_PARAMETER_REQUEST_LIST,
+               requested_options,sizeof(requested_options));
     if (message_type == DHCP_REQUEST) {
         write_be32(server, server_identifier);
         write_be32(requested, requested_ip);

@@ -9,7 +9,7 @@ static uint8_t cmd_buffer[4096] __attribute__((aligned(4096)));
 #include "station_vectors.h"
 static uint8_t tx_ring[16384] __attribute__((aligned(256)));
 static uint8_t tx_data[4096] __attribute__((aligned(4096)));
-typedef struct { transport_t t; il_station_t* station; unsigned mode, commands, transmitted, secure, eapol; } station_model_t;
+typedef struct { transport_t t; il_station_t* station; unsigned mode, commands, transmitted, secure, eapol, stations, station_adds; } station_model_t;
 static void post(station_model_t* m,uint8_t id,uint16_t seq,const uint8_t* data,unsigned n) {
     unsigned idx=status[0]&255;
     uint8_t* p=m->station->rx.slots[idx].data;
@@ -26,6 +26,11 @@ static void ap_eapol(station_model_t* m,const uint8_t* key,unsigned length) {
 }
 static uint32_t station_read(void* context,uint32_t reg) {
     station_model_t* m=context;
+    if(reg==CSR_INT && m->mode==5 && m->station->tx.pending) {
+        assert(m->t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+        uint8_t done[12]={0}; done[8]=1;
+        post(m,0x1c,m->station->tx.sequence,done,sizeof(done)); m->mode=0;
+    }
     if(reg==CSR_UCODE_DRV_GP2) return (uint32_t)-100;
     return transport_read(&m->t,reg);
 }
@@ -34,7 +39,16 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
     if(reg!=HBUS_TARG_WRPTR) return;
     if(value&0x400) {
         m->commands++;
-        uint8_t answer[4]={1}; unsigned n=cmd_buffer[0]==0x18?1:4;
+        if (cmd_buffer[0]==0x77) assert(cmd_buffer[4]==(m->station->awake_flags & 8));
+        uint8_t answer[4]={1}; unsigned n=4; /* firmware status may be DMA-padded */
+        if (cmd_buffer[0]==0x10 && !(cmd_buffer[4+36]&32)) m->stations=0;
+        if (cmd_buffer[0]==0x18) {
+            unsigned id=cmd_buffer[4+12]; assert(id==0 || id==24);
+            assert(cmd_buffer[4+59]==0xc0);
+            m->station_adds++;
+            if (m->mode==4 || (m->stations & (1u<<id))) answer[0]=2; /* Duplicate firmware entry. */
+            else m->stations |= 1u<<id;
+        }
         post(m,cmd_buffer[0],il_le16(cmd_buffer+2),answer,n);
         if(m->secure && cmd_buffer[0]==0x10 && (cmd_buffer[4+36]&32)) ap_eapol(m,ap_m1,sizeof(ap_m1));
         return;
@@ -46,9 +60,10 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
     assert(il_le32(t+4)==0x19000 && il_le32(t+8)==((56+h+3)&~3u));
     assert(il_le32(t+12)==0x19080 && il_le32(t+16)==n-h);
     assert(tx_data[12]==10 && !tx_data[13] && !tx_data[15]);
-    if(m->mode==2) return; /* Firmware retains ownership indefinitely. */
+    assert((il_le32(tx_data+8)&(1u<<13)) == (h==24 ? 1u<<13 : 0));
+    if(m->mode==2 || m->mode==5) return; /* Firmware retains ownership indefinitely. */
     uint8_t done[12]={0}; done[8]=m->mode==3?0x83:1;
-    post(m,0x1c,il_le16(tx_data+2),done,sizeof(done));
+    post(m,0x1c,il_le16(tx_data+2),done,m->mode==6?8:sizeof(done));
     if(m->secure && (tx_data[56]&12)==8 && tx_data[134]==0x88 && tx_data[135]==0x8e) {
         unsigned keylen=n-h-8; const uint8_t* key=tx_data+136;
         assert(wifi_wpa2_eapol_verify(ap_ptk,key,keylen)==1);
@@ -71,6 +86,7 @@ static void station_setup(station_model_t* m,il3945_eeprom_t* e,il_network_t* ap
     memset(m,0,sizeof(*m)); memset(&native,0,sizeof(native)); memset(e,0,sizeof(*e)); memset(ap,0,sizeof(*ap));
     transport_setup(&m->t); m->station=&native; native.rx=m->t.rx;
     native.io=(il_io_t){m,station_read,station_write,station_delay};
+    native.awake_flags=8;
     assert(!il3945_rx_start(&native.io,&native.rx));
     assert(!il3945_command_prepare(&native.commands,tfds,cmd_buffer,0x18000));
     assert(!il3945_tx_prepare(&native.tx,tx_ring,tx_data,0x19000));
@@ -94,7 +110,7 @@ int main(void) {
     station_model_t m; il3945_eeprom_t e; il_network_t ap;
     station_setup(&m,&e,&ap);
     assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
-    assert(native.active && native.aid==1 && m.transmitted==2 && m.commands==16);
+    assert(native.active && native.aid==1 && m.transmitted==2 && m.commands==14 && m.station_adds==2 && m.stations==((1u<<24)|1u));
     uint8_t eth[64]={0}; memcpy(eth,ap.bssid,6); memcpy(eth+6,e.mac,6); eth[12]=8;
     for(unsigned i=0;i<4300;i++) {
         assert(!il3945_station_send(&native,eth,sizeof(eth)));
@@ -112,19 +128,37 @@ int main(void) {
     assert(il3945_station_poll(&native,6001)==IL_RFKILL && !native.active);
     station_setup(&m,&e,&ap); e.channels[0].flags=1;
     assert(il3945_station_connect(&native,&e,&ap,0,0,0,0)==IL_INVALID && !m.transmitted);
+    station_setup(&m,&e,&ap); m.mode=4;
+    assert(il3945_station_connect(&native,&e,&ap,0,0,0,0)==IL_VERIFY);
+    assert(!native.active && !m.transmitted && native.commands.command==0x18);
+    assert(!native.commands.pending && !native.commands.poisoned && native.commands.response[0]==2);
     station_setup(&m,&e,&ap); m.mode=1;
     assert(il3945_station_connect(&native,&e,&ap,0,0,0,0)==IL_TIMEOUT && !native.active);
     station_setup(&m,&e,&ap); assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
+    m.mode=5;
+    assert(!il3945_station_send(&native,eth,sizeof(eth)));
+    assert(m.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
+    assert(!il3945_station_poll(&native,native.now_ms+1));
+    assert(!native.tx.pending && !(m.t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
     m.mode=2; assert(!il3945_station_send(&native,eth,sizeof(eth)));
     assert(il3945_station_poll(&native,native.tx_started+2000)==IL_TIMEOUT && native.tx.poisoned && native.tx.pending);
     station_setup(&m,&e,&ap); m.secure=1;
     ap.security=IL_SECURITY_WPA2_PSK; ap.capability|=16;
     memcpy(ap.rsn,ap_rsn,sizeof(ap_rsn)); ap.rsn_length=sizeof(ap_rsn);
     assert(!il3945_station_connect(&native,&e,&ap,(const uint8_t*)"password",8,fixed_nonce,0));
-    assert(native.active && native.security.authorized && m.eapol==2);
+    assert(native.active && native.security.authorized && m.eapol==2 && m.station_adds==2);
     assert(!memcmp(native.security.ptk,ap_ptk,64));
     assert(!il3945_station_send(&native,eth,sizeof(eth)) && (tx_data[57]&0x40));
     assert(native.security.pairwise.next_tx_pn==2);
+    /* Hardware may rewrite non-QoS sequence numbers after software CCMP.
+     * The AP must still authenticate/decrypt the transmitted packet. */
+    uint8_t on_air[256], verified[256]; unsigned verified_length;
+    unsigned on_air_length=il_le16(tx_data+4);
+    memcpy(on_air,tx_data+56,24); memcpy(on_air+24,tx_data+128,on_air_length-24);
+    on_air[22]=0x70; on_air[23]=0x42;
+    wifi_ccmp_key_t tx_check={0};
+    assert(!wifi_ccmp_install(&tx_check,ap_ptk+32,0,ap.bssid,e.mac));
+    assert(!wifi_ccmp_decrypt(&tx_check,on_air,on_air_length,verified,sizeof(verified),&verified_length));
     assert(!il3945_station_poll(&native,1000));
     /* Full MTU software-decrypted RX must pass through the native event queue,
      * while replayed or unauthenticated frames never reach the Ethernet stack. */
@@ -145,6 +179,15 @@ int main(void) {
     assert(!il3945_station_poll(&native,1002) && received==2);
     il3945_station_leave(&native);
     assert(!native.active && !native.security.initialized && !native.security.pairwise.active);
+    station_setup(&m,&e,&ap); assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
+    m.t.m.regs[CSR_INT/4]=CSR_INT_BIT_SW_ERR;
+    assert(il3945_station_poll(&native,native.now_ms+1)==IL_VERIFY);
+    assert(native.runtime_irq==CSR_INT_BIT_SW_ERR && native.runtime_error==IL_VERIFY);
+    station_setup(&m,&e,&ap); assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
+    m.mode=6; assert(!il3945_station_send(&native,eth,sizeof(eth)));
+    assert(il3945_station_poll(&native,native.now_ms+1)==IL_VERIFY);
+    assert(!native.runtime_irq && native.tx.pending && native.tx.poisoned);
+    assert(!(m.t.m.regs[CSR_GP_CNTRL/4]&CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ));
     puts("iwlegacy station: association, split TFDs, 4300-frame wrap, RX, regulatory refusal, RF-kill, retained TX timeout, WPA2 M1-M4 and CCMP TX passed");
     return 0;
 }

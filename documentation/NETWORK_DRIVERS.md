@@ -233,7 +233,9 @@ The repository's `netdiag` app and kernel serial messages are the available buil
 
 The native driver in `src/kernel/net/wireless/intel/iwlegacy/` identifies Intel
 3945BG/ABG (`8086:4222` and `8086:4227`) independently of Ethernet and exposes
-EEPROM/MAC, channel permissions and driver state through `netdev` and Settings.
+PCI hardware/driver identities through `netdev`. Detailed EEPROM/MAC, channel
+permissions, radio state and failure diagnostics are available in `wifid-status`;
+Settings provides the network selection and connection UI.
 Firmware is loaded from `/lib/firmware/iwlwifi-3945-2.ucode`, with an API-1
 filename fallback when that file cannot be read; firmware is not bundled.
 
@@ -254,8 +256,9 @@ in the network HAL and requests DHCP; disconnect/failure clears keys and stack
 addressing and stops or quarantines DMA. Temperature updates are scheduled.
 
 Only open and WPA2-CCMP-PSK infrastructure networks on active non-DFS EEPROM
-channels are supported for joining. The current HAL's secure nonce provider
-requires RDRAND; older CPUs need another cryptographic entropy source for WPA2.
+channels are supported for joining. The HAL's secure nonce provider uses RDRAND when available and health-tested
+CPU timing entropy (Jitterentropy) on older CPUs with a TSC. Source/health-test
+failures refuse WPA2 rather than generating predictable nonces.
 See [the driver README](../src/kernel/net/wireless/intel/iwlegacy/README.md)
 for exact limits, firmware requirements and validation coverage.
 

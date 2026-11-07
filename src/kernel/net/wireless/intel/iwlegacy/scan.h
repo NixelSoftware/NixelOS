@@ -18,12 +18,16 @@ typedef struct {
     il_network_t networks[IL_SCAN_NETWORKS];
     unsigned count, malformed, dropped;
     uint8_t active_band, complete, expected_channels, completed_channels;
+    unsigned completion_length;
+    uint8_t completion_status;
     int error;
     uint8_t allowed_channels[256];
 } il_scan_results_t;
-/* Passive only: no probes/transmit gains, and no passive-to-active promotion.
+/* Passive only: no probe transmission and no passive-to-active promotion.
  * Scan lists are derived exclusively from valid EEPROM channel permissions. */
 int iwlegacy_scan(iwlegacy_info_t* info, il_scan_results_t* results);
+int il3945_scan_configure(const il_io_t*, il_rx_queue_t*, il_command_queue_t*,
+                            const il3945_eeprom_t*, unsigned band, unsigned channel);
 int il3945_scan_build(const il3945_eeprom_t* eeprom, unsigned band,
                        uint8_t* out, unsigned capacity, unsigned* length);
 void il3945_scan_event(void*, uint8_t command, uint8_t flags, uint16_t sequence,

@@ -91,7 +91,8 @@ static int await_alive(const il_io_t* io, il_rx_queue_t* rx, alive_wait_t* wait)
         uint32_t irq = io->read32(io->context,CSR_INT);
         if (irq == 0xFFFFFFFFu) return IL_ACCESS;
         if (irq & (CSR_INT_BIT_HW_ERR | CSR_INT_BIT_SW_ERR)) return IL_VERIFY;
-        if (irq) io->write32(io->context,CSR_INT,irq);
+        result = il_ack_interrupts(io,irq);
+        if (result) return result;
         result = il3945_rx_poll(io,rx,notification,wait);
         if (result < 0) return result;
         if (wait->error) return wait->error;
@@ -127,8 +128,12 @@ int il3945_firmware_run(const il_io_t* io, il_rx_queue_t* rx,
     if (result) return result;
     io->write32(io->context,CSR_INT_MASK,0); /* Polling, no IRQ handler installed. */
     io->write32(io->context,CSR_INT,0xFFFFFFFFu);
+    io->write32(io->context,CSR_FH_INT_STATUS,0xFFFFFFFFu);
     io->write32(io->context,CSR_UCODE_DRV_GP1_CLR,
         CSR_UCODE_SW_BIT_RFKILL | CSR_UCODE_DRV_GP1_BIT_CMD_BLOCKED);
+    /* Repeat the RF-kill handshake as upstream does before starting BSM. */
+    io->write32(io->context,CSR_UCODE_DRV_GP1_CLR,CSR_UCODE_SW_BIT_RFKILL);
+    io->write32(io->context,CSR_UCODE_DRV_GP1_CLR,CSR_UCODE_SW_BIT_RFKILL);
     alive->stage = IL_BOOT_BSM;
     result = il3945_load_bsm(io,firmware,size,dma->init_code,dma->init_data);
     if (result) return result;

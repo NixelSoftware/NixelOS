@@ -16,6 +16,7 @@
 #define PAGE_PRESENT           0x001u
 #define PAGE_WRITABLE          0x002u
 #define PAGE_USER              0x004u
+#define PAGE_UNCACHED          0x018u /* PCD + PWT, PAT entry 3 (UC). */
 #define PAGE_SIZE_4M           0x080u
 #define PAGE_ALLOC_FIRST       0x200u
 #define PAGE_ALLOC_LAST        0x400u
@@ -103,6 +104,10 @@ static void paging_detect_memory(const bios_memory_entry_t* entries, uint32_t co
 }
 
 static uint32_t active_directory;
+/* Split MMIO tables belong to the kernel and are shared, never app-owned. */
+static uint8_t mmio_directory[PAGE_DIRECTORY_ENTRIES];
+static uint16_t mmio_indices[PAGE_DIRECTORY_ENTRIES];
+static unsigned mmio_count;
 
 static uint8_t frame_is_used(uint32_t index) {
     return (frame_bitmap[index >> 3] & (1u << (index & 7u))) != 0;
@@ -158,6 +163,39 @@ uint8_t paging_is_enabled(void) {
     uint32_t cr0;
     __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
     return (cr0 & CR0_PG) != 0;
+}
+
+int paging_map_mmio_page(uint32_t physical) {
+    MUTEX_GUARD(kernel_mutex);
+    if (physical < APP_HEAP_LIMIT || (physical & (PAGE_SIZE - 1u)) ||
+        (physical < FRAME_POOL_LIMIT &&
+         frame_is_usable((physical - FRAME_POOL_BASE) / PAGE_SIZE))) return 0;
+    uint32_t d = physical >> 22;
+    uint32_t entry = page_directory[d];
+    uint32_t* table;
+    if (entry & PAGE_SIZE_4M) {
+        uint32_t frame = paging_frame_alloc();
+        if (!frame) return 0;
+        table = (uint32_t*)frame;
+        for (uint32_t i = 0; i < PAGE_TABLE_ENTRIES; i++)
+            table[i] = ((d << 22) + i * PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITABLE;
+    } else {
+        if (!mmio_directory[d]) return 0;
+        table = (uint32_t*)(entry & PAGE_ADDRESS_MASK);
+    }
+    uint32_t i = (physical >> 12) & 1023u;
+    if ((table[i] & PAGE_UNCACHED) == PAGE_UNCACHED) return 1;
+    uint32_t flags = task_irq_save();
+    /* Evict old cache lines before changing the identity mapping's type. */
+    __asm__ volatile ("wbinvd" ::: "memory");
+    table[i] |= PAGE_UNCACHED;
+    page_directory[d] = (uint32_t)table | PAGE_PRESENT | PAGE_WRITABLE;
+    if (!mmio_directory[d]) mmio_indices[mmio_count++] = d;
+    mmio_directory[d] = 1;
+    ((uint32_t*)active_directory)[d] = page_directory[d];
+    __asm__ volatile ("mov %0, %%cr3" :: "r"(active_directory) : "memory");
+    task_irq_restore(flags);
+    return 1;
 }
 
 uint32_t paging_frame_alloc(void) {
@@ -375,6 +413,12 @@ void paging_activate(address_space_t* space) {
 void paging_activate_directory(uint32_t directory_address) {
     if (!directory_address || (directory_address & (PAGE_SIZE - 1u))) return;
     uint32_t flags = task_irq_save();
+    /* Apps created before a late PCI probe also inherit its MMIO tables. */
+    if (directory_address != (uint32_t)page_directory)
+        for (unsigned i = 0; i < mmio_count; i++) {
+            unsigned d = mmio_indices[i];
+            ((uint32_t*)directory_address)[d] = page_directory[d];
+        }
     active_directory = directory_address;
     __asm__ volatile ("mov %0, %%cr3" : : "r"(directory_address) : "memory");
     task_irq_restore(flags);

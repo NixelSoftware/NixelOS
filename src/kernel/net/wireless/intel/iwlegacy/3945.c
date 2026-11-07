@@ -19,6 +19,17 @@ int il_update(const il_io_t* io, uint32_t reg, uint32_t clear, uint32_t set) {
     io->write32(io->context, reg, (value & ~clear) | set);
     return IL_OK;
 }
+/* CSR_INT contains summaries that cannot clear until FH status is acked.
+ * Polling still needs the same acknowledgement as Linux's IRQ tasklet. */
+int il_ack_interrupts(const il_io_t* io, uint32_t irq) {
+    uint32_t fh = io->read32(io->context,CSR_FH_INT_STATUS);
+    if (fh == 0xffffffffu) return IL_ACCESS;
+    /* Do not clear a DMA fault that arrived after the caller read CSR_INT. */
+    if (fh & CSR_FH_INT_BIT_ERR) return IL_VERIFY;
+    if (irq) io->write32(io->context,CSR_INT,irq);
+    if (fh) io->write32(io->context,CSR_FH_INT_STATUS,fh);
+    return IL_OK;
+}
 int il_grab(const il_io_t* io) {
     int result = il_update(io, CSR_GP_CNTRL, 0, CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
     if (result) return result;

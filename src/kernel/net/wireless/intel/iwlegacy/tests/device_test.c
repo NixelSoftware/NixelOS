@@ -27,7 +27,7 @@ void paging_frame_free(uint32_t address) {
 }
 void pci_set_master(const pci_device_t* dev, int enabled) {
     assert(dev == devices + 1);
-    if (enabled) command |= PCI_COMMAND_MASTER;
+    if (enabled) { assert(retry_timeout == 0); command |= PCI_COMMAND_MASTER; }
     else command &= ~PCI_COMMAND_MASTER;
 }
 int fs_read_file_at(const char* path, uint8_t* dest, uint32_t capacity, uint32_t offset) {
@@ -56,7 +56,16 @@ static unsigned pinned(void) {
     unsigned count = 0; for (unsigned i = 0; i < sizeof(used); i++) count += used[i]; return count;
 }
 int main(void) {
-    iwlegacy_info_t info = device_setup(); file_mode = 0;
+    iwlegacy_info_t info = device_setup();
+    uint8_t flags = 0;
+    assert(awake_flags(devices + 1,&flags) == IL_OK && flags == 8);
+    link_control = 1;
+    assert(awake_flags(devices + 1,&flags) == IL_OK && flags == 0);
+    link_control = 0xffff;
+    assert(awake_flags(devices + 1,&flags) == IL_ACCESS);
+    info = device_setup(); map_bad = 1;
+    assert(iwlegacy_firmware_check(&info) == IL_ACCESS && !pinned() && command == 1);
+    info = device_setup(); file_mode = 0;
     assert(iwlegacy_firmware_check(&info) == IL_NO_FIRMWARE && info.state == IL_FIRMWARE_MISSING);
     assert(files == 2 && !pinned() && !bar_probes);
     for (unsigned mode = 1; mode <= 3; mode += 2) {
@@ -86,7 +95,7 @@ int main(void) {
     registers[CSR_GP_CNTRL/4] = CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY | CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW;
     int primary = iwlegacy_firmware_check(&info);
     assert(primary == IL_ACCESS && !pinned());
-    assert(!quarantine_count && info.operation_error == IL_ACCESS);
+    assert(!quarantine_count && info.operation_error == IL_ACCESS && retry_timeout == 0);
     assert(info.stop_failures == 3 && !info.init_alive && !info.runtime_alive);
     /* Clock-ready fixture reaches DMA activation. Missing idle acknowledgments
      * force quarantine, even though PCI bus mastering can be disabled. */
