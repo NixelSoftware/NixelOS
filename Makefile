@@ -160,7 +160,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
-                 lspci demo3d irc telnetd taskmgr
+                 lspci demo3d irc telnetd taskmgr tunnel
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
 

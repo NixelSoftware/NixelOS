@@ -392,6 +392,8 @@ void tcp_init(void) {
 }
 tcp_socket_t* tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
     MUTEX_GUARD(kernel_mutex);
+    /* 127.0.0.0/8 means "this machine": use our own address so ipv4 loops it back. */
+    if ((remote_ip>>24)==127u) remote_ip=ipv4_get_local_ip();
     if (!unicast_peer(remote_ip) || !remote_port || !ipv4_get_local_ip()) return 0;
     uint16_t port=0;
     for (unsigned trial=0;trial<16384;trial++) {

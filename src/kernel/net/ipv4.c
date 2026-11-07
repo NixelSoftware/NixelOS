@@ -31,6 +31,49 @@ typedef struct {
     uint8_t payload[IPV4_MAX_PAYLOAD];
 } pending_packet_t;
 static pending_packet_t pending_packets[IPV4_PENDING_MAX];
+
+/* Loopback: packets addressed to our own IP never reach the NIC. They are
+ * queued here (FIFO) and handed to ipv4_receive_frame from ipv4_poll, so a
+ * protocol never re-enters its own receive path while it is sending. */
+#define IPV4_LOOPBACK_MAX 64u
+#define IPV4_LOOPBACK_PACKET (IPV4_HEADER_MIN_SIZE + IPV4_MAX_PAYLOAD)
+typedef struct {
+    uint32_t length;
+    uint8_t packet[IPV4_LOOPBACK_PACKET];
+} loopback_packet_t;
+static loopback_packet_t loopback_queue[IPV4_LOOPBACK_MAX];
+static uint32_t loopback_head;
+static uint32_t loopback_count;
+static uint8_t loopback_delivery[IPV4_LOOPBACK_PACKET];
+static void build_header(ipv4_header_t* header, uint32_t destination_ip,
+                         uint8_t protocol, uint32_t length);
+
+static uint8_t loopback_enqueue(uint32_t destination_ip, uint8_t protocol,
+                                const uint8_t* payload, uint32_t length) {
+    if (loopback_count >= IPV4_LOOPBACK_MAX) return 0; /* backpressure */
+    loopback_packet_t* slot =
+        &loopback_queue[(loopback_head + loopback_count) % IPV4_LOOPBACK_MAX];
+    build_header((ipv4_header_t*)slot->packet, destination_ip, protocol, length);
+    for (uint32_t i = 0; i < length; i++)
+        slot->packet[IPV4_HEADER_MIN_SIZE + i] = payload[i];
+    slot->length = IPV4_HEADER_MIN_SIZE + length;
+    loopback_count++;
+    return 1;
+}
+
+static void loopback_poll(void) {
+    /* Only deliver what was queued before this poll; replies queue for the next one. */
+    uint32_t budget = loopback_count;
+    while (budget-- && loopback_count) {
+        loopback_packet_t* slot = &loopback_queue[loopback_head];
+        uint32_t length = slot->length;
+        for (uint32_t i = 0; i < length; i++) loopback_delivery[i] = slot->packet[i];
+        loopback_head = (loopback_head + 1u) % IPV4_LOOPBACK_MAX;
+        loopback_count--;
+        (void)ipv4_receive_frame(loopback_delivery, length);
+    }
+}
+
 static uint8_t transmit_resolved(uint32_t destination_ip, uint8_t protocol,
     const uint8_t* payload, uint32_t length, const uint8_t destination_mac[6]);
 
@@ -286,7 +329,10 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
 uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,
                   const uint8_t* payload, uint32_t length) {
     MUTEX_GUARD(kernel_mutex);
-    if (!payload || length > IPV4_MAX_PAYLOAD || !mac_resolver) return 0;
+    if (!payload || length > IPV4_MAX_PAYLOAD) return 0;
+    if (local_ip && destination_ip == local_ip)
+        return loopback_enqueue(destination_ip, protocol, payload, length);
+    if (!mac_resolver) return 0;
     uint32_t route = destination_ip == 0xFFFFFFFF ? destination_ip :
         (destination_ip & subnet_mask) == (local_ip & subnet_mask) ? destination_ip : gateway_ip;
     uint8_t mac[6];
@@ -309,6 +355,7 @@ uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,
 
 void ipv4_poll(void) {
     MUTEX_GUARD(kernel_mutex);
+    loopback_poll();
     if (!mac_resolver) return;
     for (uint32_t i = 0; i < IPV4_PENDING_MAX; i++) {
         pending_packet_t* p = &pending_packets[i];
@@ -339,6 +386,22 @@ static uint8_t transmit_resolved(uint32_t destination_ip, uint8_t protocol,
     ethernet->ether_type = swap16(IPV4_ETHERTYPE);
 
     header = (ipv4_header_t*)(transmit_frame + IPV4_ETHERNET_HEADER_SIZE);
+    build_header(header, destination_ip, protocol, length);
+
+    for (uint32_t i = 0; i < length; i++) {
+        transmit_frame[IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + i]
+            = payload[i];
+    }
+
+    frame_length = IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + length;
+    return etherframe_send(etherframe_mac_from_bytes(destination_mac),
+                           IPV4_ETHERTYPE,
+                           transmit_frame + IPV4_ETHERNET_HEADER_SIZE,
+                           frame_length - IPV4_ETHERNET_HEADER_SIZE);
+}
+
+static void build_header(ipv4_header_t* header, uint32_t destination_ip,
+                         uint8_t protocol, uint32_t length) {
     header->version_and_header_length = 0x45;
     header->type_of_service = 0;
     write_be16((uint8_t*)&header->total_length,
@@ -352,17 +415,6 @@ static uint8_t transmit_resolved(uint32_t destination_ip, uint8_t protocol,
     write_be32((uint8_t*)&header->destination_ip, destination_ip);
     write_be16((uint8_t*)&header->checksum,
                ipv4_checksum(header, IPV4_HEADER_MIN_SIZE));
-
-    for (uint32_t i = 0; i < length; i++) {
-        transmit_frame[IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + i]
-            = payload[i];
-    }
-
-    frame_length = IPV4_ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN_SIZE + length;
-    return etherframe_send(etherframe_mac_from_bytes(destination_mac),
-                           IPV4_ETHERTYPE,
-                           transmit_frame + IPV4_ETHERNET_HEADER_SIZE,
-                           frame_length - IPV4_ETHERNET_HEADER_SIZE);
 }
 
 uint32_t ipv4_get_local_ip(void) {
