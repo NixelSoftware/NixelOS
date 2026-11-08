@@ -30,6 +30,18 @@ static const char* firmware_error_text(uint32_t code) {
     default: return "UNKNOWN";
     }
 }
+static const char* rejection_text(il_connection_reject_t reason) {
+    switch(reason) {
+    case IL_REJECT_NONE: return "no host/AP rejection";
+    case IL_REJECT_AUTH_STATUS: return "AP authentication rejection";
+    case IL_REJECT_ASSOC_STATUS: return "AP association rejection";
+    case IL_REJECT_ASSOC_AID: return "association AID";
+    case IL_REJECT_ASSOC_IES: return "association IEs";
+    case IL_REJECT_ASSOC_SECURITY: return "association security";
+    case IL_REJECT_ASSOC_RATES: return "association rates";
+    default: return "unknown";
+    }
+}
 /* Read-only snapshot; status never probes, resets or starts the radio. Keep
  * output local to each call so concurrent terminals cannot redirect it. */
 void shell_wifi_status(shell_output_fn out) {
@@ -39,7 +51,7 @@ void shell_wifi_status(shell_output_fn out) {
     const iwlegacy_info_t* intel=&status.intel;
     if(intel->vendor) {
         emit(out,"  Driver: iwl3945 / iwlegacy");
-        emit(out,"\n  Diagnostics format: 3");
+        emit(out,"\n  Diagnostics format: 5");
         emit(out,"\n  Status: "); emit(out,iwlegacy_description(intel->state));
         if (intel->error) {
             emit(out,"\n  Error: ");
@@ -55,6 +67,14 @@ void shell_wifi_status(shell_output_fn out) {
             if (intel->stop_failures & 2) emit(out," TX");
             if (intel->stop_failures & 4) emit(out," global/reset");
             if (intel->stop_failures & 8) emit(out," PCI-master");
+        }
+        if(intel->link_power.valid) {
+            emit(out,"\n  PCIe endpoint link before/after: "); put_hex16(out,intel->link_power.endpoint_before);
+            emit(out,"/"); put_hex16(out,intel->link_power.endpoint_after);
+        }
+        if(intel->link_power.parent_present) {
+            emit(out,"\n  PCIe parent link before/after: "); put_hex16(out,intel->link_power.parent_before);
+            emit(out,"/"); put_hex16(out,intel->link_power.parent_after);
         }
         if (intel->boot_stage) {
             emit(out,"\n  Firmware ALIVE: init="); put_unsigned(out,intel->init_alive);
@@ -89,6 +109,13 @@ void shell_wifi_status(shell_output_fn out) {
             }
         }
         if (intel->runtime_error || (intel->state==IL_CONNECTION_FAILED && intel->error)) {
+            emit(out,"\n  Connection failure phase/reason: "); put_unsigned(out,intel->connection_phase);
+            emit(out,"/"); emit(out,rejection_text(intel->connection_reject));
+            emit(out,"\n  WPA phase/authorized/port-open: "); put_unsigned(out,intel->security_phase);
+            emit(out,"/"); put_unsigned(out,intel->port_authorized); emit(out,"/"); put_unsigned(out,intel->port_active);
+            emit(out,"\n  AP management status: "); put_unsigned(out,intel->management_status);
+            emit(out,"\n  Association capability/raw AID: "); put_hex16(out,intel->association_capability);
+            emit(out,"/"); put_hex16(out,intel->association_aid);
             if (!intel->runtime_error) emit(out,"\n  Runtime snapshot: not captured (connection setup failure)");
             emit(out,"\n  Runtime IRQ/FH status: "); put_hex32(out,intel->runtime_irq);
             emit(out,"/"); put_hex32(out,intel->runtime_fh);
@@ -106,6 +133,10 @@ void shell_wifi_status(shell_output_fn out) {
             if (intel->last_data_tx.valid) {
                 emit(out,"\n  Last data TX sequence/length: "); put_hex16(out,intel->last_data_tx.sequence);
                 emit(out,"/"); put_unsigned(out,intel->last_data_tx.frame_length);
+                emit(out,"\n  Last TX frame-control/EtherType: "); put_hex16(out,intel->last_data_tx.frame_control);
+                emit(out,"/"); put_hex16(out,intel->last_data_tx.ether_type);
+                emit(out,"\n  Last TX DMA command/payload: "); put_hex32(out,intel->last_data_tx.command_dma);
+                emit(out,"/"); put_hex32(out,intel->last_data_tx.payload_dma);
                 emit(out,"\n  Data TX flags/rate/station/security: "); put_hex32(out,intel->last_data_tx.flags);
                 emit(out,"/"); put_hex16(out,intel->last_data_tx.rate);
                 emit(out,"/"); put_unsigned(out,intel->last_data_tx.station);
@@ -117,6 +148,12 @@ void shell_wifi_status(shell_output_fn out) {
                 emit(out,"\n  Last data TX sequence/length: not captured");
                 emit(out,"\n  Data TX flags/rate/station/security: not captured");
                 emit(out,"\n  Data TFD control/first/payload: not captured");
+            }
+            for(unsigned i=0;i<intel->tx_history_count && i<8;i++) {
+                const il3945_tx_snapshot_t* tx=&intel->tx_history[i];
+                emit(out,"\n  TX history seq/len/type/status: "); put_hex16(out,tx->sequence);
+                emit(out,"/"); put_unsigned(out,tx->frame_length); emit(out,"/"); put_hex16(out,tx->ether_type);
+                emit(out,"/"); if(tx->completed) put_hex32(out,tx->status); else emit(out,"pending");
             }
             if (intel->firmware_error.read_error) emit(out,"\n  Firmware error log: unavailable");
             else {

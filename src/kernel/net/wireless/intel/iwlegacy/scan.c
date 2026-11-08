@@ -5,6 +5,7 @@
  */
 #include "internal.h"
 #include "scan.h"
+#include "bss.h"
 #define SCAN_HEADER 216u /* fixed header 28 + TX command 52 + four SSID IEs 136 */
 #define SCAN_TEMPLATE 26u /* wildcard probe header + empty SSID, never sent */
 #define SCAN_CHANNELS (SCAN_HEADER + SCAN_TEMPLATE)
@@ -85,33 +86,6 @@ int il3945_scan_configure(const il_io_t* io, il_rx_queue_t* rx,
     }
     return r;
 }
-static int suite(const uint8_t* p, unsigned type) {
-    return p[0] == 0 && p[1] == 0x0F && p[2] == 0xAC && p[3] == type;
-}
-static il_security_t rsn_security(const uint8_t* p, unsigned length) {
-    if (length < 8 || il_le16(p) != 1 || !suite(p + 2,4)) return IL_SECURITY_UNSUPPORTED;
-    unsigned count = il_le16(p + 6); p += 8; length -= 8;
-    if (!count || count > length / 4) return IL_SECURITY_UNSUPPORTED;
-    unsigned ccmp = 0;
-    for (unsigned i = 0; i < count; i++) ccmp |= suite(p + i * 4,4);
-    p += count * 4; length -= count * 4;
-    if (length < 2) return IL_SECURITY_UNSUPPORTED;
-    count = il_le16(p); p += 2; length -= 2;
-    if (!count || count > length / 4) return IL_SECURITY_UNSUPPORTED;
-    unsigned psk = 0;
-    for (unsigned i = 0; i < count; i++) psk |= suite(p + i * 4,2);
-    p += count * 4; length -= count * 4;
-    if (length == 1 || (length >= 2 && (il_le16(p) & 0x40))) return IL_SECURITY_UNSUPPORTED;
-    if (length >= 2) { p += 2; length -= 2; } /* RSN capabilities */
-    if (length) {
-        if (length < 2) return IL_SECURITY_UNSUPPORTED;
-        count = il_le16(p); p += 2; length -= 2;
-        if (count > length / 16) return IL_SECURITY_UNSUPPORTED;
-        p += count * 16; length -= count * 16;
-        if (length != 0 && (length != 4 || !suite(p,6))) return IL_SECURITY_UNSUPPORTED;
-    }
-    return ccmp && psk ? IL_SECURITY_WPA2_PSK : IL_SECURITY_UNSUPPORTED;
-}
 static void beacon(il_scan_results_t* results, const uint8_t* frame, unsigned length,
                      unsigned channel, unsigned band, int signal) {
     if (length < 36 || (frame[0] != 0x80 && frame[0] != 0x50) || (frame[1] & 0xC7) || (il_le16(frame + 22) & 15) ||
@@ -135,20 +109,17 @@ static void beacon(il_scan_results_t* results, const uint8_t* frame, unsigned le
             if (ssid_seen++ || size > 32) { results->malformed++; return; }
             found.ssid_length = size;
             for (unsigned i = 0; i < size; i++) found.ssid[i] = data[i];
-        } else if (tag == 1 || tag == 50) {
-            if (!size || (tag == 1 && size > 8)) { results->malformed++; return; }
-            for (unsigned i = 0; i < size && found.rate_count < 12; i++)
-                found.rates[found.rate_count++] = data[i];
         } else if (tag == 3 && (size != 1 || (band == 2 && data[0] != channel))) {
             results->malformed++; return;
         } else if (tag == 48) {
             if (rsn_seen++) { results->malformed++; return; }
-            found.security = rsn_security(data,size);
+            found.security = il3945_rsn_security(data,size);
             found.rsn_length = size + 2; found.rsn[0] = 48; found.rsn[1] = size;
             for (unsigned i = 0; i < size; i++) found.rsn[i + 2] = data[i];
         }
         offset += size + 2;
     }
+    if (il3945_bss_parse(&found,frame+36,length-36,0)) { results->malformed++; return; }
     if (!ssid_seen || !(found.capability & 1) || (found.capability & 2)) return; /* infrastructure APs */
     unsigned index = results->count;
     for (unsigned i = 0; i < results->count; i++)

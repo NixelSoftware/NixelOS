@@ -15,6 +15,7 @@ static inline int il_io_valid(const il_io_t* io) {
     return io && io->read32 && io->write32 && io->delay_us;
 }
 extern int iwlegacy_native_owned;
+int il3945_disable_link_power(const pci_device_t*,il3945_link_power_t*);
 int il3945_apm_start(const il_io_t* io);
 int il3945_apm_stop(const il_io_t* io);
 /* PCI mastering disabled; no host DMA buffers have been posted. */

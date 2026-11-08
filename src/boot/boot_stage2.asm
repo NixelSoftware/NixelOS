@@ -362,7 +362,7 @@ lookup:
     call read_block
     mov bx, 0x2000
 .entry:
-    movzx dx, word [bx + 4]
+    mov dx, [bx + 4]
     cmp dx, 8
     jb fs_error
     test dx, 3

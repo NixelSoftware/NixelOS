@@ -11,6 +11,7 @@ typedef struct {
     il_security_t security;
     uint8_t timestamp[8];
     uint8_t rates[12], rate_count;
+    uint8_t erp, erp_valid;
     uint8_t rsn[257];
     uint16_t rsn_length;
 } il_network_t;

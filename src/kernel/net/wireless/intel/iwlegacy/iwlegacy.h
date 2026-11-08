@@ -24,6 +24,11 @@ typedef struct {
     uint8_t valid_channels;
     uint8_t calibration[320];
 } il3945_eeprom_t;
+typedef enum {
+    IL_REJECT_NONE, IL_REJECT_AUTH_STATUS, IL_REJECT_ASSOC_STATUS,
+    IL_REJECT_ASSOC_AID, IL_REJECT_ASSOC_IES, IL_REJECT_ASSOC_SECURITY,
+    IL_REJECT_ASSOC_RATES
+} il_connection_reject_t;
 typedef struct {
     uint32_t type, info;
     uint16_t sequence;
@@ -31,7 +36,9 @@ typedef struct {
 } il3945_error_reply_t;
 typedef struct {
     uint32_t flags, tfd_control, first_length, payload_length;
-    uint16_t sequence, frame_length;
+    uint16_t sequence, frame_length, frame_control, ether_type;
+    uint32_t command_dma,payload_dma,status;
+    uint8_t completed;
     uint8_t rate, station, security, valid;
 } il3945_tx_snapshot_t;
 /* Intel 3945 error table: count followed by seven-word records. */
@@ -40,11 +47,16 @@ typedef struct {
     int read_error;
 } il3945_error_log_t;
 typedef struct {
+    uint16_t endpoint_before,endpoint_after,parent_before,parent_after;
+    uint8_t valid,parent_present;
+} il3945_link_power_t;
+typedef struct {
     iwlegacy_state_t state;
     uint16_t vendor, device, subsystem_device;
     uint8_t pci_bus, pci_slot, pci_function, revision, bg_only, rfkill;
     uint32_t hardware_revision, firmware_version;
     int error;
+    il3945_link_power_t link_power;
     int operation_error; /* Original failure before DMA cleanup. */
     uint8_t stop_failures; /* RX=1, TX=2, global stop/reset=4, PCI master=8. */
     uint8_t init_alive, runtime_alive, boot_stage;
@@ -61,6 +73,12 @@ typedef struct {
     il3945_tx_snapshot_t last_data_tx;
     il3945_error_log_t firmware_error;
     int runtime_error;
+    unsigned connection_phase;
+    uint8_t security_phase,port_authorized,port_active;
+    unsigned tx_history_count;
+    il3945_tx_snapshot_t tx_history[8];
+    il_connection_reject_t connection_reject;
+    uint16_t management_status, association_capability, association_aid;
     uint32_t runtime_irq, runtime_fh;
     uint8_t data_tx_pending, data_tx_poisoned;
     unsigned scan_count;

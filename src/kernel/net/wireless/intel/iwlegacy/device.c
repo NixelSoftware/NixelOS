@@ -126,10 +126,14 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     info->firmware_version = 0; info->scan_count = 0;
     info->scan_completion_length = 0;
     info->scan_expected_channels = info->scan_completed_channels = info->scan_completion_status = 0;
+    info->link_power=(il3945_link_power_t){0};
     info->operation_error = 0; info->stop_failures = 0;
     info->error_reply=(il3945_error_reply_t){0};
     info->last_data_tx=(il3945_tx_snapshot_t){0};
     info->firmware_error=(il3945_error_log_t){0};
+    info->security_phase=info->port_authorized=info->port_active=0; info->tx_history_count=0;
+    info->connection_phase=0; info->connection_reject=IL_REJECT_NONE;
+    info->management_status=info->association_capability=info->association_aid=0;
     info->runtime_error = 0; info->runtime_irq = info->runtime_fh = 0;
     info->data_tx_pending = info->data_tx_poisoned = 0;
     info->init_alive = info->runtime_alive = info->boot_stage = 0;
@@ -174,7 +178,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     }
     uint32_t tx_buffer = 0;
     if (connect) {
-        blocks[count] = allocate(PAGE_SIZE);
+        blocks[count] = allocate(IL3945_TX_STORAGE_BYTES);
         if (!blocks[count].address) goto free_blocks;
         tx_buffer = blocks[count++].address;
     }
@@ -217,7 +221,8 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     write_reg(io.context,CSR_INT_MASK,0);
     int touched_dma = 0;
     uint8_t power_flags = 0;
-    result = awake_flags(dev,&power_flags);
+    result = il3945_disable_link_power(dev,&info->link_power);
+    if (!result) result = awake_flags(dev,&power_flags);
     if (!result) result = il3945_apm_start(&io);
     if (!result) result = nic_config(&io,info);
     if (!result) result = il3945_rx_start(&io,&queue);
@@ -240,10 +245,11 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                 station.error_log_base = alive.error_log;
                 result = il3945_command_prepare(&station.commands,(void*)(unsigned long)rings[4],
                     (uint8_t*)(unsigned long)command_buffer,command_buffer);
-                if (!result) result = il3945_tx_prepare(&station.tx,(void*)(unsigned long)rings[0],
-                    (uint8_t*)(unsigned long)tx_buffer,tx_buffer);
+                if (!result) result = il3945_tx_prepare(&station.tx,(void*)(unsigned long)rings[IL3945_TX_QUEUE],
+                    (uint8_t*)(unsigned long)tx_buffer,tx_buffer,IL3945_TX_STORAGE_BYTES);
                 if (!result) result = il3945_station_connect(&station,&info->eeprom,connect->ap,
                     connect->password,connect->password_length,connect->entropy,connect->entropy_context);
+                iwlegacy_get_runtime_status(info);
                 command_snapshot(info,&station.commands);
                 if (!result) {
                     for (unsigned i = 0; i < count; i++) retained[i] = blocks[i];
@@ -362,6 +368,16 @@ void iwlegacy_get_diagnostics(net_diagnostics_t* out) { if(out) *out=station.dia
 
 void iwlegacy_get_runtime_status(iwlegacy_info_t* info) {
     if (!info) return;
+    info->security_phase=station.failure_security_phase;
+    info->port_authorized=station.failure_authorized; info->port_active=station.failure_active;
+    info->tx_history_count=station.tx_history_count;
+    for(unsigned i=0;i<station.tx_history_count;i++)
+        info->tx_history[i]=station.tx_history[(station.tx_history_next+8-station.tx_history_count+i)&7];
+    info->connection_phase=station.failure_phase;
+    info->connection_reject=station.connection_reject;
+    info->management_status=station.management_status;
+    info->association_capability=station.association_capability;
+    info->association_aid=station.association_aid;
     info->error_reply=station.error_reply;
     info->last_data_tx=station.last_data_tx.valid ? station.last_data_tx : station.tx.submitted;
     info->firmware_error=station.firmware_error;

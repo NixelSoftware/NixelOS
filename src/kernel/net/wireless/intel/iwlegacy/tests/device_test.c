@@ -3,11 +3,12 @@
 #undef main
 #include "../device.c"
 
-static uint8_t pool[2 * 1024 * 1024] __attribute__((aligned(4096)));
+static uint8_t pool[4 * 1024 * 1024] __attribute__((aligned(4096)));
 static uint8_t used[sizeof(pool) / PAGE_SIZE];
-static unsigned allocations, fail_allocation, files;
+static unsigned allocations, fail_allocation, files, last_allocation_pages;
 static int file_mode;
 uint32_t paging_alloc_contiguous(uint32_t pages) {
+    last_allocation_pages=pages;
     if (++allocations == fail_allocation) return 0;
     unsigned run = 0;
     for (unsigned i = 0; i < sizeof(used); i++) {
@@ -63,6 +64,21 @@ int main(void) {
     assert(awake_flags(devices + 1,&flags) == IL_OK && flags == 0);
     link_control = 0xffff;
     assert(awake_flags(devices + 1,&flags) == IL_ACCESS);
+    info = device_setup();
+    devices[0].class_code=6; devices[0].subclass=4; bridge_buses=3u<<8;
+    link_control=0x01c3; parent_link_control=0x0143;
+    assert(!il3945_disable_link_power(devices+1,&info.link_power));
+    assert(link_control==0x00c0 && parent_link_control==0x0040);
+    assert(info.link_power.valid && info.link_power.parent_present);
+    assert(info.link_power.endpoint_before==0x01c3 && info.link_power.endpoint_after==0x00c0);
+    info = device_setup();
+    devices[0].class_code=6; devices[0].subclass=4; bridge_buses=4u<<8;
+    link_control=parent_link_control=0x0103;
+    assert(!il3945_disable_link_power(devices+1,&info.link_power));
+    assert(!link_control && parent_link_control==0x0103 && !info.link_power.parent_present);
+    info = device_setup(); link_control=0x0103; link_write_blocked=1;
+    assert(il3945_disable_link_power(devices+1,&info.link_power)==IL_ACCESS);
+    assert(link_control==0x0103 && !(command&PCI_COMMAND_MASTER));
     info = device_setup(); map_bad = 1;
     assert(iwlegacy_firmware_check(&info) == IL_ACCESS && !pinned() && command == 1);
     info = device_setup(); file_mode = 0;
@@ -79,6 +95,10 @@ int main(void) {
     info = device_setup(); fail_allocation = 9;
     il_scan_results_t found;
     assert(iwlegacy_scan(&info,&found) == IL_NOMEM && !pinned() && !bar_probes && !found.count);
+    info = device_setup(); fail_allocation = 10;
+    il_network_t ap={0};
+    assert(iwlegacy_connect(&info,&ap,0,0,0,0) == IL_NOMEM && !pinned() && !bar_probes);
+    assert(last_allocation_pages == IL3945_TX_STORAGE_BYTES / PAGE_SIZE);
     info = device_setup(); command |= PCI_COMMAND_MASTER;
     assert(iwlegacy_firmware_check(&info) == IL_TIMEOUT && !pinned() && bar_probes == 1 && command == 1);
     info = device_setup(); registers[CSR_GP_CNTRL/4] = 0;
@@ -97,6 +117,11 @@ int main(void) {
     assert(primary == IL_ACCESS && !pinned());
     assert(!quarantine_count && info.operation_error == IL_ACCESS && retry_timeout == 0);
     assert(info.stop_failures == 3 && !info.init_alive && !info.runtime_alive);
+    info = device_setup(); acknowledge_stop = 1;
+    registers[CSR_GPIO_IN/4] = CSR_GPIO_IN_VAL_VMAIN_PWR_SRC;
+    registers[CSR_GP_CNTRL/4] = CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY | CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW;
+    assert(iwlegacy_connect(&info,&ap,0,0,0,0) == IL_ACCESS && !pinned());
+    assert(allocations == 10 && last_allocation_pages == IL3945_TX_STORAGE_BYTES / PAGE_SIZE);
     /* Clock-ready fixture reaches DMA activation. Missing idle acknowledgments
      * force quarantine, even though PCI bus mastering can be disabled. */
     info = device_setup();

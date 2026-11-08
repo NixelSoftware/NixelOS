@@ -74,12 +74,18 @@ first, so an active data interface is never reset by discovery.
 
 ## Infrastructure station path
 
-`tx.c` submits management/data C_TX on queue 0 using separate, aligned command
-and MPDU-payload transfer buffers. It matches completions by sequence, preserves
+`tx.c` submits management/data C_TX on best-effort queue 2 using separate, aligned command
+and MPDU-payload transfer buffers. Each of the 256 descriptors has a dedicated
+4 KiB command/payload slot (1 MiB total), so submitting another frame does not
+overwrite storage referenced by earlier descriptors. Slots are reused only
+when the producer wraps after matched completions. The full allocation stays
+pinned through acknowledged DMA shutdown or quarantine. This replaces the
+previous single shared TX buffer as an experimental repair for runtime stalls.
+It matches completions by sequence, preserves
 software data sequence numbers, wraps the TFD ring, and never recycles an
 unacknowledged DMA allocation after timeout.
 
-`station.c` configures awake power mode, legacy EDCA, RXON, AP/broadcast stations,
+The station modules configure awake power mode, legacy contention, RXON, AP/broadcast stations,
 control/data rate fallback tables and EEPROM-calibrated TX power. It performs
 open-system authentication and association with bounded retries and programs
 beacon timing/AID. Scan results preserve supported rates, TSF and the complete
@@ -235,9 +241,8 @@ before DMA shutdown/reset, using the error-log pointer from runtime ALIVE.
 NMI_INTERRUPT, SYSASSERT or FATAL_ERROR), assertion PC/line and link registers.
 Reads are bounded to SRAM, reject invalid counts and avoid reading sleeping
 SRAM. A log-read failure preserves the original operation error. Tests cover
-snapshot retention, invalid pointers/counts and sleeping SRAM; the 30-second
-receive watchdog is separately verified to return IL_TIMEOUT rather than a
-firmware software-error result.
+snapshot retention, invalid pointers/counts and sleeping SRAM; connection monitor separately verifies that failed bounded probes return
+IL_TIMEOUT rather than a firmware software-error result.
 
 A software-error interrupt no longer skips the accompanying N_ERROR notification.
 The fatal path drains only already-completed RX notifications through a handler
@@ -247,9 +252,89 @@ this drain. Before teardown, the driver also snapshots the last data TX command
 metadata and TFD lengths/control. Packet payloads, keys and passwords are not
 included. `wifid-status` shows these separately from the last setup command.
 
-Diagnostics format 3 prints missing error notifications/TX snapshots explicitly
+Diagnostics format 5 prints missing error notifications/TX snapshots explicitly
 as `not captured`, including connection-setup failures without a runtime
 snapshot. TX metadata is saved at submission, independently of DMA-buffer
 contents or teardown. The format marker near the top of wifid-status identifies
 the running diagnostic build; rebuilding kernel.bin alone does not update an
 existing boot image or USB device.
+
+## Station developer map
+
+The public lifecycle API and state live in `station.h`; `station.c` coordinates
+polling, error teardown and disconnect. The `station/` directory contains small
+implementation modules linked by `station/private.h`:
+
+| File | Responsibility |
+| --- | --- |
+| `connect.c` | Authentication/association deadlines and controlled-port opening |
+| `management.c` | Management framing, association responses and beacon updates |
+| `config.c` | Firmware radio commands and live RXON_ASSOC updates |
+| `rates.c` | Validate peer rates and choose the supported legacy TX rate |
+| `failure.c` | Preserve phase, AP status and fault snapshots before teardown |
+| `transport.c` | Bounded polling, TX ownership waits and command submission |
+| `events.c` | Copy borrowed firmware notifications; retain TX status/errors |
+| `rx.c` | Deferred decryption, EAPOL processing and Ethernet delivery |
+| `duplicate.c` | Peer/TID retry sequence history, committed after validation |
+| `tx.c` | Ethernet encapsulation, software encryption and frame submission |
+| `monitor.c` | Separate beacon/data/ACK evidence and bounded null-data probes |
+
+`bss.c` parses bounded radio IEs transactionally and computes ERP-derived RXON
+flags; `rsn.c` validates supported security advertisements. Both scanning and
+association use these helpers. The transport's root `tx.c` remains responsible
+for TFD layout and pinned per-descriptor DMA slots.
+
+This station advertises legacy rates and no WMM IE. C_QOS_PARAM therefore keeps
+UPDATE_EDCA disabled; legacy CWmin is 31 for 11b-only peers and 15 for OFDM-capable
+peers. The single-inflight transport uses mac80211's best-effort queue index 2
+for both data and management, rather than implementing multiple traffic queues.
+Firmware EDCA category ordering is distinct from host queue numbering.
+
+Association responses must supply valid Supported Rates. Response capability
+bits configure radio behavior; omitted Privacy/ESS bits do not reject a successful
+response or change the selected security. Reserved upper AID bits are ignored.
+An optional RSN must retain supported CCMP/PSK security. ERP
+Barker-preamble and protection bits override beacon capability shortcuts; OFDM
+TX requests CTS/full-TXOP protection when required. Validated beacon changes
+update RXON_ASSOC without retuning or recreating station entries.
+
+Retry duplicates are filtered per TID/non-QoS sequence space. Invalid decrypted
+frames and rejected EAPOL never refresh the data timestamp. Seven missed beacon
+intervals without newer data/ACK evidence, or 30 seconds without data/ACKs,
+start null-data probing. Two failed probes 500 ms apart close the connection;
+a successful acknowledged unicast TX restores reachability. Power saving stays
+disabled. These changes do not establish a repair of the recorded firmware NMI.
+
+`make test-iwlegacy` includes BSS parsing and station protocol integration tests,
+in addition to firmware, DMA lifecycle, scanning, calibration and WPA2 tests.
+Run `make test-wifi-crypto test-wifi-network test-wifi-status` for adjacent layers.
+
+Connection-setup failures retain the same IRQ, TX and firmware-log evidence as
+runtime failures. Diagnostics format 5 also reports the saved connection phase,
+AP authentication/association status, raw response capability/AID, and a host
+rejection reason. Error -5 alone does not identify a firmware assertion: it may
+also indicate AP rejection or invalid association parameters. Snapshots are
+captured before clearing the station state or stopping DMA.
+
+`pci_power.c` applies the Linux 3945 probe workaround before enabling DMA:
+clear PCIe L0s/L1 ASPM and clock-PM (Link Control bits 0, 1 and 8) on the
+adapter and its immediate upstream PCIe bridge. Other Link Control bits and
+unrelated ports are preserved. Readback failure aborts startup before posting
+DMA. These link settings stay disabled across disconnects, matching the native
+always-awake policy. Status includes before/after values for hardware testing.
+This is distinct from clearing firmware allow-sleep and internal NIC L1 flags.
+
+Association RX processing yields immediately after a successful AssocResp. It
+retains later frames in the deferred queue until timing, associated RXON, TX
+power and rates are committed. This prevents a coalesced EAPOL M1 from sending
+M2 before associated radio configuration. The integration peer tests this early
+M1 ordering; the previous implementation fails that test before the repair.
+
+Diagnostics format 5 separates the saved WPA phase (0 waiting for M1, 1 waiting
+for M3, 2 keys accepted), security authorization and actual data-port opening.
+The generic station phase 5 alone covers both securing and connected operation.
+It also retains the last eight submissions/completions chronologically, with
+EtherType and raw TX status, plus last-TX frame control and DMA addresses. Type
+0x888e identifies EAPOL, 0x0806 ARP and 0x0800 IPv4. No packet payload, key, nonce
+or credential is retained in this history. A rejection reason of "no host/AP
+rejection" does not classify the operation error as a timeout.

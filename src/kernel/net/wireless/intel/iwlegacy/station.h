@@ -5,6 +5,10 @@
 #include "tx.h"
 #include "../../security/handshake.h"
 #include "../../../../hal/net_types.h"
+typedef enum {
+    IL_STATION_IDLE, IL_STATION_AUTH_WAIT, IL_STATION_AUTHENTICATED,
+    IL_STATION_ASSOC_WAIT, IL_STATION_ASSOCIATED, IL_STATION_SECURING
+} il_station_phase_t;
 typedef struct {
     il_io_t io;
     il_rx_queue_t rx;
@@ -20,13 +24,23 @@ typedef struct {
     uint8_t frames[8][2304];
     uint16_t lengths[8];
     unsigned head, count, sequence, now_ms, tx_started, last_rx, thermal_ms;
-    unsigned phase;
+    il_station_phase_t phase;
+    unsigned last_beacon,last_ack,probe_at,probe_attempts;
+    uint16_t rx_sequence[17];
+    uint32_t rx_sequence_valid;
+    uint8_t probing,probe_pending,bss_dirty;
     int error, temperature;
     uint32_t runtime_irq, runtime_fh, error_log_base;
     il3945_error_reply_t error_reply;
     il3945_tx_snapshot_t last_data_tx;
     il3945_error_log_t firmware_error;
     int runtime_error;
+    unsigned failure_phase;
+    uint8_t failure_security_phase,failure_authorized,failure_active;
+    il3945_tx_snapshot_t tx_history[8];
+    unsigned tx_history_next,tx_history_count;
+    il_connection_reject_t connection_reject;
+    uint16_t management_status, association_capability, association_aid;
     uint16_t aid;
     uint8_t awake_flags; /* PCI_PM (bit 3), derived from PCIe Link Control. */
     uint8_t active, processing, tx_plcp, fallback, ofdm_basic, cck_basic, management[512];
