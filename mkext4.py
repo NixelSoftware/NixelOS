@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 from tools.disk_layout import (
-    SECTOR_SIZE, FILESYSTEM_LBA, KERNEL_LBA, STAGE2_LBA, STAGE2_SECTORS, validate_kernel,
+    SECTOR_SIZE, FILESYSTEM_LBA, STAGE2_LBA, STAGE2_SECTORS, validate_kernel,
 )
 
 TOTAL_SIZE_MB = 50
@@ -77,18 +77,18 @@ def main(output):
     if missing:
         print("[INFO] " + ", ".join(missing) +
               " not found; using the built-in ext4 writer.")
+    kernel = Path("src/kernel/kernel.bin")
+    if kernel.exists():
+        validate_kernel(kernel.stat().st_size)
     disk = bytearray(TOTAL_SECTORS * SECTOR_SIZE)
     for name, lba, exact in (("src/boot.bin", 0, 512),
-                             ("src/boot_stage2.bin", STAGE2_LBA, STAGE2_SECTORS * 512),
-                             ("src/kernel/kernel.bin", KERNEL_LBA, None)):
+                             ("src/boot_stage2.bin", STAGE2_LBA, STAGE2_SECTORS * 512)):
         path = Path(name)
         if not path.exists():
             continue
         data = path.read_bytes()
         if exact is not None and len(data) != exact:
             raise ValueError(f"{path} must be exactly {exact} bytes")
-        if exact is None:
-            validate_kernel(len(data))
         disk[lba * 512:lba * 512 + len(data)] = data
 
     # Unique MBR identity, also used for BIOS-to-ATA boot-drive discovery.
@@ -125,6 +125,9 @@ def main(output):
         for name, (_, mode) in directories.items():
             (root / name).mkdir(mode=mode)
             (root / name).chmod(mode)
+        if kernel.exists():
+            shutil.copyfile(kernel, root / "boot/kernel.bin")
+            (root / "boot/kernel.bin").chmod(0o644)
         stage_firmware(root, directories)
         files = [Path(name) for name in BUNDLED_FILES if Path(name).is_file()]
         files += sorted(p for p in Path("resources").rglob("*")

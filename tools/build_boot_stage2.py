@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import subprocess
 
-from disk_layout import FILESYSTEM_LBA, KERNEL_LBA, MAX_KERNEL_BYTES, SECTOR_SIZE, validate_kernel
+from disk_layout import FILESYSTEM_LBA, MAX_KERNEL_BYTES, validate_kernel
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -23,9 +23,7 @@ def main():
     print(f"Kernel image: {size} bytes; filesystem starts at LBA {FILESYSTEM_LBA}")
     subprocess.run([
         args.nasm, "-f", "bin",
-        f"-DKERNEL_SECTORS={(size + SECTOR_SIZE - 1) // SECTOR_SIZE}",
-        f"-DKERNEL_SIZE_BYTES={size}", f"-DMAX_KERNEL_BYTES={MAX_KERNEL_BYTES}",
-        f"-DKERNEL_LBA={KERNEL_LBA}", f"-DFILESYSTEM_LBA={FILESYSTEM_LBA}",
+        f"-DMAX_KERNEL_BYTES={MAX_KERNEL_BYTES}",
         str(ROOT / "src/boot/boot_stage2.asm"), "-o", str(args.output),
     ], check=True)
 
