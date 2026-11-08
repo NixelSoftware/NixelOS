@@ -195,3 +195,9 @@ build uses the same generator.
 Nixel includes a freestanding TLS 1.2/1.3 client library with a user-space TCP
 adapter. Build it with `make tls` and run interoperability checks with
 `make test-tls`. See [TLS integration and platform requirements](src/system/libraries/tls/README.md).
+
+Build a headless image with `python3 build.py -nogui` (or `make NOGUI=1`).
+Use `python3 build.py` or `make NOGUI=0` to restore GUI packaging. The headless
+image omits both component manifests and boots to text login and systemshell.
+Graphics code remains linked into the kernel; the text console uses the
+framebuffer. This option does not configure a serial-only console.

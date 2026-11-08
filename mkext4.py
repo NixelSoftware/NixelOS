@@ -72,7 +72,7 @@ def stage_firmware(root, directories, source=Path("firmware")):
             raise ValueError(f"Firmware must be a regular file or directory: {path}")
 
 
-def main(output):
+def main(output, nogui=False):
     missing = [tool for tool in ("mke2fs", "debugfs") if not shutil.which(tool)]
     if missing:
         print("[INFO] " + ", ".join(missing) +
@@ -109,7 +109,7 @@ def main(output):
             "srv": (0, 0o755), "etc": (0, 0o755), "home": (0, 0o755),
             "home/user": (1000, 0o750), "root": (0, 0o700),
             "usr": (0, 0o755), "usr/bin": (0, 0o755), "usr/sbin": (0, 0o755),
-            "usr/lib": (0, 0o755), "usr/local": (0, 0o755),
+            "usr/lib": (0, 0o755), "usr/lib/nixel": (0, 0o755), "usr/local": (0, 0o755),
             "usr/local/bin": (0, 0o755), "usr/share": (0, 0o755),
             "usr/share/nixel": (0, 0o755), "usr/share/nixel/audio": (0, 0o755),
             "usr/share/nixel/images": (0, 0o755), "usr/share/games": (0, 0o755),
@@ -147,6 +147,9 @@ def main(output):
             names.add(destination.lower())
             shutil.copyfile(path, root / destination)
             (root / destination).chmod(0o755 if suffix == ".bin" else 0o644)
+        if not nogui:
+            (root / "usr/lib/nixel/wm.component").write_text("nixel-wm-v1\n")
+            (root / "usr/lib/nixel/dm.component").write_text("nixel-dm-v1\n")
         (root / "etc/time.cfg").write_bytes(
             #struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
             struct.pack("<Iii128s", 0x31504e54, 1, 0, b"ntp.nixelos.org"))
@@ -189,6 +192,12 @@ def main(output):
 
 if __name__ == "__main__":
     try:
-        main(sys.argv[1] if len(sys.argv) > 1 else "disk.img")
+        import argparse
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("output", nargs="?", default="disk.img")
+        parser.add_argument("-nogui", "--nogui", action="store_true",
+                            help="omit WM and DM component manifests")
+        args = parser.parse_args()
+        main(args.output, nogui=args.nogui)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         sys.exit(f"Image creation failed: {error}")

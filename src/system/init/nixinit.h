@@ -15,6 +15,9 @@ typedef struct {
     void (*finish_boot)(void);
 } nixinit_services_t;
 
+int nixinit_has_wm(void);
+void nixinit_session_task(void* arg);
+
 void nixinit_start(const nixinit_services_t* services);
 
 #endif

@@ -36,6 +36,7 @@ else
 QEMU_OPL_FLAGS =
 endif
 
+NOGUI ?= 0
 ENABLE_OOBE ?= 0
 DEBUG_SUBSYSTEMS ?= 0
 # Suppress audio HAL, driver, and audio syscall debug logs.
@@ -88,6 +89,10 @@ ifneq ($(filter-out 0 1 2 3,$(STARTUP_PROFILE)),)
 endif
 ifneq ($(filter-out 0 1,$(ENABLE_OOBE)),)
   $(error ENABLE_OOBE must be 0 or 1)
+endif
+
+ifneq ($(filter-out 0 1,$(NOGUI)),)
+  $(error NOGUI must be 0 or 1)
 endif
 
 ifeq ($(ENABLE_OOBE),1)
@@ -319,8 +324,15 @@ FIRMWARE_INPUTS := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.joi
 
 DOOM_WADS := $(wildcard doom1.wad doom.wad doom2.wad)
 
-os.img: firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
-	$(PYTHON) mkext4.py os.img.new
+src/kernel/main.o src/system/init/main.o: src/system/init/nixinit.h
+
+# Rebuild the image when switching between GUI and text-only packaging.
+.PHONY: FORCE_IMAGE_CONFIG
+.gui-config: FORCE_IMAGE_CONFIG
+	$(PYTHON) -c "from pathlib import Path; p=Path('.gui-config'); value='$(NOGUI)'; p.write_text(value) if not p.exists() or p.read_text()!=value else None"
+
+os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
+	$(PYTHON) mkext4.py os.img.new $(if $(filter 1,$(NOGUI)),-nogui,)
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build
 

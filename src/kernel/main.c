@@ -210,6 +210,18 @@ static void term_print(const char* text) {
 
 void kernel_user_write(const char* text, uint32_t length) {
     MUTEX_GUARD(kernel_mutex);
+    if (!nixinit_has_wm() && current_task && current_task->shell_output) {
+        char chunk[257];
+        while (length) {
+            uint32_t count = length < 256 ? length : 256;
+            for (uint32_t i = 0; i < count; i++) chunk[i] = text[i];
+            chunk[count] = 0;
+            current_task->shell_output(chunk);
+            text += count;
+            length -= count;
+        }
+        return;
+    }
     terminal_write(text, length);
     needs_redraw = 1;
 }
@@ -325,7 +337,8 @@ static void kernel_initialize_system_apps(void) {
     debug_subsystem_print("\n[INIT] kernel API put_pixel field: ");
     debug_subsystem_hex((uint32_t)kernel_api.graphics.put_pixel);
     debug_subsystem_print("\n");
-    system_graphics_initialize(&kernel_api, kernel_mark_redraw);
+    if (nixinit_has_wm()) system_graphics_initialize(&kernel_api, kernel_mark_redraw);
+    else shell_initialize(&kernel_api);
 }
 
 static void kernel_initialize_input(void) {
@@ -349,7 +362,7 @@ static void kernel_finish_boot(void) {
     debug_subsystem_hex((uint32_t)display_get_backbuffer());
     debug_subsystem_print("\n");
     debug_print("[INIT] Drawing to display...\n");
-    wm_render_screen();
+    if (nixinit_has_wm()) wm_render_screen();
     debug_subsystem_print("[INIT] Display drawing returned.\n");
     needs_redraw = 0;
     debug_print("[INIT] Enable interrupt...\n");
@@ -454,7 +467,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
     char oobe_check[1];
-    if (fs_read_file("/var/lib/nixel/oobe.done", (uint8_t*)oobe_check, 1) < 0) {
+    if (nixinit_has_wm() && fs_read_file("/var/lib/nixel/oobe.done", (uint8_t*)oobe_check, 1) < 0) {
         debug_print("[OOBE] First boot detected. Launching setup wizard...\n");
         api_launch_app("oobe.bin", "");
     }
@@ -478,7 +491,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     }
     scheduler_start();
     debug_print("[INIT] EEVDF scheduler started: 1000 Hz, independent services\n");
-    int login_pid = task_create(login_screen_task, 0, "login");
+    int login_pid = task_create(nixinit_session_task, 0, "login");
     if (login_pid < 0) __builtin_trap();
     task_wait(login_pid);
     for (;;) task_sleep_ms(1000);
