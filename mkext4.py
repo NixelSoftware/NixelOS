@@ -27,7 +27,7 @@ BUNDLED_FILES = [
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
     "syndig.bin", "qksrv.bin", "resources/quark.cfg",
-    "qkftp.bin", "irc.bin", "lspci.bin", "demo3d.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
+    "qkftp.bin", "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
     "resources/default_user.bmp", "telnetd.bin", "taskmgr.bin", "tunnel.bin"
 ]
 

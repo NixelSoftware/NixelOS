@@ -13,17 +13,11 @@ QEMU_DRIVE ?= -drive file=os.img,format=raw,index=0,media=disk
 QEMU_ACCEL ?= auto
 QEMU_NETCARD ?= e1000
 QEMU_MEMORY ?= 512M
-# The browser uses RDRAND for TLS entropy; expose it in the default VM CPU.
 QEMU_CPU ?= max
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000,hostfwd=tcp::2323-:2323
 QEMU_DISPLAY ?= sdl,gl=off
-# SDL can otherwise create an OpenGL renderer even with QEMU GL disabled.
-# Use software rendering so startup also works on hosts with broken GLX.
 export SDL_RENDER_DRIVER ?= software
-# SDL's X11 initialization may probe GLX even for a software renderer.
-# Bypass that probe on hosts where GLX context creation raises an X error.
-export SDL_VIDEO_X11_FORCE_EGL ?= 1
 QEMU_VGA ?= virtio
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
 QEMU_AUDIO_DRIVER ?= sdl
@@ -168,7 +162,7 @@ STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_t
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
                  lspci demo3d irc telnetd taskmgr tunnel
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
-APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin
+APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin
 
 .PHONY: all run clean clean-build FORCE_VERSION test-virgl
 
@@ -341,7 +335,7 @@ run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
@@ -583,3 +577,26 @@ test-wifi-network:
 	/tmp/nixel-wifi-delivery
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror src/kernel/net/tests/dhcp_options_test.c -o /tmp/nixel-dhcp-options
 	/tmp/nixel-dhcp-options
+
+MAIL_OBJ := src/apps/mail/entry.o src/apps/mail/main.o src/apps/mail/mail.o src/apps/mail/render.o \
+ $(NIXPLORER_DIR)/engine/platform/tls.o $(NIXPLORER_DIR)/engine/platform/tls_heap.o \
+ $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/engine/parser/html.o \
+ $(NIXPLORER_DIR)/engine/dom/document.o $(NIXPLORER_DIR)/engine/font/font.o
+src/apps/mail/main.o: src/apps/mail/mail.h src/apps/mail/render.h $(BROWSER_HEADERS) src/system/user/sys_api.h src/system/graphics/wm/theme.h
+src/apps/mail/render.o: src/apps/mail/render.h src/apps/mail/mail.h $(BROWSER_HEADERS)
+src/apps/mail/mail.o: src/apps/mail/mail.h
+mail.bin: Makefile $(NIXPLORER_DIR)/browser/app.ld $(MAIL_OBJ) src/system/libraries/tls/libnixeltls.a
+	$(LD) $(LDFLAGS) --omagic -T $(NIXPLORER_DIR)/browser/app.ld $(filter %.o,$^) src/system/libraries/tls/libnixeltls.a -o src/apps/mail/mail.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/mail/mail.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('src/apps/mail/mail.tmp').unlink(missing_ok=True)"
+.PHONY: test-mail
+test-mail:
+	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/tests/test_mail.c -o /tmp/nixel-test-mail
+	/tmp/nixel-test-mail
+	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/render.c $(NIXPLORER_DIR)/engine/dom/document.c $(NIXPLORER_DIR)/engine/parser/html.c $(NIXPLORER_DIR)/engine/font/font.c src/apps/mail/tests/test_render.c -o /tmp/nixel-test-mail-render
+	/tmp/nixel-test-mail-render
+
+.PHONY: test-mail-gui
+test-mail-gui:
+	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/render.c $(NIXPLORER_DIR)/engine/dom/document.c $(NIXPLORER_DIR)/engine/parser/html.c $(NIXPLORER_DIR)/engine/font/font.c src/apps/mail/tests/test_gui.c -o /tmp/nixel-test-mail-gui
+	/tmp/nixel-test-mail-gui
