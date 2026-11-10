@@ -28,4 +28,4 @@ __attribute__((weak)) int memcmp(const void* left,const void* right,uint32_t len
         if(a[i]!=b[i]) return (int)a[i]-(int)b[i];
     }
     return 0;
-}
+}//
