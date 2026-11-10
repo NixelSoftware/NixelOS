@@ -148,8 +148,8 @@ def main(output, nogui=False):
             shutil.copyfile(path, root / destination)
             (root / destination).chmod(0o755 if suffix == ".bin" else 0o644)
         if not nogui:
-            (root / "usr/lib/nixel/wm.component").write_text("nixel-wm-v1\n")
-            (root / "usr/lib/nixel/dm.component").write_text("nixel-dm-v1\n")
+            (root / "usr/lib/nixel/wm.component").write_bytes(b"nixel-wm-v1\n")
+            (root / "usr/lib/nixel/dm.component").write_bytes(b"nixel-dm-v1\n")
         (root / "etc/time.cfg").write_bytes(
             #struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
             struct.pack("<Iii128s", 0x31504e54, 1, 0, b"ntp.nixelos.org"))
