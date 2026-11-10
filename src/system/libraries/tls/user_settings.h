@@ -29,6 +29,8 @@ int nixel_tls_seed(unsigned char *, unsigned int);
 #define WC_RSA_PSS
 #define WC_RSA_BLINDING
 #define WOLFSSL_SP_MATH_ALL
+/* Public CA chains, including ISRG Root X1 cross-signatures, use RSA-4096. */
+#define WOLFSSL_SP_4096
 #define WOLFSSL_SP_SMALL
 #define TFM_TIMING_RESISTANT
 #define HAVE_AESGCM

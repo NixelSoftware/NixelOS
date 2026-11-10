@@ -36,16 +36,16 @@ with tempfile.TemporaryDirectory(prefix='nixel-tls-') as tmp:
         objects.append(str(obj))
     client = tmp/'client'
     run(CC + [str(BASE/'tests/client.c'), *objects, '-o', str(client)])
-    for name in ('server', 'other'):
-        run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+    for name in ('server', 'other', 'server4096'):
+        run(['openssl', 'req', '-x509', '-newkey', 'rsa:4096' if name == 'server4096' else 'rsa:2048', '-nodes', '-days', '2',
              '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost',
              '-keyout', str(tmp/f'{name}.key'), '-out', str(tmp/f'{name}.pem')],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def case(version, hostname='localhost', ca='server', platform_mode=0, expected=0):
+    def case(version, hostname='localhost', ca='server', platform_mode=0, expected=0, certificate='server'):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = context.maximum_version = version
-        context.load_cert_chain(tmp/'server.pem', tmp/'server.key')
+        context.load_cert_chain(tmp/f'{certificate}.pem', tmp/f'{certificate}.key')
         left, right = socket.socketpair()
         failures = []
         def server():
@@ -81,6 +81,8 @@ with tempfile.TemporaryDirectory(prefix='nixel-tls-') as tmp:
 
     case(ssl.TLSVersion.TLSv1_2)
     case(ssl.TLSVersion.TLSv1_3)
+    case(ssl.TLSVersion.TLSv1_2, ca='server4096', certificate='server4096')
+    case(ssl.TLSVersion.TLSv1_3, ca='server4096', certificate='server4096')
     case(ssl.TLSVersion.TLSv1_3, hostname='wrong.example', expected=2)
     case(ssl.TLSVersion.TLSv1_3, ca='other', expected=2)
     case(ssl.TLSVersion.TLSv1_3, platform_mode=1, expected=2)

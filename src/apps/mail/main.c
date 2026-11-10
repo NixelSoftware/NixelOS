@@ -25,8 +25,8 @@ enum { HOST, PORT, SMTP_HOST, SMTP_PORT, USERNAME, PASSWORD, SENDER,
        RECIPIENT, SUBJECT, DRAFT, FIELD_COUNT };
 typedef struct { char *text; unsigned cap; int x,y,w,h; const char *label; } field;
 typedef struct { unsigned number; char from[128],subject[201]; } message;
-static unsigned window,socket_handle,shifts,cursor,view_scroll,draft_scroll;
-static int running=1,dirty=1,extended,caps,cancelled,busy,page=ACCOUNT,focus=-1;
+static unsigned window,dialog_window,draw_window,socket_handle,shifts,cursor,view_scroll,draft_scroll;
+static int running=1,dirty=1,extended,caps,cancelled,busy,page=INBOX,focus=-1;
 static unsigned messages,inbox_count,selected=~0u;
 static int pop,connected;
 static nixel_tls_client *tls;
@@ -35,15 +35,32 @@ static unsigned resolver_handle,work_started,progress_tick,progress_frame;
 static const char *failure_reason;
 static void click(int x,int y);
 static void key(unsigned code);
+static void set_focus(int index);
+static void close_dialog(void);
+static int open_dialog(int kind);
+static void poll_events(void);
 static int inside(int x,int y,int left,int top,int w,int h);
 /* The WM already detects click edges and queues only button-down events.
  * Releases are not delivered, so no app-side button latch may be kept. */
 static void handle_mouse_event(const user_window_event_t *event) {
     if(!(event->buttons&1))return;
-    if(busy&&inside(event->x,event->y,630,30,104,30)){cancelled=1;return;}
     click(event->x,event->y);
 }
 static int failed(const char *reason){if(!failure_reason)failure_reason=reason;return 0;}
+static int tls_failed(const char *phase,const nixel_tls_client *client) {
+    static char reason[160];
+    char number[12];unsigned length=0;
+    int error=nixel_tls_last_error(client);
+    unsigned value=error<0?0u-(unsigned)error:(unsigned)error;
+    do {number[length++]=(char)('0'+value%10);value/=10;}while(value);
+    mail_copy(reason,sizeof(reason),phase);
+    unsigned used=mail_length(reason);
+    mail_copy(reason+used,sizeof(reason)-used," (TLS error ");used=mail_length(reason);
+    if(error<0)reason[used++]='-';
+    while(length&&used+2<sizeof(reason))reason[used++]=number[--length];
+    reason[used++]=')';reason[used]='\0';
+    return failed(reason);
+}
 /* DNS has no cancellation syscall. Drain abandoned lookups from the main loop. */
 static void drain_resolver(void){if(resolver_handle){unsigned ignored;if(sys_dns_poll(resolver_handle,&ignored)!=0)resolver_handle=0;}}
 
@@ -70,7 +87,7 @@ static field fields[FIELD_COUNT]={
 static void draw(unsigned op,int x,int y,int w,int h,const char *s,unsigned color) {
     user_window_draw_t d={0};
     d.operation=op;d.x=x;d.y=y;d.width=w;d.height=h;d.text=s;d.color=color;
-    sys_window_draw(window,&d);
+    sys_window_draw(draw_window,&d);
 }
 static void fill(int x,int y,int w,int h,unsigned color){draw(USER_WINDOW_DRAW_FILL,x,y,w,h,0,color);}
 static void text(int x,int y,const char *s,unsigned color){draw(USER_WINDOW_DRAW_TEXT,x,y,0,0,s,color);}
@@ -125,25 +142,58 @@ static void draw_field(unsigned index) {
     text(f->x+8,f->y+10,visible,COLOR_TEXT_PRIMARY);
     if(focus==(int)index)fill(f->x+8+(cursor-offset)*8,f->y+24,8,2,COLOR_ACCENT);
 }
+static void draw_inbox(void) {
+    button(24,88,110,"Refresh",0);button(144,88,116,"Older",0);button(270,88,116,"Newer",0);
+    fill(250,132,1,366,COLOR_SURFACE_BORDER);
+    if(!inbox_count)text(28,154,"Inbox is empty.",COLOR_TEXT_MUTED);
+    for(unsigned i=0;i<inbox_count;i++) {
+        int y=136+i*35;
+        if(selected==i)fill(20,y,218,34,COLOR_TASKBAR_ITEM_ACT);
+        clipped(28,y+5,inbox[i].subject,26,COLOR_TEXT_PRIMARY);
+        clipped(28,y+21,inbox[i].from,26,COLOR_TEXT_MUTED);
+    }
+    if(selected==~0u) {
+        text(270,166,"Select a message to read it.",COLOR_TEXT_MUTED);
+    } else {
+        clipped(270,142,message_subject,58,COLOR_ACCENT);
+        clipped(270,164,message_from,58,COLOR_TEXT_PRIMARY);
+        clipped(270,186,message_date,58,COLOR_TEXT_MUTED);
+        fill(270,208,462,1,COLOR_SURFACE_BORDER);
+        for(unsigned i=0;i<VIEW_ROWS&&view_scroll+i<view_count;i++)
+            text(270,220+i*16,view_lines[view_scroll+i],view_colors[view_scroll+i]);
+        button(270,480,90,"Up",0);button(370,480,90,"Down",0);
+    }
+}
 static void redraw(void) {
+    draw_window=window;
     draw(USER_WINDOW_DRAW_BEGIN,0,0,0,0,0,0);
     fill(4,22,WIDTH-8,HEIGHT-26,COLOR_MODERN_BG);
     text(24,39,"Nixel Mail",COLOR_ACCENT);
-    button(180,30,100,"Inbox",page==INBOX);
-    button(290,30,110,"Compose",page==COMPOSE);
-    button(410,30,110,"Account",page==ACCOUNT);
+    text(180,39,"Inbox",COLOR_TEXT_PRIMARY);
+    button(290,30,110,"Compose",0);
+    button(410,30,110,"Settings",0);
     if(busy) {
         static const char *frames[]={"Working .","Working ..","Working ...","Working"};
-        text(540,82,frames[progress_frame%4],COLOR_ACCENT);
+        text(540,39,frames[progress_frame%4],COLOR_ACCENT);
         button(630,30,104,"Cancel",0);
     }
     fill(16,72,728,1,COLOR_SURFACE_BORDER);
+    draw_inbox();
+    fill(16,516,728,1,COLOR_SURFACE_BORDER);
+    clipped(24,525,status,90,COLOR_TEXT_MUTED);
+    sys_window_present(window);
+    if(!dialog_window){dirty=0;return;}
+    draw_window=dialog_window;
+    draw(USER_WINDOW_DRAW_BEGIN,0,0,0,0,0,0);
+    fill(4,22,WIDTH-8,HEIGHT-26,COLOR_MODERN_BG);
+    button(634,30,94,"Close",0);
+    if(busy)button(520,30,104,"Cancel",0);
     if(page==ACCOUNT) {
         text(32,100,"Account settings",COLOR_TEXT_PRIMARY);
         text(32,124,"Incoming mail",COLOR_TEXT_MUTED);
         button(492,105,100,"IMAP",!pop);button(602,105,100,"POP3",pop);
         for(unsigned i=HOST;i<=SENDER;i++){text(fields[i].x,fields[i].y-22,fields[i].label,COLOR_TEXT_MUTED);draw_field(i);}
-        text(32,426,"Account details stay in memory for this session. (until I start saving it)",COLOR_TEXT_MUTED);
+        text(32,426,"Account details stay in memory until Mail is closed.",COLOR_TEXT_MUTED);
         button(32,460,188,"Connect & open inbox",1);
         button(238,460,130,"Disconnect",0);
     } else if(page==COMPOSE) {
@@ -153,46 +203,13 @@ static void redraw(void) {
         text(28,218,"Message",COLOR_TEXT_MUTED);draw_field(DRAFT);
         button(28,460,100,"Send",1);button(140,460,112,"Discard",0);
         text(280,470,"Tab: next field   PgUp/PgDn: scroll body",COLOR_TEXT_MUTED);
-    } else {
-        button(24,88,110,"Refresh",0);button(144,88,116,"Older",0);button(270,88,116,"Newer",0);
-        fill(250,132,1,366,COLOR_SURFACE_BORDER);
-        if(!inbox_count)text(28,154,"Inbox is empty.",COLOR_TEXT_MUTED);
-        for(unsigned i=0;i<inbox_count;i++) {
-            int y=136+i*35;
-            if(selected==i)fill(20,y,218,34,COLOR_TASKBAR_ITEM_ACT);
-            clipped(28,y+5,inbox[i].subject,26,COLOR_TEXT_PRIMARY);
-            clipped(28,y+21,inbox[i].from,26,COLOR_TEXT_MUTED);
-        }
-        if(selected==~0u) {
-            text(270,166,"Select a message to read it.",COLOR_TEXT_MUTED);
-        } else {
-            clipped(270,142,message_subject,58,COLOR_ACCENT);
-            clipped(270,164,message_from,58,COLOR_TEXT_PRIMARY);
-            clipped(270,186,message_date,58,COLOR_TEXT_MUTED);
-            fill(270,208,462,1,COLOR_SURFACE_BORDER);
-            for(unsigned i=0;i<VIEW_ROWS&&view_scroll+i<view_count;i++)
-                text(270,220+i*16,view_lines[view_scroll+i],view_colors[view_scroll+i]);
-            button(270,480,90,"Up",0);button(370,480,90,"Down",0);
-        }
     }
     fill(16,516,728,1,COLOR_SURFACE_BORDER);
     clipped(24,525,status,90,COLOR_TEXT_MUTED);
-    sys_window_present(window);dirty=0;
+    sys_window_present(dialog_window);dirty=0;
 }
-/* Keep navigation, scrolling, cancel and close live during network waits.
- * Form edits and network actions stay locked so TLS retry buffers cannot change. */
 static int pump(void) {
-    user_window_event_t e;
-    for(unsigned i=0;i<32&&sys_window_poll(window,&e)==1;i++) {
-        if(e.type==USER_WINDOW_EVENT_CLOSE){running=0;cancelled=1;}
-        else if(e.type==USER_WINDOW_EVENT_SCANCODE) {
-            if(e.key==1)cancelled=1;
-            else if(e.key==0x49||e.key==0x51)key(e.key);
-        }
-        else if(e.type==USER_WINDOW_EVENT_MOUSE)handle_mouse_event(&e);
-        else if(e.type==USER_WINDOW_EVENT_REDRAW)dirty=1;
-        else if(e.type==USER_WINDOW_EVENT_KEYS_RESET){shifts=0;extended=0;}
-    }
+    poll_events();
     unsigned now=sys_get_ticks();
     if(now-progress_tick>=25){progress_tick=now;progress_frame++;dirty=1;}
     if(now-work_started>=OPERATION_TIMEOUT_TICKS)failed("Operation timed out. Check the server and network, then retry.");
@@ -252,15 +269,17 @@ static int open_connection(const char *server,unsigned number) {
         if(sys_tcp_state(socket_handle)==USER_TCP_CLOSED)return failed("Server refused or closed the TCP connection. Check its port.");
         if(sys_get_ticks()-start>=NETWORK_TIMEOUT_TICKS)return failed("Connection timed out. Check the server address, port and network.");
     }
-    set_status("Verifying TLS certificate and securing connection...");if(!pump())return 0;
+    set_status("Loading trusted TLS certificates...");if(!pump())return 0;
     tls=browser_tls_create(server,&socket_handle);
-    if(!tls)return failed("Could not initialize TLS for this server.");
+    if(!tls)return tls_failed("Could not initialize TLS for this server.",0);
+    set_status("Verifying server TLS certificate and securing connection...");
+    if(!pump())return 0;
     start=sys_get_ticks();
     while((r=nixel_tls_handshake(tls))==NIXEL_TLS_AGAIN) {
         if(!pump())return 0;
         if(sys_get_ticks()-start>=NETWORK_TIMEOUT_TICKS)return failed("TLS handshake timed out. Confirm the server uses implicit TLS.");
     }
-    if(r!=1)return failed("TLS verification failed. Check server name, certificate, clock and port.");
+    if(r!=1)return tls_failed("TLS verification failed. Check server name, clock and port.",tls);
     io.context=0;io.read=transport_read;io.write=transport_write;io.pos=io.used=0;return 1;
 }
 static void failure(void) {
@@ -276,7 +295,7 @@ static void end_work(int ok){if(!ok)failure();busy=0;shifts=0;extended=0;dirty=1
 static int connect_account(void) {
     unsigned port;
     if(!mail_number(port_text,&port)||!port||port>65535||!*host||!*username||!*password){
-        page=ACCOUNT;return failed("Enter an incoming server, valid port, username and password.");
+        open_dialog(ACCOUNT);return failed("Enter an incoming server, valid port, username and password.");
     }
     if(!open_connection(host,port))return 0;
     set_status("Authenticating account...");if(!pump())return 0;
@@ -286,12 +305,13 @@ static int connect_account(void) {
 }
 static unsigned inbox_end; /* Sequence number of the newest item on this page. */
 static int fetch_inbox(unsigned end) {
+    if(connected&&sys_tcp_state(socket_handle)!=USER_TCP_ESTABLISHED)close_connection();
     if(!connected&&!connect_account())return 0;
     set_status("Authenticated. Loading inbox summary...");
     if(!(pop?mail_pop_stat(&io,&messages):mail_imap_select(&io,&messages)))return failed("Login succeeded, but the server could not open your inbox.");
     if(!end||end>messages)end=messages;
     inbox_count=0;selected=~0u;view_count=view_scroll=0;inbox_end=end;
-    set_status("Loading messages... You can switch tabs or cancel.");
+    set_status("Loading messages... You can cancel at any time.");
     for(unsigned n=end;n&&inbox_count<INBOX_ROWS;n--) {
         if(!(pop?mail_pop_fetch(&io,n,raw,sizeof(raw)):mail_imap_fetch(&io,n,raw,sizeof(raw))))return 0;
         message *m=&inbox[inbox_count++];m->number=n;
@@ -300,7 +320,8 @@ static int fetch_inbox(unsigned end) {
         if(!*m->subject)mail_copy(m->subject,sizeof(m->subject),"(No subject)");
         dirty=1;
     }
-    if(page==ACCOUNT){page=INBOX;focus=-1;}status=messages?"Select a message to read it.":"Your inbox is empty.";return 1;
+    if(page==ACCOUNT)close_dialog();
+    status=messages?"Select a message to read it.":"Your inbox is empty.";return 1;
 }
 static void refresh(unsigned end) {
     begin_work("Loading inbox...");int ok=fetch_inbox(end);end_work(ok);
@@ -335,6 +356,13 @@ static void send_draft(void) {
     unsigned port;
     if(!*smtp_host||!mail_number(smtp_port_text,&port)||!port||port>65535||!*sender){status="Set your SMTP server, port and email address in Account.";return;}
     if(!*recipient||!*subject||!*draft){status="Add a recipient, subject and message before sending.";return;}
+    /* SMTP borrows the active transport slot; retain the incoming TLS session
+     * and unread protocol bytes until the send operation has finished. */
+    unsigned incoming_socket=socket_handle;
+    nixel_tls_client *incoming_tls=tls;
+    mail_io incoming_io=io;
+    int incoming_connected=connected;
+    socket_handle=0;tls=0;connected=0;io.pos=io.used=0;
     begin_work("Sending message...");
     set_status("Connecting to outgoing server...");
     int ok=open_connection(smtp_host,port);
@@ -342,6 +370,8 @@ static void send_draft(void) {
     close_connection();
     if(ok){draft[0]=recipient[0]=subject[0]=0;draft_scroll=0;cursor=0;focus=RECIPIENT;status="Message accepted by the SMTP server.";}
     end_work(ok);
+    socket_handle=incoming_socket;tls=incoming_tls;io=incoming_io;
+    connected=incoming_connected;
     if(!ok&&!cancelled) {
         static char send_error[192];
         mail_copy(send_error,sizeof(send_error),"Send failed; draft retained. ");
@@ -352,11 +382,51 @@ static void send_draft(void) {
 }
 static int visible_field(unsigned index){return page==ACCOUNT?index<=SENDER:page==COMPOSE&&index>=RECIPIENT;}
 static void set_focus(int index){focus=index;cursor=index>=0?mail_length(fields[index].text):0;dirty=1;}
+static void close_dialog(void) {
+    if(dialog_window)sys_window_close(dialog_window);
+    dialog_window=0;page=INBOX;set_focus(-1);shifts=0;extended=0;
+}
+static int open_dialog(int kind) {
+    if(dialog_window)return page==kind;
+    user_window_desc_t desc={40,28,WIDTH,HEIGHT,"Mail - Settings"};
+    if(kind==COMPOSE)mail_copy(desc.title,sizeof(desc.title),"Mail - New message");
+    int result=sys_window_create(&desc);
+    if(result<=0){set_status("Could not open dialog: no free window slots or desktop too small.");return 0;}
+    dialog_window=(unsigned)result;page=kind;
+    user_window_draw_t keys={0};keys.operation=USER_WINDOW_RAW_KEYS;keys.pressed=1;
+    sys_window_draw(dialog_window,&keys);
+    set_focus(kind==ACCOUNT?HOST:RECIPIENT);shifts=0;extended=0;
+    return 1;
+}
+/* Poll both native windows, including while network operations are waiting.
+ * Main-window input is blocked while a dialog is open; its close still exits. */
+static void dispatch_event(unsigned source,const user_window_event_t *e) {
+    if(e->type==USER_WINDOW_EVENT_CLOSE) {
+        if(source==window){running=0;cancelled=1;}
+        else {if(busy)cancelled=1;close_dialog();}
+    } else if(e->type==USER_WINDOW_EVENT_REDRAW)dirty=1;
+    else if(e->type==USER_WINDOW_EVENT_KEYS_RESET){shifts=0;extended=0;}
+    else if(source==(dialog_window?dialog_window:window)) {
+        if(e->type==USER_WINDOW_EVENT_SCANCODE) {
+            if(busy){if(e->key==1)cancelled=1;else if(e->key==0x49||e->key==0x51)key(e->key);}
+            else key(e->key);
+        } else if(e->type==USER_WINDOW_EVENT_MOUSE) {
+            if(busy&&(e->buttons&1)&&inside(e->x,e->y,dialog_window?520:630,30,104,30))cancelled=1;
+            else handle_mouse_event(e);
+        }
+    }
+}
+static void poll_events(void) {
+    user_window_event_t e;
+    for(unsigned i=0;i<32&&sys_window_poll(window,&e)==1;i++)dispatch_event(window,&e);
+    unsigned dialog=dialog_window;
+    for(unsigned i=0;dialog&&dialog==dialog_window&&i<32&&sys_window_poll(dialog,&e)==1;i++)dispatch_event(dialog,&e);
+}
 static void click(int x,int y) {
     dirty=1;
-    if(inside(x,y,180,30,100,30)){page=INBOX;set_focus(-1);return;}
-    if(inside(x,y,290,30,110,30)){page=COMPOSE;set_focus(RECIPIENT);return;}
-    if(inside(x,y,410,30,110,30)){page=ACCOUNT;set_focus(HOST);return;}
+    if(dialog_window&&inside(x,y,634,30,94,30)&&!busy){close_dialog();return;}
+    if(page==INBOX&&!busy&&inside(x,y,290,30,110,30)){open_dialog(COMPOSE);return;}
+    if(page==INBOX&&!busy&&inside(x,y,410,30,110,30)){open_dialog(ACCOUNT);return;}
     if(busy) {
         if(page==INBOX&&inside(x,y,270,480,90,30))view_scroll=view_scroll>VIEW_ROWS-1?view_scroll-(VIEW_ROWS-1):0;
         else if(page==INBOX&&inside(x,y,370,480,90,30)&&view_scroll+VIEW_ROWS<view_count)view_scroll+=VIEW_ROWS-1;
@@ -380,7 +450,7 @@ static void click(int x,int y) {
         if(inside(x,y,492,105,100,30)||inside(x,y,602,105,100,30)) {
             close_connection();pop=x>=602;mail_copy(port_text,sizeof(port_text),pop?"995":"993");status="Incoming protocol updated.";
         }
-        else if(inside(x,y,32,460,188,30)){close_connection();refresh(0);}
+        else if(inside(x,y,32,460,188,30))refresh(0);
         else if(inside(x,y,238,460,130,30)){close_connection();status="Disconnected.";}
     } else if(page==COMPOSE) {
         if(inside(x,y,28,460,100,30))send_draft();
@@ -398,7 +468,7 @@ static void insert(char c) {
     if(focus<0)return;
     field *f=&fields[focus];unsigned n=mail_length(f->text);
     if(n+1>=f->cap){status="This field is full.";return;}
-    if(focus<=SENDER)close_connection();
+    if(focus==HOST||focus==PORT||focus==USERNAME||focus==PASSWORD)close_connection();
     for(unsigned i=n+1;i>cursor;i--)f->text[i]=f->text[i-1];
     f->text[cursor++]=c;
 }
@@ -414,7 +484,7 @@ static void key(unsigned code) {
     dirty=1;
     if(code==0x3A&&!ext){caps=!caps;return;}
     if(code==0x0F){int start=page==ACCOUNT?HOST:RECIPIENT,end=page==ACCOUNT?SENDER:DRAFT;if(page==INBOX)return;set_focus(shifts?(focus<=start?end:focus-1):(focus<start||focus>=end?start:focus+1));return;}
-    if(code==1){set_focus(-1);return;}
+    if(code==1){if(!busy)close_dialog();set_focus(-1);return;}
     if(code==0x49||code==0x51){
         if(page==INBOX){if(code==0x49)view_scroll=view_scroll>VIEW_ROWS-1?view_scroll-(VIEW_ROWS-1):0;else if(view_scroll+VIEW_ROWS<view_count)view_scroll+=VIEW_ROWS-1;}
         else if(focus==DRAFT){unsigned step=DRAFT_COLS*(DRAFT_ROWS-1),len=mail_length(draft);cursor=code==0x49?(cursor>step?cursor-step:0):(cursor+step<len?cursor+step:len);}
@@ -434,12 +504,12 @@ static void key(unsigned code) {
             cursor=target+col<end?target+col:end;
         }
         return;}
-    if(code==0x53){if(cursor<len){for(unsigned i=cursor;i<len;i++)f->text[i]=f->text[i+1];if(focus<=SENDER)close_connection();}return;}
+    if(code==0x53){if(cursor<len){for(unsigned i=cursor;i<len;i++)f->text[i]=f->text[i+1];if(focus==HOST||focus==PORT||focus==USERNAME||focus==PASSWORD)close_connection();}return;}
     if(code==0x1C){if(focus==DRAFT)insert('\n');else {int end=page==ACCOUNT?SENDER:DRAFT;set_focus(focus>=end?(page==ACCOUNT?HOST:RECIPIENT):focus+1);}return;}
     if(ext||code>=sizeof(normal)-1)return;
     char c=shifts?shifted[code]:normal[code];
     if(caps&&c>='a'&&c<='z')c-=32;else if(caps&&c>='A'&&c<='Z')c+=32;
-    if(c=='\b'){if(cursor){cursor--;for(unsigned i=cursor;i<len;i++)f->text[i]=f->text[i+1];if(focus<=SENDER)close_connection();}}
+    if(c=='\b'){if(cursor){cursor--;for(unsigned i=cursor;i<len;i++)f->text[i]=f->text[i+1];if(focus==HOST||focus==PORT||focus==USERNAME||focus==PASSWORD)close_connection();}}
     else if(c>=32&&c<127)insert(c);
 }
 void user_main(const char *arguments) {
@@ -452,20 +522,13 @@ void user_main(const char *arguments) {
     }
     window=result;
     user_window_draw_t keys={0};keys.operation=USER_WINDOW_RAW_KEYS;keys.pressed=1;sys_window_draw(window,&keys);
-    sys_detach();set_focus(HOST);
+    sys_detach();open_dialog(ACCOUNT);
     while(running) {
         drain_resolver();
-        user_window_event_t e;
-        for(unsigned i=0;i<32&&sys_window_poll(window,&e)==1;i++) {
-            if(e.type==USER_WINDOW_EVENT_CLOSE)running=0;
-            else if(e.type==USER_WINDOW_EVENT_REDRAW)dirty=1;
-            else if(e.type==USER_WINDOW_EVENT_KEYS_RESET){shifts=0;extended=0;}
-            else if(e.type==USER_WINDOW_EVENT_SCANCODE)key(e.key);
-            else if(e.type==USER_WINDOW_EVENT_MOUSE)handle_mouse_event(&e);
-        }
+        poll_events();
         if(dirty)redraw();
     sys_yield();
     }
     close_connection();for(unsigned i=0;i<sizeof(password);i++)((volatile char *)password)[i]=0;
-    sys_window_close(window);
+    close_dialog();sys_window_close(window);
 }
