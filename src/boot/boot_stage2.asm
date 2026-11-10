@@ -367,9 +367,9 @@ msg_thx  db "R.I.P Sudaox, 2001 - 2025", 13, 10, 0
 msg_stage2  db "Stage 2 OK", 13, 10, 0
 msg_a20     db "A20 OK", 13, 10, 0
 msg_kok     db "Kernel Loaded", 13, 10, 0
-msg_kerr    db "Kernel Read Failed! Contact support@nixelos.org", 13, 10, 0
-msg_verr    db "VBE Call Failed! Contact support@nixelos.org", 13, 10, 0
-msg_nomode  db "No 800x600 LFB Mode Found! Contact support@nixelos.org", 13, 10, 0
+msg_kerr    db "A file required to load the operating system 'kernel.bin' is missing. Please reinstall or use recovery media.", 13, 10, 0
+msg_verr    db "VBE Call Failed!", 13, 10, 0
+msg_nomode  db "No 800x600 LFB Mode Found!", 13, 10, 0
 
 msg_bootmenu  db 13, 10, "NixelOS - press ENTER for boot options, booting in ", 0
 msg_optprompt db 13, 10, "boot> ", 0
