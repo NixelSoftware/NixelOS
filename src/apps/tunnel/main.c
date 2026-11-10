@@ -20,7 +20,7 @@
 #include "../../kernel/types.h"
 #include "../../system/user/sys_api.h"
 
-#define DEFAULT_HOST       "api.tunnels-test.nixelos.org"
+#define DEFAULT_HOST       "signaling.nixeltunnels.space"
 #define DEFAULT_SERVER_PORT 80u
 #define DEFAULT_LOCAL_PORT  8080u /* qksrv's built-in default */
 #define QKSRV_CONFIG        "/etc/quark.cfg"
