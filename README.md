@@ -119,6 +119,12 @@ layout, and `python3 tools/test_boot.py` after building for QEMU boot checks.
 | `QEMU_DHCP` | `any` | `10.0.1.0/24,dhcpstart=10.0.1.227` | DHCP Range for QEMU VM |
 | `QEMU_EXTRA` | `any` | `null` | Extra arguments to pass to QEMU |
 
+# Boot arguments
+
+| Argument | Value | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `DEBUG` | `1` | `0` | Enable serial debugging |
+
 ## Supported Hardware
 
 ### Audio Devices
