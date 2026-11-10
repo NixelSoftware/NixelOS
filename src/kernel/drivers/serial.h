@@ -11,6 +11,8 @@ void serial_enter_sync(void);
 void debug_putc(char c);
 void debug_print(const char* str);
 void debug_hex(uint32_t val);
+
+void debug_set_char_sink(void (*sink)(char c));
 /* Aggregate all frames; report at most once/second per active stage.
  * All timestamps/durations are wall-clock nanoseconds, including preemption. */
 void debug_frame_timing(const char* stage, uint64_t requested,

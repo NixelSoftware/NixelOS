@@ -41,6 +41,7 @@
 #include "net/udp.h"
 #include "../system/graphics/dialog/dialog.h"
 #include "../system/init/splash/startscreen.h"
+#include "bootlog.h"
 #include "../system/graphics/screenshot/screenshot.h"
 #include "../system/shell/commands.h"
 #include "../system/init/nixinit.h"
@@ -263,7 +264,13 @@ static uint8_t api_dns_resolve(const char* hostname, uint32_t* address) {
     return resolved;
 }
 
+static int kernel_verbose;
+
 static void nixinit_show_status(const char* text, int percent) {
+    if (kernel_verbose) {
+        if (text) { debug_print("[BOOT] "); debug_print(text); debug_print("\n"); }
+        return;
+    }
     startscreen_show(text, percent);
 }
 
@@ -288,7 +295,7 @@ static void kernel_init_acpi(void) {
 }
 
 static void network_boot_progress(const char* status) {
-    startscreen_show(status, 25);
+    nixinit_show_status(status, 25);
 }
 
 static void kernel_init_network_device(void) {
@@ -356,7 +363,13 @@ static void kernel_initialize_input(void) {
 
 static void kernel_finish_boot(void) {
     desktop_trace_api("before startscreen_stop");
-    startscreen_stop();
+    if (kernel_verbose) {
+        debug_set_char_sink(0);
+        bootlog_end();
+        display_clear(COLOR_DESKTOP);
+    } else {
+        startscreen_stop();
+    }
     desktop_trace_api("after startscreen_stop");
     debug_subsystem_print("[INIT] Display backbuffer address: ");
     debug_subsystem_hex((uint32_t)display_get_backbuffer());
@@ -431,7 +444,8 @@ void desktop_service(void* arg) {
 }
 
 /* Boot flags handed over by the loader (src/boot/boot_stage2.asm). */
-#define BOOT_FLAG_DEBUG 0x1u
+#define BOOT_FLAG_DEBUG   0x1u
+#define BOOT_FLAG_VERBOSE 0x2u
 
 void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch, uint32_t boot_flags) {
     __asm__ volatile ("cli");
@@ -451,6 +465,13 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch, uint32_t bo
     debug_print("[INIT] Display init...\n");
 
     display_init(lfb_address, bpp, pitch);
+
+    if (boot_flags & BOOT_FLAG_VERBOSE) {
+        kernel_verbose = 1;
+        bootlog_begin();
+        debug_set_char_sink(bootlog_putc);
+        debug_print("[INIT] Verbose boot log enabled.\n");
+    }
 
     nixinit_services_t init_services = {
         .show_status = nixinit_show_status,

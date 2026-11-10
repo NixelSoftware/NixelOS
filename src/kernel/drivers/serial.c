@@ -65,6 +65,9 @@ static uint8_t serial_sync_unavailable;
 /* Debugger-visible overflow diagnostic. Producers never wait for UART space. */
 volatile uint32_t serial_dropped_bytes;
 
+static void (*debug_char_sink)(char);
+void debug_set_char_sink(void (*sink)(char)) { debug_char_sink = sink; }
+
 void serial_init(void) {
     serial_port_enabled = 1;
     serial_head = serial_tail = serial_dropped_bytes = 0;
@@ -134,6 +137,8 @@ void debug_putc(char c) {
     *serial_log_byte(serial_log_next++) = c;
     if (serial_log_count < serial_log_capacity) ++serial_log_count;
     task_irq_restore(log_flags);
+    /* Mirror to the framebuffer boot log when attached, regardless of the UART. */
+    if (debug_char_sink) debug_char_sink(c);
     /* Keep the in-memory capture, but never drive the UART unless -debug. */
     if (!serial_port_enabled) return;
     if (startup_trace_quiet() || (serial_async && scheduler_running())) {

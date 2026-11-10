@@ -124,6 +124,7 @@ layout, and `python3 tools/test_boot.py` after building for QEMU boot checks.
 | Argument | Value | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `DEBUG` | `1` | `0` | Enable serial debugging |
+| `VERBOSE` | `1` | `0` | Enable on-screen boot logging |
 
 ## Supported Hardware
 

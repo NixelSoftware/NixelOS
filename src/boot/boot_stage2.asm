@@ -132,7 +132,8 @@ stage2_entry:
     movzx eax, word [es:0x9210]
     mov [0x9008], eax
 
-    ; Boot flags handoff for the kernel (bit 0 = -debug serial port).
+    ; Boot flags handoff for the kernel (bit 0 = -debug serial port,
+    ; bit 1 = -verbose on-screen boot log).
     mov eax, [boot_flags]
     mov [0x900C], eax
 
@@ -341,21 +342,42 @@ parse_bootargs:
 .scan:
     cmp byte [si], 0
     je .done
+    ; --- try "-debug" at this position ---
+    push si
     mov di, si
     mov bx, str_debug
-.cmp:
+.cmp_debug:
     mov al, [bx]
     test al, al
-    jz .found                   ; reached end of "-debug" => matched
+    jz .found_debug             ; reached end of "-debug" => matched
     mov ah, [di]
     cmp al, ah
-    jne .next
+    jne .end_debug
     inc bx
     inc di
-    jmp .cmp
-.found:
+    jmp .cmp_debug
+.found_debug:
     or byte [boot_flags], 1     ; bit 0 = enable debug serial port
-    jmp .done
+.end_debug:
+    pop si
+    ; --- try "-verbose" at this position ---
+    push si
+    mov di, si
+    mov bx, str_verbose
+.cmp_verbose:
+    mov al, [bx]
+    test al, al
+    jz .found_verbose           ; reached end of "-verbose" => matched
+    mov ah, [di]
+    cmp al, ah
+    jne .end_verbose
+    inc bx
+    inc di
+    jmp .cmp_verbose
+.found_verbose:
+    or byte [boot_flags], 2     ; bit 1 = show on-screen boot log
+.end_verbose:
+    pop si
 .next:
     inc si
     jmp .scan
@@ -375,6 +397,7 @@ msg_bootmenu  db 13, 10, "NixelOS - press ENTER for boot options, booting in ", 
 msg_optprompt db 13, 10, "boot> ", 0
 msg_crlf      db 13, 10, 0
 str_debug     db "-debug", 0
+str_verbose   db "-verbose", 0
 default_bootargs db DEFAULT_BOOTARGS, 0
 
 fallback_mode dw 0xFFFF

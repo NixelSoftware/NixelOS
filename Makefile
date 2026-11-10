@@ -169,7 +169,7 @@ KERNEL_C := \
   src/system/icons/network.h src/kernel/hal/audio.c \
   src/system/icons/sound.h src/system/graphics/wm/start.c \
   src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/ehci_handoff.c src/kernel/drivers/usb/ehci.c src/kernel/drivers/usb/mass_storage.c \
-  src/kernel/login.c src/kernel/emergency.c \
+  src/kernel/login.c src/kernel/emergency.c src/kernel/bootlog.c \
   src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c \
   src/system/graphics/dialog/crash_dialog.c
 
