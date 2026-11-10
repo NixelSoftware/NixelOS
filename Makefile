@@ -613,12 +613,13 @@ test-wifi-network:
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror src/kernel/net/tests/dhcp_options_test.c -o /tmp/nixel-dhcp-options
 	/tmp/nixel-dhcp-options
 
-MAIL_OBJ := src/apps/mail/entry.o src/apps/mail/main.o src/apps/mail/mail.o src/apps/mail/render.o \
+MAIL_OBJ := src/apps/mail/discovery.o $(NIXPLORER_DIR)/engine/net/response.o src/apps/mail/entry.o src/apps/mail/main.o src/apps/mail/mail.o src/apps/mail/render.o \
  $(NIXPLORER_DIR)/engine/platform/tls.o $(NIXPLORER_DIR)/engine/platform/tls_heap.o \
  $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/engine/parser/html.o \
  $(NIXPLORER_DIR)/engine/dom/document.o $(NIXPLORER_DIR)/engine/font/font.o $(APP_RUNTIME)
-src/apps/mail/main.o: src/apps/mail/mail.h src/apps/mail/render.h $(BROWSER_HEADERS) src/system/user/sys_api.h src/system/graphics/wm/theme.h
+src/apps/mail/main.o: src/apps/mail/discovery.h src/apps/mail/mail.h src/apps/mail/render.h $(BROWSER_HEADERS) src/system/user/sys_api.h src/system/graphics/wm/theme.h
 src/apps/mail/render.o: src/apps/mail/render.h src/apps/mail/mail.h $(BROWSER_HEADERS)
+src/apps/mail/discovery.o: src/apps/mail/discovery.h src/apps/mail/mail.h
 src/apps/mail/mail.o: src/apps/mail/mail.h
 mail.bin: Makefile $(NIXPLORER_DIR)/browser/app.ld $(MAIL_OBJ) src/system/libraries/tls/libnixeltls.a
 	$(LD) $(LDFLAGS) --omagic -T $(NIXPLORER_DIR)/browser/app.ld $(filter %.o,$^) src/system/libraries/tls/libnixeltls.a -o src/apps/mail/mail.tmp
@@ -626,6 +627,8 @@ mail.bin: Makefile $(NIXPLORER_DIR)/browser/app.ld $(MAIL_OBJ) src/system/librar
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/mail/mail.tmp').unlink(missing_ok=True)"
 .PHONY: test-mail
 test-mail:
+	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/discovery.c src/apps/mail/tests/test_discovery.c -o /tmp/nixel-test-mail-discovery
+	/tmp/nixel-test-mail-discovery
 	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/tests/test_mail.c -o /tmp/nixel-test-mail
 	/tmp/nixel-test-mail
 	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/render.c $(NIXPLORER_DIR)/engine/dom/document.c $(NIXPLORER_DIR)/engine/parser/html.c $(NIXPLORER_DIR)/engine/font/font.c src/apps/mail/tests/test_render.c -o /tmp/nixel-test-mail-render
@@ -633,5 +636,5 @@ test-mail:
 
 .PHONY: test-mail-gui
 test-mail-gui:
-	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/render.c $(NIXPLORER_DIR)/engine/dom/document.c $(NIXPLORER_DIR)/engine/parser/html.c $(NIXPLORER_DIR)/engine/font/font.c src/apps/mail/tests/test_gui.c -o /tmp/nixel-test-mail-gui
+	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/render.c $(NIXPLORER_DIR)/engine/dom/document.c $(NIXPLORER_DIR)/engine/parser/html.c $(NIXPLORER_DIR)/engine/font/font.c src/apps/mail/discovery.c src/apps/nixplorer/engine/net/response.c src/apps/mail/tests/test_gui.c -o /tmp/nixel-test-mail-gui
 	/tmp/nixel-test-mail-gui

@@ -248,12 +248,64 @@ static int smtp_cmd(mail_io *io,const char *s,int code) {
 }
 static int address(const char *s) {
     int at=0;
-    if(!mail_safe(s)||mail_length(s)>200)return 0;
+    if(!mail_safe(s)||mail_length(s)>200||*s=='@')return 0;
     for(;*s;s++) {
-        if(*s=='@')at++;
-        if(*s=='<'||*s=='>'||*s==' '||*s=='"'||*s=='\\')return 0;
+        if(*s=='@'){at++;if(!s[1])return 0;}
+        if((unsigned char)*s<=32||*s=='<'||*s=='>'||*s=='"'||*s=='\\'||*s==','||*s==';'||*s==':'||*s=='('||*s==')')return 0;
     }
     return at==1;
+}
+static int same_address(const char *a,const char *b) {
+    while(*a&&*b)if(lower(*a++)!=lower(*b++))return 0;
+    return !*a&&!*b;
+}
+/* Canonical comma-separated addresses. Display names (including quoted commas)
+ * are accepted; groups and malformed lists are rejected rather than misrouted. */
+int mail_recipients(char *out,unsigned cap,const char *list,const char *exclude) {
+    char result[2048];mail_copy(result,sizeof(result),out);
+    if(mail_length(out)>=sizeof(result)||!cap)return 0;
+    const char *p=list;
+    while(*p) {
+        const char *start=p,*left=0,*right=0;int quote=0,escape=0;
+        for(;*p;p++) {
+            char c=*p;
+            if((unsigned char)c<32||c==127)return 0;
+            if(escape){escape=0;continue;}
+            if(quote&&c=='\\'){escape=1;continue;}
+            if(c=='"'){quote=!quote;continue;}
+            if(quote)continue;
+            if(c==',')break;
+            if(c=='<' ){if(left||right)return 0;left=p;}
+            else if(c=='>'){if(!left||right)return 0;right=p;}
+            else if(c==':'||c==';')return 0;
+        }
+        if(quote||escape||(left&&!right)||(!left&&right))return 0;
+        const char *end=p;
+        if(left){start=left+1;end=right;for(const char *q=right+1;q<p;q++)if(*q!=' '&&*q!='\t')return 0;}
+        while(start<end&&*start==' ')start++;
+        while(end>start&&end[-1]==' ')end--;
+        char addr[201];unsigned size=(unsigned)(end-start);
+        if(!size||size>=sizeof(addr))return 0;
+        for(unsigned i=0;i<size;i++)addr[i]=start[i];
+        addr[size]=0;
+        if(!address(addr))return 0;
+        int duplicate=exclude&&same_address(addr,exclude);
+        for(const char *q=result;*q;) {
+            char existing[201];unsigned n=0;
+            while(*q&&*q!=','){if(n+1>=sizeof(existing))return 0;existing[n++]=*q++;}existing[n]=0;
+            if(same_address(existing,addr))duplicate=1;
+            if(*q)q++;
+        }
+        if(!duplicate) {
+            unsigned n=mail_length(result);
+            if(n+size+(n?1:0)>=sizeof(result)||n+size+(n?1:0)>=cap)return 0;
+            if(n)result[n++]=',';
+            mail_copy(result+n,sizeof(result)-n,addr);
+        }
+        if(*p){p++;if(!*p)return 0;}
+    }
+    if(mail_length(result)>=cap)return 0;
+    mail_copy(out,cap,result);return 1;
 }
 /* RFC 5322 Date, using the same UTC clock required for certificate validation. */
 static void mail_date(long timestamp, char *out) {
@@ -280,10 +332,11 @@ static void mail_date(long timestamp, char *out) {
     time[6]+=(char)(second/10);time[7]+=(char)(second%10);
     append(out,80,time);
 }
-int mail_smtp(mail_io *io,const char *user,const char *pass,const char *from,const char *to,const char *subject,const char *body,long utc_seconds) {
-    char cmd[1024],auth[260];
+int mail_smtp_thread(mail_io *io,const char *user,const char *pass,const char *from,const char *to,const char *subject,const char *body,long utc_seconds,const char *reply_id) {
+    char cmd[2300],auth[260],recipients[2048]="";
     unsigned n=0;
-    if(utc_seconds<0||!address(from)||!address(to)||!mail_safe(subject)||mail_length(subject)>200||mail_length(user)>128||mail_length(pass)>128)return 0;
+    if(utc_seconds<0||!address(from)||(!mail_recipients(recipients,sizeof(recipients),to,0)||!*recipients)||!mail_safe(subject)||mail_length(subject)>200||mail_length(user)>128||mail_length(pass)>128)return 0;
+    if(reply_id&&*reply_id&&(!mail_safe(reply_id)||mail_length(reply_id)>250||reply_id[0]!='<'||reply_id[mail_length(reply_id)-1]!='>'))return 0;
     if(!smtp_reply(io,220)||!smtp_cmd(io,"EHLO nixel.local",250))return 0;
     if(*user) {
         auth[n++]=0;
@@ -301,18 +354,32 @@ int mail_smtp(mail_io *io,const char *user,const char *pass,const char *from,con
     append(cmd,sizeof(cmd),from);
     append(cmd,sizeof(cmd),">");
     if(!smtp_cmd(io,cmd,250))return 0;
-    mail_copy(cmd,sizeof(cmd),"RCPT TO:<");
-    append(cmd,sizeof(cmd),to);
-    append(cmd,sizeof(cmd),">");
-    if(!smtp_cmd(io,cmd,250)||!smtp_cmd(io,"DATA",354))return 0;
+    for(const char *p=recipients;*p;) {
+        char destination[201];unsigned n=0;
+        while(*p&&*p!=',')destination[n++]=*p++;
+        destination[n]=0;if(*p)p++;
+        mail_copy(cmd,sizeof(cmd),"RCPT TO:<");append(cmd,sizeof(cmd),destination);append(cmd,sizeof(cmd),">");
+        if(!smtp_cmd(io,cmd,250))return 0;
+    }
+    if(!smtp_cmd(io,"DATA",354))return 0;
     mail_date(utc_seconds,cmd);
     if(!mail_command(io,cmd))return 0;
     mail_copy(cmd,sizeof(cmd),"From: ");
     append(cmd,sizeof(cmd),from);
     if(!mail_command(io,cmd))return 0;
-    mail_copy(cmd,sizeof(cmd),"To: ");
-    append(cmd,sizeof(cmd),to);
-    if(!mail_command(io,cmd))return 0;
+    /* Fold long recipient lists between mailboxes, below SMTP's line limit. */
+    for(const char *p=recipients;*p;) {
+        mail_copy(cmd,sizeof(cmd),p==recipients?"To: ":" ,");unsigned n=mail_length(cmd);
+        while(*p&&*p!=',')cmd[n++]=*p++;
+        cmd[n]=0;if(*p)p++;
+        if(!mail_command(io,cmd))return 0;
+    }
+    if(reply_id&&*reply_id) {
+        mail_copy(cmd,sizeof(cmd),"In-Reply-To: ");append(cmd,sizeof(cmd),reply_id);
+        if(!mail_command(io,cmd))return 0;
+        mail_copy(cmd,sizeof(cmd),"References: ");append(cmd,sizeof(cmd),reply_id);
+        if(!mail_command(io,cmd))return 0;
+    }
     mail_copy(cmd,sizeof(cmd),"Subject: ");
     append(cmd,sizeof(cmd),subject);
     if(!mail_command(io,cmd)||!mail_command(io,"MIME-Version: 1.0")||!mail_command(io,"Content-Type: text/plain; charset=utf-8")||!mail_command(io,"Content-Transfer-Encoding: base64")||!mail_command(io,""))return 0;
@@ -324,6 +391,9 @@ int mail_smtp(mail_io *io,const char *user,const char *pass,const char *from,con
         if(!mail_command(io,cmd))return 0;
     }
     return mail_command(io,".")&&smtp_reply(io,250);
+}
+int mail_smtp(mail_io *io,const char *user,const char *pass,const char *from,const char *to,const char *subject,const char *body,long utc_seconds) {
+    return mail_smtp_thread(io,user,pass,from,to,subject,body,utc_seconds,0);
 }
 static const char *line_end(const char *s) {
     while(*s&&*s!='\n')s++;

@@ -23,6 +23,10 @@ int mail_pop_stat(mail_io *io, unsigned *count);
 int mail_pop_fetch(mail_io *io, unsigned number, char *out, unsigned cap);
 int mail_smtp(mail_io *io, const char *user, const char *pass,
               const char *from, const char *to, const char *subject, const char *body, long utc_seconds);
+int mail_recipients(char *out, unsigned cap, const char *list, const char *exclude);
+int mail_smtp_thread(mail_io *io, const char *user, const char *pass,
+                     const char *from, const char *to, const char *subject,
+                     const char *body, long utc_seconds, const char *reply_id);
 void mail_header(const char *raw, const char *name, char *out, unsigned cap);
 /* Extract preferred inline text/html or text/plain, decoding MIME transfer encoding. */
 int mail_body(const char *raw, char *out, unsigned cap, int *html);

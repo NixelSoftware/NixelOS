@@ -89,6 +89,29 @@ int main(void) {
     assert(!strstr(m.sent,"AUTH"));
     io=setup(&m,"+OK message\r\nunterminated\r\n",1);
     assert(!mail_pop_fetch(&io,1,out,sizeof(out)));
+    char recipients[2048]="";
+    assert(mail_recipients(recipients,sizeof(recipients),"\"Doe, Bob\" <bob@example.org>, Alice <alice@example.org>, BOB@example.org","ALICE@example.org"));
+    assert(strcmp(recipients,"bob@example.org")==0);
+    assert(mail_recipients(recipients,sizeof(recipients),"carol@example.org",0));
+    assert(strcmp(recipients,"bob@example.org,carol@example.org")==0);
+    assert(!mail_recipients(recipients,sizeof(recipients),"bad@example.org,",0));
+    assert(!mail_recipients(recipients,sizeof(recipients),"a@b\r\nBcc: c@d",0));
+    assert(!mail_recipients(recipients,sizeof(recipients),"group: a@b;",0));
+    assert(!mail_recipients(recipients,sizeof(recipients),"Name <a@b> junk",0));
+    assert(!mail_recipients(recipients,sizeof(recipients),"@b",0));
+    assert(!mail_recipients(recipients,8,"a@b",0));
+    assert(strcmp(recipients,"bob@example.org,carol@example.org")==0); /* Atomic failure. */
+    io=setup(&m,"220 ready\r\n250 ehlo\r\n250 from\r\n250 first\r\n250 second\r\n354 data\r\n250 sent\r\n",7);
+    assert(mail_smtp_thread(&io,"","","a@b","Bob <bob@example.org>,carol@example.org,BOB@example.org","Re: hello","reply",0,"<parent@example.org>"));
+    assert(strstr(m.sent,"RCPT TO:<bob@example.org>\r\nRCPT TO:<carol@example.org>\r\nDATA"));
+    assert(strstr(m.sent,"To: bob@example.org\r\n ,carol@example.org\r\n"));
+    assert(strstr(m.sent,"In-Reply-To: <parent@example.org>\r\nReferences: <parent@example.org>\r\n"));
+    io=setup(&m,"220 ready\r\n250 ehlo\r\n250 from\r\n250 first\r\n550 rejected\r\n",9);
+    assert(!mail_smtp(&io,"","","a@b","bob@example.org,carol@example.org","test","body",0));
+    assert(!strstr(m.sent,"DATA")); /* Never submit a partial reply-all. */
+    io=setup(&m,"",1);
+    assert(!mail_smtp_thread(&io,"","","a@b","c@d","test","body",0,"<parent>\r\nBcc: x@y"));
+    assert(!m.used);
     puts("Mail protocol and MIME tests passed");
     return 0;
 }
