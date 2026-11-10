@@ -5,6 +5,13 @@
 %error "Build through tools/build_boot_stage2.py"
 %endif
 
+%ifndef BOOT_TIMEOUT
+%define BOOT_TIMEOUT 3          ; countdown seconds; 0 boots immediately
+%endif
+%ifndef DEFAULT_BOOTARGS
+%define DEFAULT_BOOTARGS ""     ; args applied unless overridden at the prompt
+%endif
+
 stage2_entry:
     xor ax, ax
     mov ds, ax
@@ -217,10 +224,17 @@ BOOTARGS_MAX equ 64
 
 boot_menu:
     pusha
+    ; Apply the build-time default arguments; they take effect on timeout and
+    ; pre-fill the prompt so the user can edit or extend them.
+    mov si, default_bootargs
+    call parse_bootargs
+
+    mov bx, BOOT_TIMEOUT
+    test bx, bx
+    jz .done                    ; timeout 0: boot immediately with defaults
+
     mov si, msg_bootmenu
     call print_string
-
-    mov bx, 3
 .second:
     mov al, bl
     add al, '0'
@@ -257,17 +271,32 @@ boot_menu:
     dec bx
     jnz .second
 
-    ; Timed out: normal boot with no extra flags.
     mov si, msg_crlf
     call print_string
+.done:
     popa
     ret
 
 .enter_options:
     mov si, msg_optprompt
     call print_string
+    mov byte [boot_flags], 0
     mov di, bootargs_buf
     xor cx, cx                  ; current length
+    mov si, default_bootargs
+.prefill:
+    mov al, [si]
+    test al, al
+    jz .readkey
+    cmp cx, BOOTARGS_MAX - 1
+    jae .readkey
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    mov ah, 0x0E
+    int 0x10                    ; echo
+    jmp .prefill
 .readkey:
     xor ah, ah
     int 0x16
@@ -302,14 +331,13 @@ boot_menu:
     mov byte [di], 0
     mov si, msg_crlf
     call print_string
+    mov si, bootargs_buf
     call parse_bootargs
     popa
     ret
 
-; Scan bootargs_buf for recognized tokens and set bits in [boot_flags].
 parse_bootargs:
     pusha
-    mov si, bootargs_buf
 .scan:
     cmp byte [si], 0
     je .done
@@ -347,6 +375,7 @@ msg_bootmenu  db 13, 10, "NixelOS - press ENTER for boot options, booting in ", 
 msg_optprompt db 13, 10, "boot> ", 0
 msg_crlf      db 13, 10, 0
 str_debug     db "-debug", 0
+default_bootargs db DEFAULT_BOOTARGS, 0
 
 fallback_mode dw 0xFFFF
 selected_mode dw 0

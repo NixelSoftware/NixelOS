@@ -19,3 +19,4 @@ struct
 /src/kernel/net/wireless/security/*.d
 
 .gui-config
+.boot-config

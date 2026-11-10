@@ -38,6 +38,8 @@ NO_AUDIO_DEBUG ?= 1
 STARTUP_TRACE ?= 0
 # 0=normal, 1=input-only runtime, 2=normal without audio, 3=idle runtime.
 STARTUP_PROFILE ?= 0
+BOOT_TIMEOUT ?= 3
+BOOTARGS ?=
 
 ifeq ($(OS),Windows_NT)
   ifeq ($(origin PYTHON),file)
@@ -309,8 +311,11 @@ ifeq ($(STARTUP_TRACE),1)
 endif
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.tmp').unlink(missing_ok=True)"
 
-src/boot_stage2.bin: Makefile src/boot/boot_stage2.asm src/kernel/kernel.bin tools/build_boot_stage2.py tools/disk_layout.py
-	$(PYTHON) tools/build_boot_stage2.py --nasm "$(NASM)"
+.boot-config: FORCE_IMAGE_CONFIG
+	$(PYTHON) -c "from pathlib import Path; p=Path('.boot-config'); value='$(BOOT_TIMEOUT)|$(BOOTARGS)'; p.write_text(value) if not p.exists() or p.read_text()!=value else None"
+
+src/boot_stage2.bin: Makefile .boot-config src/boot/boot_stage2.asm src/kernel/kernel.bin tools/build_boot_stage2.py tools/disk_layout.py
+	$(PYTHON) tools/build_boot_stage2.py --nasm "$(NASM)" --boot-timeout $(BOOT_TIMEOUT) --bootargs="$(BOOTARGS)"
 
 RESOURCE_AUDIO := $(shell $(PYTHON) -c "from pathlib import Path; print(' '.join(p.as_posix() for p in Path('resources').rglob('*') if p.is_file() and p.suffix.lower() in {'.mid', '.midi', '.wav', '.mp3'}))")
 
