@@ -4,8 +4,11 @@ PYTHON ?= python3
 NASM ?= nasm
 CC ?= gcc
 LD ?= ld
+AR ?= ar
 OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
+
+UNAME_S := $(shell uname -s)
 
 # Customizable QEMU settings
 # NVMe alternative: -drive file=os.img,format=raw,if=none,id=nvm0 -device nvme,serial=NIXELNVME01,drive=nvm0
@@ -16,11 +19,15 @@ QEMU_MEMORY ?= 512M
 QEMU_CPU ?= max
 QEMU_DHCP ?= 192.168.100.0/24,dhcpstart=192.168.100.227
 QEMU_FORWARD ?= ,hostfwd=tcp::2423-:8080,hostfwd=tcp::2121-:21,hostfwd=tcp::20000-:20000,hostfwd=tcp::2323-:2323
-QEMU_DISPLAY ?= sdl,gl=off
-export SDL_RENDER_DRIVER ?= software
 QEMU_VGA ?= virtio
 QEMU_USB ?= -device piix3-usb-uhci,id=uhci -device usb-mouse,bus=uhci.0
+ifeq ($(UNAME_S),Darwin)
+QEMU_DISPLAY ?= cocoa,zoom-to-fit=on
+QEMU_AUDIO_DRIVER ?= coreaudio
+else
+QEMU_DISPLAY ?= sdl,gl=off
 QEMU_AUDIO_DRIVER ?= sdl
+endif
 QEMU_AUDIO_FLAGS = -audiodev $(QEMU_AUDIO_DRIVER),id=audio0 -machine pcspk-audiodev=audio0
 QEMU_EXTRA ?=
 QEMU_OPL ?= 1
@@ -50,6 +57,27 @@ ifeq ($(OS),Windows_NT)
   endif
   ifeq ($(origin LD),default)
     LD := i686-elf-ld
+  endif
+  ifeq ($(origin AR),default)
+    AR := i686-elf-ar
+  endif
+  ifeq ($(origin OBJCOPY),file)
+    OBJCOPY := i686-elf-objcopy
+  endif
+endif
+
+ifeq ($(UNAME_S),Darwin)
+  ifeq ($(origin PYTHON),file)
+    PYTHON := python3
+  endif
+  ifeq ($(origin CC),default)
+    CC := i686-elf-gcc
+  endif
+  ifeq ($(origin LD),default)
+    LD := i686-elf-ld
+  endif
+  ifeq ($(origin AR),default)
+    AR := i686-elf-ar
   endif
   ifeq ($(origin OBJCOPY),file)
     OBJCOPY := i686-elf-objcopy
@@ -165,6 +193,8 @@ STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_t
                  lspci demo3d irc telnetd taskmgr tunnel
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin
+# Compiler support routines (memcpy/memset/memmove/memcmp) for freestanding apps.
+APP_RUNTIME := src/system/user/runtime.o
 
 .PHONY: all run clean clean-build FORCE_VERSION test-virgl
 
@@ -183,7 +213,7 @@ all: os.img
 %.o: %.asm Makefile
 	$(NASM) $(NASMFLAGS) $< -o $@
 
-$(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o
+$(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o $(APP_RUNTIME)
 	$(LD) $(LDFLAGS) -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True)"
@@ -222,7 +252,7 @@ SYNDIG_C := \
     $(SYNDIG_DIR)/upstream/midi.c \
     $(SYNDIG_DIR)/upstream/oscillator.c \
     $(SYNDIG_DIR)/upstream/polyphony.c
-SYNDIG_OBJ := $(SYNDIG_DIR)/entry.o $(SYNDIG_C:.c=.o)
+SYNDIG_OBJ := $(SYNDIG_DIR)/entry.o $(SYNDIG_C:.c=.o) $(APP_RUNTIME)
 SYNDIG_HEADERS := $(wildcard $(SYNDIG_DIR)/*.h $(SYNDIG_DIR)/compat/*.h $(SYNDIG_DIR)/upstream/*.h)
 $(SYNDIG_C:.c=.o): $(SYNDIG_HEADERS)
 $(SYNDIG_DIR)/main.o: src/system/graphics/wm/theme.h
@@ -250,7 +280,7 @@ BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/layout/grid.c \
              $(NIXPLORER_DIR)/engine/parser/css_grid.c \
              $(NIXPLORER_DIR)/engine/parser/css_color.c
-BROWSER_OBJ := $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o)
+BROWSER_OBJ := $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o) $(APP_RUNTIME)
 BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
 $(NIXPLORER_DIR)/engine/parser/html.o: $(NIXPLORER_DIR)/engine/parser/entities.inc
@@ -275,7 +305,7 @@ QUARK_C := \
     $(QUARK_DIR)/404.c \
     $(QUARK_DIR)/logger.c \
     $(QUARK_DIR)/dirlisting.c
-QUARK_OBJ := $(QUARK_DIR)/entry.o $(QUARK_C:.c=.o)
+QUARK_OBJ := $(QUARK_DIR)/entry.o $(QUARK_C:.c=.o) $(APP_RUNTIME)
 $(QUARK_C:.c=.o): $(QUARK_DIR)/quark.h $(QUARK_DIR)/logger.h $(QUARK_DIR)/dirlisting.h
 qksrv.bin: Makefile $(QUARK_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(QUARK_DIR)/qksrv.tmp
@@ -287,7 +317,7 @@ FTP_DIR := src/apps/qkftp
 FTP_C := \
     $(FTP_DIR)/main.c \
     $(FTP_DIR)/commands.c
-FTP_OBJ := $(FTP_DIR)/entry.o $(FTP_C:.c=.o)
+FTP_OBJ := $(FTP_DIR)/entry.o $(FTP_C:.c=.o) $(APP_RUNTIME)
 $(FTP_C:.c=.o): $(FTP_DIR)/ftp.h
 
 qkftp.bin: Makefile $(FTP_OBJ)
@@ -586,7 +616,7 @@ test-wifi-network:
 MAIL_OBJ := src/apps/mail/entry.o src/apps/mail/main.o src/apps/mail/mail.o src/apps/mail/render.o \
  $(NIXPLORER_DIR)/engine/platform/tls.o $(NIXPLORER_DIR)/engine/platform/tls_heap.o \
  $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/engine/parser/html.o \
- $(NIXPLORER_DIR)/engine/dom/document.o $(NIXPLORER_DIR)/engine/font/font.o
+ $(NIXPLORER_DIR)/engine/dom/document.o $(NIXPLORER_DIR)/engine/font/font.o $(APP_RUNTIME)
 src/apps/mail/main.o: src/apps/mail/mail.h src/apps/mail/render.h $(BROWSER_HEADERS) src/system/user/sys_api.h src/system/graphics/wm/theme.h
 src/apps/mail/render.o: src/apps/mail/render.h src/apps/mail/mail.h $(BROWSER_HEADERS)
 src/apps/mail/mail.o: src/apps/mail/mail.h

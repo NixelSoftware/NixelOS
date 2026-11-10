@@ -18,8 +18,8 @@ $(TLS_OBJECTS): %.o: %.c
 
 .PHONY: tls clean-tls
 tls: $(TLS_DIR)/libnixeltls.a
-$(TLS_DIR)/libnixeltls.a: $(TLS_OBJECTS)
-	$(AR) rcs $@ $^
+$(TLS_DIR)/libnixeltls.a: $(TLS_OBJECTS) Makefile $(TLS_DIR)/tls.mk
+	$(AR) rcs $@ $(filter %.o,$^)
 clean-tls:
 	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in [$(foreach p,$(TLS_OBJECTS) $(TLS_OBJECTS:.o=.d) $(TLS_DIR)/libnixeltls.a,'$(p)',)]]"
 
