@@ -58,11 +58,15 @@ int32_t serial_log_read(char* output, uint32_t capacity, uint32_t* cursor, uint3
     return (int32_t)available;
 }
 static int serial_async;
+/* Set once serial_init() runs. The debug serial port stays untouched unless the
+ * loader passed "-debug", so debug output never drives the UART by default. */
+static int serial_port_enabled;
 static uint8_t serial_sync_unavailable;
 /* Debugger-visible overflow diagnostic. Producers never wait for UART space. */
 volatile uint32_t serial_dropped_bytes;
 
 void serial_init(void) {
+    serial_port_enabled = 1;
     serial_head = serial_tail = serial_dropped_bytes = 0;
     serial_async = 0;
     serial_log_next = serial_log_count = 0;
@@ -101,6 +105,7 @@ static void serial_worker(void* arg) {
 }
 
 int serial_start_async(void) {
+    if (!serial_port_enabled) return 0;
     if (serial_async) return 0;
     serial_log_expand();
     if (task_create_nice(serial_worker, 0, "serial", 10) < 0) return -1;
@@ -129,6 +134,8 @@ void debug_putc(char c) {
     *serial_log_byte(serial_log_next++) = c;
     if (serial_log_count < serial_log_capacity) ++serial_log_count;
     task_irq_restore(log_flags);
+    /* Keep the in-memory capture, but never drive the UART unless -debug. */
+    if (!serial_port_enabled) return;
     if (startup_trace_quiet() || (serial_async && scheduler_running())) {
         uint32_t flags = task_irq_save();
         uint32_t next = (serial_head + 1u) % SERIAL_QUEUE_SIZE;

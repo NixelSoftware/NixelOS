@@ -33,6 +33,7 @@ stage2_entry:
 .volume_loaded:
     mov dword [0x6000], 0x5642584E ; "NXBV"
 .volume_done:
+    call boot_menu
     call detect_memory
     mov si, msg_stage2
     call print_string
@@ -124,6 +125,10 @@ stage2_entry:
     movzx eax, word [es:0x9210]
     mov [0x9008], eax
 
+    ; Boot flags handoff for the kernel (bit 0 = -debug serial port).
+    mov eax, [boot_flags]
+    mov [0x900C], eax
+
     mov bx, [selected_mode]
     or bx, 0x4000
     mov ax, 0x4F02
@@ -206,6 +211,130 @@ print_string:
     popa
     ret
 
+; Boot prmopt: 3 second countdown; ENTER opens a boot-argument line.
+; Recognized arguments are parsed into [boot_flags] and handed to the kernel.
+BOOTARGS_MAX equ 64
+
+boot_menu:
+    pusha
+    mov si, msg_bootmenu
+    call print_string
+
+    mov bx, 3
+.second:
+    mov al, bl
+    add al, '0'
+    mov ah, 0x0E
+    int 0x10
+    mov al, '.'
+    int 0x10
+    mov al, '.'
+    int 0x10
+    mov al, ' '
+    int 0x10
+
+    ; Wait ~1 second while polling the keyboard for ENTER.
+    xor ax, ax
+    mov es, ax
+    mov eax, [es:0x046C]        ; BIOS tick counter at 0040:006C
+    add eax, 18
+    mov edx, eax                ; target tick
+.wait:
+    mov ah, 0x01
+    int 0x16                    ; key available?
+    jz .check_time
+    xor ah, ah
+    int 0x16                    ; consume it
+    cmp al, 13                  ; ENTER?
+    je .enter_options
+    jmp .wait                   ; ignore any other key, keep counting
+.check_time:
+    xor ax, ax
+    mov es, ax
+    mov eax, [es:0x046C]
+    cmp eax, edx
+    jb .wait
+    dec bx
+    jnz .second
+
+    ; Timed out: normal boot with no extra flags.
+    mov si, msg_crlf
+    call print_string
+    popa
+    ret
+
+.enter_options:
+    mov si, msg_optprompt
+    call print_string
+    mov di, bootargs_buf
+    xor cx, cx                  ; current length
+.readkey:
+    xor ah, ah
+    int 0x16
+    cmp al, 13                  ; ENTER ends the line
+    je .lineend
+    cmp al, 8                   ; Backspace
+    je .bksp
+    cmp al, ' '                 ; ignore other control characters
+    jb .readkey
+    cmp cx, BOOTARGS_MAX - 1
+    jae .readkey                ; buffer full
+    mov [di], al
+    inc di
+    inc cx
+    mov ah, 0x0E
+    int 0x10                    ; echo
+    jmp .readkey
+.bksp:
+    test cx, cx
+    jz .readkey
+    dec di
+    dec cx
+    mov ah, 0x0E
+    mov al, 8
+    int 0x10
+    mov al, ' '
+    int 0x10
+    mov al, 8
+    int 0x10
+    jmp .readkey
+.lineend:
+    mov byte [di], 0
+    mov si, msg_crlf
+    call print_string
+    call parse_bootargs
+    popa
+    ret
+
+; Scan bootargs_buf for recognized tokens and set bits in [boot_flags].
+parse_bootargs:
+    pusha
+    mov si, bootargs_buf
+.scan:
+    cmp byte [si], 0
+    je .done
+    mov di, si
+    mov bx, str_debug
+.cmp:
+    mov al, [bx]
+    test al, al
+    jz .found                   ; reached end of "-debug" => matched
+    mov ah, [di]
+    cmp al, ah
+    jne .next
+    inc bx
+    inc di
+    jmp .cmp
+.found:
+    or byte [boot_flags], 1     ; bit 0 = enable debug serial port
+    jmp .done
+.next:
+    inc si
+    jmp .scan
+.done:
+    popa
+    ret
+
 msg_thx  db "R.I.P Sudaox, 2001 - 2025", 13, 10, 0
 msg_stage2  db "Stage 2 OK", 13, 10, 0
 msg_a20     db "A20 OK", 13, 10, 0
@@ -214,9 +343,16 @@ msg_kerr    db "Kernel Read Failed! Contact support@nixelos.org", 13, 10, 0
 msg_verr    db "VBE Call Failed! Contact support@nixelos.org", 13, 10, 0
 msg_nomode  db "No 800x600 LFB Mode Found! Contact support@nixelos.org", 13, 10, 0
 
+msg_bootmenu  db 13, 10, "NixelOS - press ENTER for boot options, booting in ", 0
+msg_optprompt db 13, 10, "boot> ", 0
+msg_crlf      db 13, 10, 0
+str_debug     db "-debug", 0
+
 fallback_mode dw 0xFFFF
 selected_mode dw 0
 boot_drive    db 0
+boot_flags    dd 0
+bootargs_buf  times BOOTARGS_MAX + 8 db 0
 
 align 4
 dap_volume:

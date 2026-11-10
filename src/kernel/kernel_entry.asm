@@ -25,7 +25,9 @@ start:
     mov eax, [0x9000]
     mov edx, [0x9004]
     mov ecx, [0x9008]
+    mov ebx, [0x900C]           ; boot flags from the loader (bit 0 = -debug)
 
+    push ebx
     push ecx
     push edx
     push eax

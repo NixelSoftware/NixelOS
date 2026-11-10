@@ -430,13 +430,19 @@ void desktop_service(void* arg) {
     }
 }
 
-void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
+/* Boot flags handed over by the loader (src/boot/boot_stage2.asm). */
+#define BOOT_FLAG_DEBUG 0x1u
+
+void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch, uint32_t boot_flags) {
     __asm__ volatile ("cli");
 
     paging_init();
-    
+
     startup_trace_init();
-    serial_init();
+    /* The serial debug port is enabled only when "-debug" is passed at boot. */
+    if (boot_flags & BOOT_FLAG_DEBUG) {
+        serial_init();
+    }
     debug_print("\n=== SYSTEM BOOTING ===\n");
     debug_print("[VBE] LFB Address: "); debug_hex(lfb_address); debug_print("\n");
     debug_print("[VBE] BPP: ");         debug_hex(bpp);         debug_print("\n");
