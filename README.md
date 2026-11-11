@@ -208,3 +208,10 @@ Use `python3 build.py` or `make NOGUI=0` to restore GUI packaging. The headless
 image omits both component manifests and boots to text login and systemshell.
 Graphics code remains linked into the kernel; the text console uses the
 framebuffer. This option does not configure a serial-only console.
+
+## On-device app development
+
+Launch `designer` to create a C main window with native controls and edit its
+source, then save, build, and run it on NixelOS. Compile handwritten SDK apps
+with `ncc source.c output.bin`. This initial compiler supports a documented C
+subset. See [SDK usage, APIs, and limits](documentation/sdk.md).

@@ -459,6 +459,12 @@ static void syscall_dispatch_impl(registers_t* regs) {
             for (uint32_t i = 0; i <= length; i++) ((char*)regs->ebx)[i] = path[i];
             regs->eax = length; return;
         }
+        case SYS_FS_CHMOD: {
+            char path[FS_MAX_PATH];
+            regs->eax = regs->ecx <= 0777 && copy_user_text(regs->ebx, path, sizeof(path)) &&
+                fs_chmod(path, (uint16_t)regs->ecx) ? 0u : (uint32_t)-1;
+            return;
+        }
         case SYS_FS_DELETE: {
             char path[FS_MAX_PATH];
             regs->eax = copy_user_text(regs->ebx, path, sizeof(path)) ?
@@ -1077,7 +1083,7 @@ void syscall_dispatch(registers_t* regs) {
     }
     switch (regs->eax) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
-        case SYS_FS_DELETE: case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
+        case SYS_FS_CHMOD: case SYS_FS_DELETE: case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
             syscall_dispatch_impl(regs);
             return;

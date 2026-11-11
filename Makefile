@@ -190,9 +190,9 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
-                 lspci demo3d irc telnetd taskmgr tunnel
+                 lspci demo3d irc telnetd taskmgr tunnel ncc designer
 APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
-APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin
+APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin sdkhost.bin
 # Compiler support routines (memcpy/memset/memmove/memcmp) for freestanding apps.
 APP_RUNTIME := src/system/user/runtime.o
 
@@ -361,7 +361,7 @@ src/kernel/main.o src/system/init/main.o: src/system/init/nixinit.h
 .gui-config: FORCE_IMAGE_CONFIG
 	$(PYTHON) -c "from pathlib import Path; p=Path('.gui-config'); value='$(NOGUI)'; p.write_text(value) if not p.exists() or p.read_text()!=value else None"
 
-os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
+os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) $(wildcard resources/sdk/*) src/sdk/nixel.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
 	$(PYTHON) mkext4.py os.img.new $(if $(filter 1,$(NOGUI)),-nogui,)
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build
@@ -370,7 +370,7 @@ run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
@@ -638,3 +638,16 @@ test-mail:
 test-mail-gui:
 	$(CC) -std=c99 -Wall -Wextra -Werror src/apps/mail/mail.c src/apps/mail/render.c $(NIXPLORER_DIR)/engine/dom/document.c $(NIXPLORER_DIR)/engine/parser/html.c $(NIXPLORER_DIR)/engine/font/font.c src/apps/mail/discovery.c src/apps/nixplorer/engine/net/response.c src/apps/mail/tests/test_gui.c -o /tmp/nixel-test-mail-gui
 	/tmp/nixel-test-mail-gui
+
+# On-device SDK: native C subset compiler, visual designer and app runtime.
+SDK_HEADERS := src/sdk/ui.h src/sdk/image.h src/sdk/compiler.h src/sdk/design.h src/sdk/editor.h
+src/apps/ncc/main.o src/apps/designer/main.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o: $(SDK_HEADERS)
+ncc.bin: src/sdk/compiler.o
+designer.bin: src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o
+sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/main.o src/sdk/ui.o $(APP_RUNTIME)
+	$(LD) $(LDFLAGS) -T src/sdk/app.ld $(filter %.o,$^) -o src/apps/sdkhost/sdkhost.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss src/apps/sdkhost/sdkhost.tmp $@
+.PHONY: sdk test-sdk
+sdk: ncc.bin designer.bin sdkhost.bin
+test-sdk: sdk
+	$(PYTHON) tools/tests/test_sdk.py

@@ -21,7 +21,7 @@ from tools.disk_layout import (
 TOTAL_SIZE_MB = 50
 TOTAL_SECTORS = TOTAL_SIZE_MB * 1024 * 1024 // SECTOR_SIZE
 BUNDLED_FILES = [
-    "chess.bin", "calc.bin", "files.bin", "hexview.bin", "mines.bin",
+    "ncc.bin", "designer.bin", "chess.bin", "calc.bin", "files.bin", "hexview.bin", "mines.bin",
     "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
@@ -112,6 +112,7 @@ def main(output, nogui=False):
             "usr/lib": (0, 0o755), "usr/lib/nixel": (0, 0o755), "usr/local": (0, 0o755),
             "usr/local/bin": (0, 0o755), "usr/share": (0, 0o755),
             "usr/share/nixel": (0, 0o755), "usr/share/nixel/audio": (0, 0o755),
+            "usr/share/nixel/sdk": (0, 0o755),
             "usr/share/nixel/images": (0, 0o755), "usr/share/games": (0, 0o755),
             "usr/share/games/doom": (0, 0o755), "var": (0, 0o755),
             "var/log": (0, 0o755), "var/cache": (0, 0o755), "var/lib": (0, 0o755),
@@ -129,6 +130,17 @@ def main(output, nogui=False):
             shutil.copyfile(kernel, root / "boot/kernel.bin")
             (root / "boot/kernel.bin").chmod(0o644)
         stage_firmware(root, directories)
+        sdk_runtime = Path("sdkhost.bin")
+        if sdk_runtime.is_file():
+            shutil.copyfile(sdk_runtime, root / "usr/lib/nixel/sdkhost.bin")
+            (root / "usr/lib/nixel/sdkhost.bin").chmod(0o644)
+        shutil.copyfile("src/sdk/nixel.h", root / "usr/share/nixel/sdk/nixel.h")
+        (root / "usr/share/nixel/sdk/nixel.h").chmod(0o644)
+        for asset in Path("resources/sdk").glob("*"):
+            if asset.is_file():
+                shutil.copyfile(asset, root / "usr/share/nixel/sdk" / asset.name)
+                (root / "usr/share/nixel/sdk" / asset.name).chmod(0o644)
+
         files = [Path(name) for name in BUNDLED_FILES if Path(name).is_file()]
         files += sorted(p for p in Path("resources").rglob("*")
                         if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav", ".mp3"})

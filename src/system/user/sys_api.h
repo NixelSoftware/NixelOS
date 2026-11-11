@@ -72,6 +72,7 @@ enum {
     SYS_UTC_SECONDS = 57, /* signed UTC Unix seconds; -1 outside the supported range */
     SYS_MEMORY_ALLOC = 58, /* EBX: bytes; returns zero-filled page-aligned pointer or null */
     SYS_MEMORY_FREE = 59, /* EBX: original allocation base; returns 0 or -1 */
+    SYS_FS_CHMOD = 60, /* EBX path, ECX mode (0777); owner or root only */
     SYS_TASK_KILL = 56    /* EBX: PID to kill */
 };
 
@@ -103,6 +104,14 @@ static inline int32_t sys_fs_home(char* out, uint32_t capacity) {
         : "0"(SYS_FS_HOME), "b"(out), "c"(capacity) : "memory", "cc");
     return result;
 }
+static inline int32_t sys_fs_chmod(const char* path, uint32_t mode) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+                      : "0"((uint32_t)SYS_FS_CHMOD), "b"(path), "c"(mode)
+                      : "edx", "memory", "cc");
+    return result;
+}
+
 static inline int32_t sys_fs_delete(const char* path) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result)
