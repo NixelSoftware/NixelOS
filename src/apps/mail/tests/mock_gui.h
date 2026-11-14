@@ -52,3 +52,21 @@ static void sys_write(const char *p,uint32_t n){if(n>=sizeof(console))n=sizeof(c
 static int32_t sys_window_close(uint32_t h){last_closed_window=h;return 0;}
 static void sys_yield(void){}
 static void sys_detach(void){}
+
+static unsigned char saved_state[2][36400];
+static unsigned saved_size[2];
+static int fail_save;
+static int32_t sys_fs_home(char *out,uint32_t cap){snprintf(out,cap,"/home/test");return 0;}
+static int32_t sys_fs_mkdir(const char *path){(void)path;return 0;}
+static int32_t sys_fs_chmod(const char *path,uint32_t mode){(void)path;(void)mode;return 0;}
+static int32_t sys_fs_read(const char *path,void *out,uint32_t cap){
+    unsigned slot=path[strlen(path)-1]=='1';
+    if(!saved_size[slot])return -1;
+    if(!out)return (int)saved_size[slot];
+    unsigned n=saved_size[slot];if(n>cap)n=cap;memcpy(out,saved_state[slot],n);return (int)n;
+}
+static int32_t sys_fs_write(const char *path,const void *data,uint32_t n){
+    unsigned slot=path[strlen(path)-1]=='1';assert(n<=sizeof(saved_state[slot]));
+    unsigned stored=fail_save?n/2:n;memcpy(saved_state[slot],data,stored);saved_size[slot]=stored;
+    return fail_save?-1:(int)n;
+}

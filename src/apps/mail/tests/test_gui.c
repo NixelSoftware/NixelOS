@@ -75,6 +75,37 @@ static void wm_click(int x,int y) {
 }
 int main(int argc,char **argv){
     (void)argv;
+    /* Snapshots restore settings and multiline drafts, never passwords. */
+    state_load();
+    mail_copy(host,sizeof(host),"imap.example.org");
+    mail_copy(username,sizeof(username),"alice@example.org");
+    mail_copy(password,sizeof(password),"never-persist-this");
+    mail_copy(draft,sizeof(draft),"First line\nSecond line");
+    mail_copy(recipient,sizeof(recipient),"bob@example.org");
+    mail_copy(reply_id,sizeof(reply_id),"<reply@example.org>");
+    state_save(1);assert(state_generation==1);
+    for(unsigned i=0;i+18<saved_size[1];i++)
+        assert(memcmp(saved_state[1]+i,"never-persist-this",18)!=0);
+    draft[0]=host[0]=password[0]=0;state_loaded=0;state_load();
+    assert(!strcmp(draft,"First line\nSecond line"));assert(!strcmp(host,"imap.example.org"));
+    assert(!strcmp(reply_id,"<reply@example.org>"));assert(!*password);
+    /* An interrupted replacement leaves the previous snapshot recoverable. */
+    mail_copy(draft,sizeof(draft),"New draft");fail_save=1;state_save(1);
+    assert(state_generation==1);fail_save=0;draft[0]=0;state_load();
+    assert(!strcmp(draft,"First line\nSecond line"));
+    /* Empty drafts are persisted as tombstones, preventing old recovery. */
+    draft[0]=recipient[0]=subject[0]=reply_id[0]=0;state_save(1);
+    mail_copy(draft,sizeof(draft),"unsaved");state_load();assert(!*draft&&!*reply_id);
+    /* Reject malformed records even if their checksum is consistent. */
+    unsigned slot=state_generation&1;
+    saved_state[slot][24+sizeof(host)-1]='x';
+    for(unsigned i=0;i<sizeof(host)-1;i++)saved_state[slot][24+i]='x';
+    memcpy(state_data,saved_state[slot],saved_size[slot]);
+    state_put(12,state_checksum(state_data+20,saved_size[slot]-20));
+    assert(!state_valid(saved_size[slot]));
+    memset(saved_size,0,sizeof(saved_size));
+    state_loaded=state_generation=state_hash=0;state_directory[0]=0;
+    host[0]=username[0]=draft[0]=recipient[0]=reply_id[0]=0;advanced=0;
     /* Production entry point must create a window on the default 800x600 desktop. */
     close_on_poll=1;user_main("");assert(create_calls==2&&window_created);
     assert(last_description.x+last_description.width<=800);
