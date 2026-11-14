@@ -333,10 +333,28 @@ static int account_command(const char* command) {
         print("uid="); print_u32(user_uid()); print(" gid="); print_u32(user_gid()); print("\n");
     } else if (has_prefix(command, "users") && !command[5]) {
         for (unsigned i = 0; i < USER_COUNT; i++) {
+            if (!users[i].name[0]) continue;
             print(users[i].name);
             if (i + 1 < USER_COUNT) print(" ");
         }
         print("\n");
+    } else if (has_prefix(command, "useradd ") || has_prefix(command, "passwd ")) {
+        int create=has_prefix(command,"useradd ");
+        const char* name=command+(create ? 8 : 7);
+        if(user_uid()!=USER_ROOT) { print("Root required; use sudo.\n"); return 1; }
+        char password[64]={0}, confirm[64]={0};
+        print("New password: "); int ok=terminal_read_password(password,sizeof(password));
+        if(ok) { print("Confirm password: "); ok=terminal_read_password(confirm,sizeof(confirm)); }
+        if(ok && equal(password,confirm)) {
+            ok=create ? user_create(name,password) : user_set_password(name,password);
+            print(ok ? "Account saved.\n" : "Account update failed.\n");
+        } else print("Passwords did not match or input cancelled.\n");
+        for(unsigned i=0;i<sizeof(password);i++) {
+            ((volatile char*)password)[i]=0; ((volatile char*)confirm)[i]=0;
+        }
+    } else if (has_prefix(command,"userlock ") || has_prefix(command,"userunlock ")) {
+        int locked=has_prefix(command,"userlock ");
+        print(user_set_locked(command+(locked ? 9 : 11),locked) ? "Account saved.\n" : "Account update failed (root required; root/service accounts are protected).\n");
     } else if (equal(command, "su")) {
         print("Usage: su <account>\n");
     } else if (has_prefix(command, "su ")) {
@@ -434,6 +452,8 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ver             Show OS version and build ID\n"
                     " users / whoami / id   Show accounts or identity\n"
                     " sudo <command>  Run as root (password required)\n"
+                    " useradd <name> / passwd <name>  Create account / set password (root)\n"
+                    " userlock <name> / userunlock <name>  Disable / enable login (root)\n"
                     " su <account>    Switch identity (root only)\n"
                     " stat <path>     Show ownership and mode\n"
                     " chmod <octal> <path>  Set permissions\n"

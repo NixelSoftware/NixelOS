@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory(prefix='nixel-wpa2-') as tmp:
     target = Path(tmp) / 'wpa2.so'
     subprocess.run(CC + ['-shared','-fPIC','-O2','-fno-builtin','-DWOLFSSL_USER_SETTINGS',
         '-I'+str(DIR),'-I'+str(VENDOR), str(DIR/'wpa2.c'),str(DIR/'ccmp.c'),str(DIR/'handshake.c'),
-        *[str(VENDOR/f'wolfcrypt/src/{name}.c') for name in ('sha','hmac','hash','pwdbased','aes')],
+        *[str(VENDOR/f'wolfcrypt/src/{name}.c') for name in ('sha','sha256','hmac','hash','pwdbased','aes')],
         '-o',str(target)],check=True)
     lib = ctypes.CDLL(str(target))
     ptr = ctypes.c_void_p

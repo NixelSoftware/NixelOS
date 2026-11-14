@@ -217,3 +217,46 @@ Write app logic in handlers such as `Button1OnPressed()` and access state with
 layout in a separate `.form` file; the C editor shows only application code.
 Compile projects with `ncc source.c output.bin`, or use Build and Run in the
 designer. See [SDK usage, APIs, and limits](documentation/sdk.md).
+
+## Accounts (development setup)
+
+On the first boot of a fresh image, NixelOS creates `root` (password `banana`)
+and `user` (password `user`) through the account database. These temporary
+credentials remain available for development. `system` and `nobody` are locked
+service identities. Existing databases are loaded on subsequent boots; passwords
+are not reset to the development defaults.
+
+Accounts are persisted in `/etc/accounts/database`, inside a root-only directory
+(mode 0700), with database mode 0600. Passwords use PBKDF2-HMAC-SHA256 with
+600,000 iterations and individual 16-byte salts from the kernel entropy source.
+Plaintext passwords are never written to the database. A missing or invalid
+database in an existing account directory stops boot rather than restoring
+known credentials.
+
+Use the terminal to manage accounts; password prompts hide input and require
+confirmation:
+
+```
+sudo useradd alice
+sudo passwd alice
+sudo userlock alice
+sudo userunlock alice
+```
+
+Account administration currently requires root, including password changes.
+New accounts receive a unique UID/GID and a private `/home/<name>` with Desktop,
+Documents, Downloads, Pictures, Music, and `.config` directories. Names contain
+lowercase letters, underscores, and digits after the first character, up to
+31 characters. Passwords contain 1–63 bytes. There are 16 account slots,
+including the four initial identities. Root and service identities cannot be
+locked; service identities cannot receive passwords. Locking prevents future
+logins and does not terminate running sessions. Account deletion is not yet
+provided.
+
+Rebooting preserves accounts in the same image. Rebuilding `os.img` creates a
+fresh filesystem and therefore restores first-boot development credentials.
+The account database shares the filesystem's existing power-loss limitations;
+there is no transactional recovery for interrupted database writes yet.
+Run `make test-accounts` for native lifecycle and persistence tests.
+Run `make test-accounts-qemu` for first-boot provisioning, password-hash checks,
+and reboot persistence on a disposable image (requires QEMU, NASM, and debugfs).

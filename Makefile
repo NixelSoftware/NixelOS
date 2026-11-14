@@ -510,7 +510,7 @@ $(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_DIR)/pci_power.o 
 src/kernel/hal/net.o src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/scan.h $(IWLEGACY_DIR)/station.h
 .PHONY: test-iwlegacy
 test-iwlegacy:
-	$(CC) -O2 -fno-builtin -shared -fPIC -DWOLFSSL_USER_SETTINGS -Isrc/kernel/net/wireless/security -Isrc/system/libraries/tls/vendor/wolfssl src/kernel/net/wireless/security/wpa2.c src/kernel/net/wireless/security/ccmp.c src/kernel/net/wireless/security/handshake.c $(addprefix src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/,$(addsuffix .c,sha hmac hash pwdbased aes)) -o /tmp/nixel-test-iwlegacy-crypto.so
+	$(CC) -O2 -fno-builtin -shared -fPIC -DWOLFSSL_USER_SETTINGS -Isrc/kernel/net/wireless/security -Isrc/system/libraries/tls/vendor/wolfssl src/kernel/net/wireless/security/wpa2.c src/kernel/net/wireless/security/ccmp.c src/kernel/net/wireless/security/handshake.c $(addprefix src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/,$(addsuffix .c,sha sha256 hmac hash pwdbased aes)) -o /tmp/nixel-test-iwlegacy-crypto.so
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/3945_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy
 	/tmp/nixel-test-iwlegacy
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/pci_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-pci
@@ -550,7 +550,7 @@ src/apps/doom/compat/libc.o: src/system/user/sys_api.h
 # Separate objects prevent the TLS client's settings/allocator from leaking in.
 WIFI_SECURITY_DIR := src/kernel/net/wireless/security
 WIFI_CRYPTO_VENDOR := src/system/libraries/tls/vendor/wolfssl
-WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha hmac hash pwdbased aes))
+WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha sha256 hmac hash pwdbased aes))
 WIFI_CRYPTO_FLAGS := -U__unix__ -U__linux__ -DWOLFSSL_USER_SETTINGS -I$(WIFI_SECURITY_DIR) -Isrc/system/libraries/tls/compat -I$(WIFI_CRYPTO_VENDOR) -fno-builtin -fno-stack-protector
 KERNEL_OBJ += $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o $(WIFI_CRYPTO_OBJECTS)
 src/kernel/kernel.bin: $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o $(WIFI_CRYPTO_OBJECTS)
@@ -652,3 +652,15 @@ sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/m
 sdk: ncc.bin designer.bin sdkhost.bin
 test-sdk: sdk
 	$(PYTHON) tools/tests/test_sdk.py
+
+# Account hashing shares the allocation-free wolfCrypt configuration.
+src/kernel/users.o: CFLAGS += $(WIFI_CRYPTO_FLAGS)
+
+.PHONY: test-accounts
+test-accounts:
+	$(CC) -std=c99 -O2 -fno-builtin $(filter-out -Isrc/system/libraries/tls/compat,$(WIFI_CRYPTO_FLAGS)) src/kernel/tests/accounts_test.c $(WIFI_SECURITY_DIR)/wpa2.c $(addprefix $(WIFI_CRYPTO_VENDOR)/wolfcrypt/src/,$(addsuffix .c,sha sha256 hmac hash pwdbased aes)) -o /tmp/nixel-test-accounts
+	/tmp/nixel-test-accounts
+
+.PHONY: test-accounts-qemu
+test-accounts-qemu: os.img
+	$(PYTHON) tools/tests/test_accounts_qemu.py
