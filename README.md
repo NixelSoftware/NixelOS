@@ -211,7 +211,9 @@ framebuffer. This option does not configure a serial-only console.
 
 ## On-device app development
 
-Launch `designer` to create a C main window with native controls and edit its
-source, then save, build, and run it on NixelOS. Compile handwritten SDK apps
-with `ncc source.c output.bin`. This initial compiler supports a documented C
-subset. See [SDK usage, APIs, and limits](documentation/sdk.md).
+Launch `designer` to build a window visually and give its controls public names.
+Write app logic in handlers such as `Button1OnPressed()` and access state with
+`Checkbox1.checkboxIsTicked` or `MainWindow.windowLoaded`. The designer keeps
+layout in a separate `.form` file; the C editor shows only application code.
+Compile projects with `ncc source.c output.bin`, or use Build and Run in the
+designer. See [SDK usage, APIs, and limits](documentation/sdk.md).

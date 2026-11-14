@@ -361,7 +361,7 @@ src/kernel/main.o src/system/init/main.o: src/system/init/nixinit.h
 .gui-config: FORCE_IMAGE_CONFIG
 	$(PYTHON) -c "from pathlib import Path; p=Path('.gui-config'); value='$(NOGUI)'; p.write_text(value) if not p.exists() or p.read_text()!=value else None"
 
-os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) $(wildcard resources/sdk/*) src/sdk/nixel.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
+os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) $(wildcard resources/sdk/*) src/sdk/nixel.h src/sdk/components.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
 	$(PYTHON) mkext4.py os.img.new $(if $(filter 1,$(NOGUI)),-nogui,)
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build
@@ -640,11 +640,12 @@ test-mail-gui:
 	/tmp/nixel-test-mail-gui
 
 # On-device SDK: native C subset compiler, visual designer and app runtime.
-SDK_HEADERS := src/sdk/ui.h src/sdk/image.h src/sdk/compiler.h src/sdk/design.h src/sdk/editor.h
-src/apps/ncc/main.o src/apps/designer/main.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o: $(SDK_HEADERS)
-ncc.bin: src/sdk/compiler.o
-designer.bin: src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o
-sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/main.o src/sdk/ui.o $(APP_RUNTIME)
+SDK_HEADERS := src/sdk/ui.h src/sdk/image.h src/sdk/compiler.h src/sdk/design.h src/sdk/editor.h src/sdk/components.h src/sdk/objects.h src/sdk/project.h
+src/apps/ncc/main.o src/apps/designer/main.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o src/sdk/objects.o src/sdk/project.o: $(SDK_HEADERS)
+src/sdk/ui.o src/sdk/objects.o src/apps/sdkhost/main.o: src/system/user/sys_api.h src/system/user/window_api.h src/system/graphics/wm/theme.h
+ncc.bin: src/sdk/compiler.o src/sdk/design.o src/sdk/project.o
+designer.bin: src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o src/sdk/project.o
+sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/objects.o $(APP_RUNTIME)
 	$(LD) $(LDFLAGS) -T src/sdk/app.ld $(filter %.o,$^) -o src/apps/sdkhost/sdkhost.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss src/apps/sdkhost/sdkhost.tmp $@
 .PHONY: sdk test-sdk

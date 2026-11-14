@@ -1,130 +1,169 @@
 # On-device C SDK
 
-Build the tools with `make sdk`, or build a complete image with `make`.
-The image includes `ncc` (a small native i386 C compiler), `designer` (the
-window designer), and the runtime at `/usr/lib/nixel/sdkhost.bin`. No compiler
-server, network connection, assembler, or linker is required on the device.
+Create the window in `designer` and write its behavior in C event handlers.
+The designer owns the layout. The Code editor shows only application code:
+there are no drawing calls, control IDs, generated initialization, or event
+loops to maintain.
 
-## Try an application
+Build the tools with `make sdk`, or include them in a full image with `make`.
+Both the designer and the `ncc` compiler run on NixelOS without a network
+connection or a host compiler.
 
-The bundled example is `/usr/share/nixel/sdk/hello.c`. In a terminal:
+## Projects and the designer
+
+A project has two files next to each other:
+
+- `MainWindow.c`: application functions and event handlers, edited in Code.
+- `MainWindow.form`: designer-owned layout and component names. Edit it visually.
+
+Open `designer` to start a project, or pass a source path such as
+`designer /home/user/Documents/MainWindow.c` to open one. Choose **Open** after
+changing the Source path. Save in a writable directory in your home.
+
+Add buttons, text boxes, labels, and checkboxes using the palette. Select a
+component to change its **Name**, text, position, and size, then choose
+**Apply**. Names such as `Button1`, `SaveButton`, or `Username` must be unique
+C identifiers, up to 31 characters. The window is publicly named `MainWindow`.
+Click empty canvas to move a selected component, or choose **Delete** to
+remove it. The designer supports 48 components and window sizes from
+160×100 to 600×300 on the default 800×600 desktop.
+
+**Code** opens the app's C file, including event-handler stubs for its named
+components. **Design** returns to the visual layout and preserves your code.
+The editor supports arrows, Home/End, Delete, Backspace, Tab indentation,
+newlines, and scrolling.
+
+**Save** writes both files. **Build** saves the project and compiles it to
+`MainWindow.bin`; **Run** builds and launches that executable. The `.form`
+file stays separate from app code and is embedded in the executable at build
+time. Running the app does not need the `.c` or `.form` files.
+
+Renaming a component publishes its new name and creates a new handler stub.
+Your previous handler remains in the C file so its implementation is not lost;
+move that logic into the new handler and update old component references.
+Deleting a component also preserves handwritten code; remove any references
+to the deleted object before building.
+
+## Public components and event handlers
+
+The public component types are `Window`, `Button`, `Checkbox`, `TextBox`, and
+`Label`. In C these are component structs, and event handlers are ordinary
+functions. The project compiler supplies the named instances to every
+function in the application's C file. Do not redeclare those instances or
+write your own `main()` for a designer project.
+
+| Component | Public state | Automatic event handler |
+| --- | --- | --- |
+| `MainWindow` | `windowLoaded`, `isOpen` | `MainWindowOnLoaded()`, `MainWindowOnClosed()` |
+| `Button1` | `buttonIsPressed`, `text` | `Button1OnPressed()` |
+| `Checkbox1` | `checkboxIsTicked`, `isChanged`, `text` | `Checkbox1OnChanged()` |
+| `TextBox1` | `text`, `textChanged` | `TextBox1OnTextChanged()` |
+| `Label1` | `text` | None |
+
+`Button1OnPressed()` is called once for each button activation. You can read
+`Button1.buttonIsPressed` from another application function during that event.
+It is an event pulse, cleared before the next event is dispatched, rather than
+a measurement of how long the mouse button is held. `isPressed` is an alias.
+
+`Checkbox1.checkboxIsTicked` reads or changes its checked state (`isTicked` is
+an alias). `MainWindow.windowLoaded` becomes true after the native window has
+been created (`isLoaded` is an alias), and its Loaded handler runs once after
+all components are available. `isOpen` becomes false when it closes; the
+Closed handler then runs once. Use `close_window()` to close it from app code.
+
+Assign `.text` to change a button caption, label, input, or checkbox caption.
+Read `TextBox1.text` to get the current input. Text is copied into a 128-byte
+buffer, including its terminator; longer text is truncated. Changes to public
+text and checkbox state are applied when the handler returns. Text-box edits
+and programmatic text changes raise `OnTextChanged`; checkbox changes raise
+`OnChanged`. Assigning the existing value does not raise a new change event.
+Event flags and window state are read-only; the compiler rejects assignments
+to them. Accessing a property on the wrong component type is also an error.
+
+For a form containing `Button1`, `Checkbox1`, `TextBox1`, and `Label1`, write:
+
+```c
+#include <nixel.h>
+
+void MainWindowOnLoaded(void) {
+    Label1.text = "Ready";
+}
+
+void UpdateMessage(void) {
+    if (Button1.buttonIsPressed) {
+        Label1.text = TextBox1.text;
+    }
+}
+
+void Button1OnPressed(void) {
+    UpdateMessage();
+}
+
+void Checkbox1OnChanged(void) {
+    if (Checkbox1.checkboxIsTicked) {
+        Label1.text = "Enabled";
+    } else {
+        Label1.text = "Disabled";
+    }
+}
+```
+
+The layout creation and the calls to these handlers are supplied privately by
+the project compiler. You may add application functions and globals and call
+them from any handler. Handlers must have no parameters; use the generated
+`void HandlerName(void)` signatures. Missing handlers are optional, and the
+designer adds empty stubs without replacing existing implementations.
+
+## Compile a project from the terminal
+
+The bundled `hello.c` and `hello.form` demonstrate named public controls and
+`Button1OnPressed()`. Compile and run them with:
 
 ```
 ncc /usr/share/nixel/sdk/hello.c hello.bin
 ./hello.bin
 ```
 
-Launch `designer` to create a window, or
-`designer /home/user/Documents/MainWindow.c` to choose its source path.
-The initial source path is `MainWindow.c` in the inherited working directory.
-Choose **Open** to load an existing designer source file. Source files in
-`/usr/share` are read-only; save your own files in your home directory.
+To edit the example, copy **both** files into your own directory before
+opening `hello.c` in the designer. The compiler automatically reads the
+matching `.form` beside the C file and combines the layout and app logic in
+memory. It never writes generated GUI code into the app's C file.
 
-The designer fits the default 800×600 desktop. Add buttons, text boxes,
-labels, or checkboxes from the palette. Click a component to select it;
-change its text, X/Y position, width/height, or numeric ID, then click **Apply**.
-Click empty canvas to move the selected component there. **Delete** removes
-it. The window title and dimensions are also edited with **Apply**.
-The designer supports windows 160–600 pixels wide and 100–300 pixels high.
-
-**Code** switches to the C source editor. **Save** writes C source. **Build** saves and compiles to the same path with
-`.c` replaced by `.bin` (or `.bin` appended). **Run** builds and launches that
-executable. Status and compile errors appear along the bottom. Builds replace
-an existing output file. Save refuses an existing source file without the
-designer markers, and preserves all C code outside those markers.
-
-## Window object and event handling
-
-C has no classes. The runtime owns a `sdk_window` struct containing the native
-window handle, controls, focus, and checkbox state. The designer visualizes
-the `MainWindow()` initializer that constructs this object. This first version
-supports one main window per SDK application and up to 48 components.
-
-```c
-#include <nixel.h>
-
-void MainWindow(void) {
-    window("My app", 400, 240);
-    textbox(1, 16, 40, 260, 28, "Your name");
-    button(2, 16, 84, 120, 28, "Greet");
-    label(3, 16, 132, 350, 24, "");
-}
-
-int main(void) {
-    MainWindow();
-    int event = 0;
-    while (event >= 0) {
-        event = poll();
-        if (event == 2) {
-            set_text(3, get_text(1));
-        }
-    }
-    return 0;
-}
-```
-
-For designer round trips, use a file created by the designer or the bundled
-example, which surrounds `MainWindow()` with `NIXEL DESIGNER BEGIN/END`
-comments. Click **Code** to edit your event handlers outside that generated section
-in the built-in C editor. It supports arrow keys, Home/End, Backspace, Delete,
-newlines, Tab indentation, and automatic scrolling. Use **Save**, **Build**,
-and **Run** while editing. Click **Design** to save and visualize your window
-again. You can open handwritten C source in Code mode as well; returning
-to Design requires a valid designer section. Manually changing the generated section must retain
-the generated literal-call syntax for the designer to reopen it.
-
-Component functions take `(id, x, y, width, height, text)`. IDs must be unique
-positive integers. Coordinates are relative to the outer native window;
-Y must be at least 26 to clear its title bar. Text is copied into a 128-byte
-buffer (127 characters plus terminator). Text boxes support printable ASCII,
-backspace, and Tab navigation. Labels and input text are clipped to their
-available columns. Button clicks and checkbox toggles return their ID from
-`poll()`. It returns 0 while idle, and -1 when the main window closes; idle
-polls yield to the scheduler. `checked(id)` reads checkbox state.
-`get_text(id)` returns a borrowed pointer; `set_text(id, text)` copies text
-and redraws. `close_window()`, `print(text)`, `ticks()`, and `yield()` are also
-available. Function declarations are in `/usr/share/nixel/sdk/nixel.h`.
+An invalid sidecar causes a build error. A standalone C file without a `.form`
+can still use the original C subset compiler and its own `int main(void)`.
+Older files that mix a `MainWindow()` drawing initializer into app code remain
+standalone sources; create a new designer project to use the separated format.
+The designer refuses to overwrite an existing file until you explicitly open
+its project.
 
 ## Compiler scope and limits
 
-NCC is an initial C subset compiler, not a complete ISO C implementation.
-It emits native i386 machine code into a copy of the bundled runtime. Its
-`.bin` output is a standalone ring-3 application with the normal APP1 header;
-the compiler and original source are not needed to run it.
+NCC produces native i386 `.bin` apps with the normal APP1 header, window
+syscalls, and process permissions. The runtime is bundled at
+`/usr/lib/nixel/sdkhost.bin`.
 
-Supported syntax:
+Supported application syntax includes integer globals and locals, functions,
+forward calls and recursion, `if`/`else`, `while`, `return`, assignments,
+strings, arithmetic, comparisons, and short-circuit `&&`/`||`. Named component
+objects support the public fields above from any app function.
 
-- `int`, `char *` string handles, `void`, integer and character literals,
-  escaped strings, and `//` / `/* */` comments.
-- Functions with named parameters, forward calls and recursion; `int main(void)`
-  is the entry point. Functions accept at most eight word-sized arguments.
-- Global integer variables with constant integer initializers, local variables,
-  assignment, blocks, `if` / `else`, `while`, and `return`.
-- `+ - * / %`, comparisons, unary `+ - !`, and short-circuit `&& ||`.
-- Exactly `#include <nixel.h>` or `#include "nixel.h"`; the SDK functions are
-  built into the compiler's runtime symbol table.
+This is still a C subset. Arbitrary user-defined structs/classes, inheritance,
+arrays, floating point, macros, additional headers, external libraries,
+`for`, `switch`, `++`, and compound assignments are not supported. Component
+instances are project globals, not local variables or by-value parameters.
+Use shared app functions to organize behavior. Use `i = i + 1` in loops.
+`print(text)`, `ticks()`, `yield()`, and `close_window()` are also available.
 
-Values and parameters occupy 32 bits. Strings are opaque pointers for SDK
-calls. This version does not support structs in application source, arrays,
-pointer arithmetic/dereferencing, floating point, casts, typedefs, arbitrary
-headers/macros, prototypes, `for`, `break`, `switch`, `++`, compound assignment,
-or external libraries. Use `i = i + 1` and `while` loops. Native OS apps can
-continue using the repository's host GCC toolchain and full syscall API.
-The window struct API is also available internally in `src/sdk/ui.h` for
-host-built native apps.
-
-Source size is limited to 16,383 bytes. Generated code, globals, and strings
-share a 24 KiB reservation; identifiers, symbol counts, local variables,
-call fixups, and parse nesting are bounded. Errors abort the build before
-writing an executable. Runtime arithmetic errors such as division by zero
-remain application faults. Application output permissions are set to 0755
-through an owner-checked `SYS_FS_CHMOD` call.
+Application C source is limited to 16,383 bytes. The generated project source
+is bounded separately, and native code, public objects, globals, and strings
+share a 24 KiB reservation. A build fails before publishing the executable if
+its source, metadata, symbols, parse nesting, or output exceeds a limit.
 
 ## Verification
 
-`make test-sdk` builds all three tools, executes generated i386 machine code
-in a freestanding Linux test runner, checks compiler rejection paths, compiles
-the example, tests designer serialization and preservation of handwritten
-code, and exercises the production UI against mocked window syscalls.
-The native execution portion requires Linux with 32-bit syscall support;
-it may need permission to run outside a restrictive execution sandbox.
+`make test-sdk` runs native generated-code tests, including the generated event
+loop invoking Loaded, Pressed, Changed, TextChanged, and Closed handlers. It
+also checks cross-function property access, invalid property writes/types,
+form round trips and validation, preservation of application code, and native
+control synchronization against mocked window syscalls. The native execution
+tests require Linux with 32-bit syscall support.

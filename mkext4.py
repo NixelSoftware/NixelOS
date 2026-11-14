@@ -136,6 +136,8 @@ def main(output, nogui=False):
             (root / "usr/lib/nixel/sdkhost.bin").chmod(0o644)
         shutil.copyfile("src/sdk/nixel.h", root / "usr/share/nixel/sdk/nixel.h")
         (root / "usr/share/nixel/sdk/nixel.h").chmod(0o644)
+        shutil.copyfile("src/sdk/components.h", root / "usr/share/nixel/sdk/components.h")
+        (root / "usr/share/nixel/sdk/components.h").chmod(0o644)
         for asset in Path("resources/sdk").glob("*"):
             if asset.is_file():
                 shutil.copyfile(asset, root / "usr/share/nixel/sdk" / asset.name)

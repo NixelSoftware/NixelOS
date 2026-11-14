@@ -1,7 +1,10 @@
 #include "../../system/user/sys_api.h"
 #include "../../sdk/compiler.h"
+#include "../../sdk/project.h"
 static unsigned char image[SDK_IMAGE_MAX];
 static char source[16384],error[160];
+static unsigned char form_data[SDK_FORM_MAX];
+static sdk_design form;
 static void say(const char*s) {
     unsigned n=0;
     while(s[n])n++;
@@ -59,7 +62,15 @@ void user_main(const char*args) {
         }
         off+=n;
     }
-    if(sdk_compile(source,image,length,error,sizeof(error))<0) {
+    char form_path[134];
+    if(sdk_form_path(input,form_path,sizeof(form_path))<0){say("Project path too long\n");return;}
+    int form_size=sys_fs_read(form_path,0,0);
+    int result;
+    if(form_size>=0){
+        if(form_size>SDK_FORM_MAX||sys_fs_read(form_path,form_data,form_size)!=form_size||sdk_form_load(&form,form_data,form_size)<0){say("Invalid project form\n");return;}
+        result=sdk_project_compile(&form,source,image,length,error,sizeof(error));
+    }else result=sdk_compile(source,image,length,error,sizeof(error));
+    if(result<0) {
         say(error);
         say("\n");
         return;

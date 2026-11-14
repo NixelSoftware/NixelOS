@@ -1,6 +1,8 @@
 #include "../../sdk/ui.h"
 #include "../../sdk/image.h"
+#include "../../sdk/objects.h"
 static sdk_window main_window;
+static sdk_objects public_objects;
 static int window(char *title,int width,int height) {
     if(main_window.handle>=0)sdk_close(&main_window);
     int r=sdk_open(&main_window,title,width,height);
@@ -13,7 +15,7 @@ CONTROL(textbox,2)
 CONTROL(label,3)
 CONTROL(checkbox,4)
 static int poll(void) {
-    int r=sdk_poll(&main_window);
+    int r=sdk_objects_poll(&public_objects,&main_window);
     if(!r)sys_yield();
     return r;
 }
@@ -34,6 +36,7 @@ static int checked(int id) {
 }
 static int close_window(void) {
     sdk_close(&main_window);
+    sdk_objects_flush(&public_objects,&main_window);
     return 0;
 }
 static int print(char*s) {
@@ -48,20 +51,25 @@ static int yield(void) {
     sys_yield();
     return 0;
 }
+static int __bind(int id,int kind,NixelComponent *object) {
+    return sdk_objects_bind(&public_objects,&main_window,id,kind,object);
+}
+static int __flush(void) {
+    sdk_objects_flush(&public_objects,&main_window);return 0;
+}
 /* Initialized reservation survives objcopy. NCC replaces it with native i386 code. */
 __attribute__((section(".sdkcode"),used)) unsigned char sdk_code[SDK_CODE_SIZE]= {
     0xC3
 };
 #define EXPORT(f,n) {#f,(unsigned)f,n}
 __attribute__((used)) sdk_image sdk_metadata= {
-    {'N','I','X','E','L','S','D','K','I','M','A','G','E','0','1','!'},1,(unsigned)sdk_code,SDK_CODE_SIZE,0, {
-        EXPORT(window,3),EXPORT(button,6),EXPORT(textbox,6),EXPORT(label,6),EXPORT(checkbox,6), EXPORT(poll,0),EXPORT(set_text,2),EXPORT(get_text,1),EXPORT(checked,1),EXPORT(close_window,0), EXPORT(print,1),EXPORT(ticks,0),EXPORT(yield,0), {
-            "",0,0
-        }
+    {'N','I','X','E','L','S','D','K','I','M','A','G','E','0','1','!'},SDK_IMAGE_VERSION,(unsigned)sdk_code,SDK_CODE_SIZE,0, {
+        EXPORT(window,3),EXPORT(button,6),EXPORT(textbox,6),EXPORT(label,6),EXPORT(checkbox,6), EXPORT(poll,0),EXPORT(set_text,2),EXPORT(get_text,1),EXPORT(checked,1),EXPORT(close_window,0), EXPORT(print,1),EXPORT(ticks,0),EXPORT(yield,0),EXPORT(__bind,3),EXPORT(__flush,0)
     }
 };
 void user_main(void) {
     main_window.handle=-1;
+    sdk_objects_reset(&public_objects);
     if(sdk_metadata.entry)((void(*)(void))sdk_metadata.entry)();
     sdk_close(&main_window);
 }
