@@ -294,7 +294,10 @@ int nvme_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buffer) {
         cmd.prp1 = (uint32_t)dma_bounce_page;
         cmd.cdw10 = lba;
         cmd.cdw11 = 0;
-        cmd.cdw12 = (uint32_t)(chunk - 1);
+        /* Complete each write only after it reaches nonvolatile media.  The
+         * filesystem relies on the dirty superblock reaching the device before
+         * metadata changes and those changes reaching it before the clean mark. */
+        cmd.cdw12 = (uint32_t)(chunk - 1) | (1u << 30); /* FUA */
 
         if (nvme_submit_io(&cmd, 0) < 0) return 0;
 
