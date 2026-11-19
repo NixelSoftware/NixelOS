@@ -191,7 +191,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
                  lspci demo3d irc telnetd taskmgr tunnel ncc designer
-APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
+APPS := $(STANDARD_APPS) doom syndig qksrv qkftp glcube
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin sdkhost.bin
 # Compiler support routines (memcpy/memset/memmove/memcmp) for freestanding apps.
 APP_RUNTIME := src/system/user/runtime.o
@@ -325,6 +325,19 @@ qkftp.bin: Makefile $(FTP_OBJ)
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(FTP_DIR)/qkftp.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(FTP_DIR)/qkftp.tmp').unlink(missing_ok=True)"
 
+# OpenGL cube: just the app (main + entry). The GL/GLU/GLUT implementation and
+# the math live in the system libraries libnixelgl and libnixelm; public GL
+# headers are in src/include/GL (already on the global include path).
+GLCUBE_DIR := src/apps/glcube
+GLCUBE_LIBS := src/system/libraries/gl/libnixelgl.a src/system/libraries/m/libnixelm.a
+GLCUBE_OBJ := $(GLCUBE_DIR)/entry.o $(GLCUBE_DIR)/main.o $(APP_RUNTIME)
+$(GLCUBE_DIR)/main.o: CFLAGS += -fno-builtin -fno-stack-protector
+$(GLCUBE_DIR)/main.o: src/include/GL/gl.h src/include/GL/glut.h $(GLCUBE_DIR)/texture_data.h
+glcube.bin: Makefile $(GLCUBE_DIR)/app.ld $(GLCUBE_OBJ) $(GLCUBE_LIBS)
+	$(LD) $(LDFLAGS) --omagic -T $(GLCUBE_DIR)/app.ld -e _start $(filter %.o,$^) $(GLCUBE_LIBS) -o $(GLCUBE_DIR)/glcube.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(GLCUBE_DIR)/glcube.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(GLCUBE_DIR)/glcube.tmp').unlink(missing_ok=True)"
+
 .PHONY: fastfetch.bin
 fastfetch.bin: src/include/os_version.h
 	$(MAKE) -C src/apps/fastfetch CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NASM="$(NASM)" PYTHON="$(PYTHON)"
@@ -370,7 +383,7 @@ run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost glcube'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
@@ -532,6 +545,10 @@ test-iwlegacy:
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk
+
+# Reusable user-space math and OpenGL libraries; apps opt in by linking them.
+include src/system/libraries/m/m.mk
+include src/system/libraries/gl/gl.mk
 
 
 .PHONY: test-browser-https
