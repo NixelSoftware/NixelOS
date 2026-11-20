@@ -191,7 +191,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
                  lspci demo3d irc telnetd taskmgr tunnel ncc designer
-APPS := $(STANDARD_APPS) doom syndig qksrv qkftp glcube
+APPS := $(STANDARD_APPS) doom syndig qksrv qkftp glcube glscene
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin sdkhost.bin
 # Compiler support routines (memcpy/memset/memmove/memcmp) for freestanding apps.
 APP_RUNTIME := src/system/user/runtime.o
@@ -338,6 +338,17 @@ glcube.bin: Makefile $(GLCUBE_DIR)/app.ld $(GLCUBE_OBJ) $(GLCUBE_LIBS)
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(GLCUBE_DIR)/glcube.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(GLCUBE_DIR)/glcube.tmp').unlink(missing_ok=True)"
 
+# OpenGL scene: a lit, fogged brick-floor scene with a textured gluSphere.
+# Same system libraries as glcube; main.c also uses the math library directly.
+GLSCENE_DIR := src/apps/glscene
+GLSCENE_OBJ := $(GLSCENE_DIR)/entry.o $(GLSCENE_DIR)/main.o $(APP_RUNTIME)
+$(GLSCENE_DIR)/main.o: CFLAGS += -Isrc/system/libraries/m -fno-builtin -fno-stack-protector
+$(GLSCENE_DIR)/main.o: src/include/GL/gl.h src/include/GL/glut.h $(GLSCENE_DIR)/boing_data.h $(GLSCENE_DIR)/brick_data.h
+glscene.bin: Makefile $(GLSCENE_DIR)/app.ld $(GLSCENE_OBJ) $(GLCUBE_LIBS)
+	$(LD) $(LDFLAGS) --omagic -T $(GLSCENE_DIR)/app.ld -e _start $(filter %.o,$^) $(GLCUBE_LIBS) -o $(GLSCENE_DIR)/glscene.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(GLSCENE_DIR)/glscene.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(GLSCENE_DIR)/glscene.tmp').unlink(missing_ok=True)"
+
 .PHONY: fastfetch.bin
 fastfetch.bin: src/include/os_version.h
 	$(MAKE) -C src/apps/fastfetch CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NASM="$(NASM)" PYTHON="$(PYTHON)"
@@ -383,7 +394,7 @@ run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost glcube'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost glcube glscene'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"

@@ -188,11 +188,25 @@ static GLenum cull_mode = GL_BACK, front_face = GL_CCW;
 static uint32_t clear_color = 0;
 static int   vp_x, vp_y, vp_w, vp_h;
 
-static uint32_t pack_color(float r, float g, float b) {
-    if (r < 0) r = 0; if (r > 1) r = 1;
-    if (g < 0) g = 0; if (g > 1) g = 1;
-    if (b < 0) b = 0; if (b > 1) b = 1;
+static int   blend_enabled;
+static int   lighting_enabled, light0_enabled, color_material_enabled;
+static float light_pos_eye[4] = {0, 0, 1, 0};
+static float light_diffuse[3] = {1, 1, 1};
+static float light_ambient[3] = {0, 0, 0};
+static float light_specular[3] = {1, 1, 1};
+static float mat_specular[3] = {0, 0, 0};
+static float mat_shininess = 0.0f;
 
+static int   fog_enabled;
+static float fog_color[3] = {0, 0, 0};
+static float fog_start = 0.0f, fog_end = 1.0f;
+
+static float clampf(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static uint32_t pack_color(float r, float g, float b) {
+    r = clampf(r, 0, 1); g = clampf(g, 0, 1); b = clampf(b, 0, 1);
     uint32_t ri = (uint32_t)(int)(r * 255.0f + 0.5f);
     uint32_t gi = (uint32_t)(int)(g * 255.0f + 0.5f);
     uint32_t bi = (uint32_t)(int)(b * 255.0f + 0.5f);
@@ -203,16 +217,62 @@ void glEnable(GLenum cap) {
     if (cap == GL_DEPTH_TEST) depth_test = 1;
     else if (cap == GL_CULL_FACE) cull_enabled = 1;
     else if (cap == GL_TEXTURE_2D) tex_enabled = 1;
-
+    else if (cap == GL_BLEND) blend_enabled = 1;
+    else if (cap == GL_LIGHTING) lighting_enabled = 1;
+    else if (cap == GL_LIGHT0) light0_enabled = 1;
+    else if (cap == GL_COLOR_MATERIAL) color_material_enabled = 1;
+    else if (cap == GL_FOG) fog_enabled = 1;
 }
 void glDisable(GLenum cap) {
     if (cap == GL_DEPTH_TEST) depth_test = 0;
     else if (cap == GL_CULL_FACE) cull_enabled = 0;
     else if (cap == GL_TEXTURE_2D) tex_enabled = 0;
+    else if (cap == GL_BLEND) blend_enabled = 0;
+    else if (cap == GL_LIGHTING) lighting_enabled = 0;
+    else if (cap == GL_LIGHT0) light0_enabled = 0;
+    else if (cap == GL_COLOR_MATERIAL) color_material_enabled = 0;
+    else if (cap == GL_FOG) fog_enabled = 0;
 }
 void glCullFace(GLenum mode)  { cull_mode = mode; }
 void glFrontFace(GLenum mode) { front_face = mode; }
-void glShadeModel(GLenum mode) { (void)mode;  }
+void glShadeModel(GLenum mode) { (void)mode; }
+void glBlendFunc(GLenum s, GLenum d) { (void)s; (void)d; }
+
+void glLightfv(GLenum light, GLenum pname, const GLfloat *params) {
+    (void)light;
+    if (pname == GL_POSITION) {
+        float p[4] = { params[0], params[1], params[2], params[3] };
+        mat_vec(light_pos_eye, model_stack[model_top], p);
+    } else if (pname == GL_DIFFUSE) {
+        for (int i = 0; i < 3; i++) light_diffuse[i] = params[i];
+    } else if (pname == GL_AMBIENT) {
+        for (int i = 0; i < 3; i++) light_ambient[i] = params[i];
+    } else if (pname == GL_SPECULAR) {
+        for (int i = 0; i < 3; i++) light_specular[i] = params[i];
+    }
+}
+void glLightf(GLenum light, GLenum pname, GLfloat param) { (void)light; (void)pname; (void)param; }
+
+void glMaterialfv(GLenum face, GLenum pname, const GLfloat *params) {
+    (void)face;
+    if (pname == GL_SPECULAR)
+        for (int i = 0; i < 3; i++) mat_specular[i] = params[i];
+}
+void glMaterialf(GLenum face, GLenum pname, GLfloat param) {
+    (void)face;
+    if (pname == GL_SHININESS) mat_shininess = param;
+}
+void glColorMaterial(GLenum face, GLenum mode) { (void)face; (void)mode; }
+
+void glFogi(GLenum pname, GLint param)  { (void)pname; (void)param; }
+void glFogf(GLenum pname, GLfloat param) {
+    if (pname == GL_FOG_START) fog_start = param;
+    else if (pname == GL_FOG_END) fog_end = param;
+}
+void glFogfv(GLenum pname, const GLfloat *params) {
+    if (pname == GL_FOG_COLOR)
+        for (int i = 0; i < 3; i++) fog_color[i] = params[i];
+}
 
 void glClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
     (void)a;
@@ -265,20 +325,34 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat,
     }
 }
 
+int gluBuild2DMipmaps(GLenum target, GLint internalFormat, GLsizei width,
+                      GLsizei height, GLenum format, GLenum type, const void *data) {
+    glTexImage2D(target, 0, internalFormat, width, height, 0, format, type, data);
+    return 0;
+}
+
 #define MAX_VERTS 4096
-typedef struct { float x, y, z; float r, g, b; float u, v; } Vert;
+typedef struct {
+    float x, y, z;
+    float r, g, b, a;
+    float u, v;
+    float nx, ny, nz;
+} Vert;
 static Vert   verts[MAX_VERTS];
 static int    vert_count;
 static GLenum prim_mode;
-static float  cur_r = 1, cur_g = 1, cur_b = 1;
+static float  cur_r = 1, cur_g = 1, cur_b = 1, cur_a = 1;
 static float  cur_u = 0, cur_v = 0;
+static float  cur_nx = 0, cur_ny = 0, cur_nz = 1;
 
 void glBegin(GLenum mode) { prim_mode = mode; vert_count = 0; }
 
-void glColor3f(GLfloat r, GLfloat g, GLfloat b) { cur_r = r; cur_g = g; cur_b = b; }
+void glColor3f(GLfloat r, GLfloat g, GLfloat b) { cur_r = r; cur_g = g; cur_b = b; cur_a = 1.0f; }
 void glColor3fv(const GLfloat *c) { glColor3f(c[0], c[1], c[2]); }
-void glNormal3f(GLfloat x, GLfloat y, GLfloat z) { (void)x; (void)y; (void)z; }
-void glNormal3fv(const GLfloat *n) { (void)n; }
+void glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { cur_r = r; cur_g = g; cur_b = b; cur_a = a; }
+void glColor4fv(const GLfloat *c) { glColor4f(c[0], c[1], c[2], c[3]); }
+void glNormal3f(GLfloat x, GLfloat y, GLfloat z) { cur_nx = x; cur_ny = y; cur_nz = z; }
+void glNormal3fv(const GLfloat *n) { glNormal3f(n[0], n[1], n[2]); }
 void glTexCoord2f(GLfloat s, GLfloat t) { cur_u = s; cur_v = t; }
 void glTexCoord2fv(const GLfloat *st) { cur_u = st[0]; cur_v = st[1]; }
 
@@ -286,26 +360,127 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z) {
     if (vert_count >= MAX_VERTS) return;
     Vert *v = &verts[vert_count++];
     v->x = x; v->y = y; v->z = z;
-    v->r = cur_r; v->g = cur_g; v->b = cur_b;
+    v->r = cur_r; v->g = cur_g; v->b = cur_b; v->a = cur_a;
     v->u = cur_u; v->v = cur_v;
+    v->nx = cur_nx; v->ny = cur_ny; v->nz = cur_nz;
 }
 void glVertex3fv(const GLfloat *v) { glVertex3f(v[0], v[1], v[2]); }
 
-typedef struct { float x, y, z; float r, g, b; float su, sv, invw; int valid; } Frag;
+typedef struct {
+    float x, y, z;
+    float r, g, b, a;
+    float su, sv, invw;
+    float fog;
+    int valid;
+} Frag;
 
-static Frag project(const Vert *v, const float *mvp) {
+/* Per-vertex Gouraud lighting + linear fog, computed in eye space. */
+static void shade(const Vert *v, const float *model, const float eye[4],
+                  float *or_, float *og, float *ob) {
+    float mr = v->r, mg = v->g, mb = v->b;
+    if (!lighting_enabled) { *or_ = mr; *og = mg; *ob = mb; return; }
+
+    float nx = M(model, 0, 0) * v->nx + M(model, 1, 0) * v->ny + M(model, 2, 0) * v->nz;
+    float ny = M(model, 0, 1) * v->nx + M(model, 1, 1) * v->ny + M(model, 2, 1) * v->nz;
+    float nz = M(model, 0, 2) * v->nx + M(model, 1, 2) * v->ny + M(model, 2, 2) * v->nz;
+    float nl = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (nl > 1e-6f) { nx /= nl; ny /= nl; nz /= nl; }
+
+    float lx = light_pos_eye[0] - eye[0];
+    float ly = light_pos_eye[1] - eye[1];
+    float lz = light_pos_eye[2] - eye[2];
+    float ll = sqrtf(lx * lx + ly * ly + lz * lz);
+    if (ll > 1e-6f) { lx /= ll; ly /= ll; lz /= ll; }
+
+    float ndotl = nx * lx + ny * ly + nz * lz;
+    if (ndotl < 0) ndotl = 0;
+
+    float cr = light_ambient[0] * mr + light_diffuse[0] * ndotl * mr;
+    float cg = light_ambient[1] * mg + light_diffuse[1] * ndotl * mg;
+    float cb = light_ambient[2] * mb + light_diffuse[2] * ndotl * mb;
+
+    if (ndotl > 0 && mat_shininess > 0) {
+        float vx = -eye[0], vy = -eye[1], vz = -eye[2];
+        float vln = sqrtf(vx * vx + vy * vy + vz * vz);
+        if (vln > 1e-6f) { vx /= vln; vy /= vln; vz /= vln; }
+        float hx = lx + vx, hy = ly + vy, hz = lz + vz;
+        float hln = sqrtf(hx * hx + hy * hy + hz * hz);
+        if (hln > 1e-6f) { hx /= hln; hy /= hln; hz /= hln; }
+        float ndoth = nx * hx + ny * hy + nz * hz;
+        if (ndoth < 0) ndoth = 0;
+        float spec = powf(ndoth, mat_shininess);
+        cr += light_specular[0] * mat_specular[0] * spec;
+        cg += light_specular[1] * mat_specular[1] * spec;
+        cb += light_specular[2] * mat_specular[2] * spec;
+    }
+    *or_ = cr; *og = cg; *ob = cb;
+}
+
+/* A vertex in clip space (pre-divide), carrying interpolatable attributes, so
+ * the near plane can be clipped before the perspective divide. */
+typedef struct {
+    float clip[4];
+    float r, g, b, a;
+    float u, v, fog;
+} CVert;
+
+static CVert to_clip(const Vert *v, const float *model, const float *proj) {
+    CVert c;
+    float obj[4] = { v->x, v->y, v->z, 1.0f }, eye[4];
+    mat_vec(eye, model, obj);
+    mat_vec(c.clip, proj, eye);
+    shade(v, model, eye, &c.r, &c.g, &c.b);
+    c.a = v->a;
+    c.u = v->u; c.v = v->v;
+    if (fog_enabled) {
+        float dist = fabsf(eye[2]);
+        float denom = fog_end - fog_start;
+        c.fog = denom > 1e-6f ? clampf((fog_end - dist) / denom, 0.0f, 1.0f) : 1.0f;
+    } else {
+        c.fog = 1.0f;
+    }
+    return c;
+}
+
+static CVert lerp_cv(const CVert *a, const CVert *b, float t) {
+    CVert o;
+    for (int i = 0; i < 4; i++) o.clip[i] = a->clip[i] + (b->clip[i] - a->clip[i]) * t;
+    o.r = a->r + (b->r - a->r) * t;
+    o.g = a->g + (b->g - a->g) * t;
+    o.b = a->b + (b->b - a->b) * t;
+    o.a = a->a + (b->a - a->a) * t;
+    o.u = a->u + (b->u - a->u) * t;
+    o.v = a->v + (b->v - a->v) * t;
+    o.fog = a->fog + (b->fog - a->fog) * t;
+    return o;
+}
+
+/* Clip a polygon against the near plane (z + w >= 0 in clip space), which also
+ * removes anything behind the eye. Returns the new vertex count (up to 4). */
+static int clip_near(const CVert *in, int n, CVert *out) {
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const CVert *a = &in[i];
+        const CVert *b = &in[(i + 1) % n];
+        float da = a->clip[2] + a->clip[3];
+        float db = b->clip[2] + b->clip[3];
+        int ina = da >= 0.0f, inb = db >= 0.0f;
+        if (ina) out[m++] = *a;
+        if (ina != inb) out[m++] = lerp_cv(a, b, da / (da - db));
+    }
+    return m;
+}
+
+static Frag to_frag(const CVert *c) {
     Frag f;
-    float in[4] = { v->x, v->y, v->z, 1.0f }, clip[4];
-    mat_vec(clip, mvp, in);
-    if (clip[3] <= 1e-6f) { f.valid = 0; return f; }
-    float inv = 1.0f / clip[3];
-    float ndx = clip[0] * inv, ndy = clip[1] * inv, ndz = clip[2] * inv;
-    f.x = (float)vp_x + (ndx * 0.5f + 0.5f) * (float)vp_w;
-    f.y = (float)vp_y + (0.5f - ndy * 0.5f) * (float)vp_h;
-    f.z = ndz * 0.5f + 0.5f;
-    f.r = v->r; f.g = v->g; f.b = v->b;
+    float w = c->clip[3];
+    float inv = (w > 1e-6f) ? 1.0f / w : 0.0f;
+    f.x = (float)vp_x + (c->clip[0] * inv * 0.5f + 0.5f) * (float)vp_w;
+    f.y = (float)vp_y + (0.5f - c->clip[1] * inv * 0.5f) * (float)vp_h;
+    f.z = c->clip[2] * inv * 0.5f + 0.5f;
     f.invw = inv;
-    f.su = v->u * inv; f.sv = v->v * inv;
+    f.su = c->u * inv; f.sv = c->v * inv;
+    f.r = c->r; f.g = c->g; f.b = c->b; f.a = c->a; f.fog = c->fog;
     f.valid = 1;
     return f;
 }
@@ -353,14 +528,14 @@ static void raster_triangle(const Frag *a, const Frag *b, const Frag *c) {
             int idx = py * surf_w + px;
             if (depth_test) {
                 if (depth >= depth_buffer[idx]) continue;
-                depth_buffer[idx] = depth;
             }
+
             float r = l0 * a->r + l1 * b->r + l2 * c->r;
             float g = l0 * a->g + l1 * b->g + l2 * c->g;
             float bl = l0 * a->b + l1 * b->b + l2 * c->b;
+            float iw = (tx || fog_enabled)
+                ? (l0 * a->invw + l1 * b->invw + l2 * c->invw) : 0.0f;
             if (tx) {
-
-                float iw = l0 * a->invw + l1 * b->invw + l2 * c->invw;
                 float u = (l0 * a->su + l1 * b->su + l2 * c->su) / iw;
                 float v = (l0 * a->sv + l1 * b->sv + l2 * c->sv) / iw;
                 int iu = (int)(u * tx->w) % tx->w; if (iu < 0) iu += tx->w;
@@ -370,33 +545,120 @@ static void raster_triangle(const Frag *a, const Frag *b, const Frag *c) {
                 g  *= ((texel >> 8)  & 255) * (1.0f / 255.0f);
                 bl *= ( texel        & 255) * (1.0f / 255.0f);
             }
+            if (fog_enabled) {
+                /* Per-fragment linear fog. For a perspective projection the
+                 * eye-space depth equals clip w == 1/invw. */
+                float dist = iw > 1e-6f ? 1.0f / iw : 0.0f;
+                float denom = fog_end - fog_start;
+                float fg = denom > 1e-6f ? clampf((fog_end - dist) / denom, 0.0f, 1.0f) : 1.0f;
+                r  = fg * r  + (1.0f - fg) * fog_color[0];
+                g  = fg * g  + (1.0f - fg) * fog_color[1];
+                bl = fg * bl + (1.0f - fg) * fog_color[2];
+            }
+            if (blend_enabled) {
+                float al = clampf(l0 * a->a + l1 * b->a + l2 * c->a, 0.0f, 1.0f);
+                uint32_t dst = color_buffer[idx];
+                float dr = ((dst >> 16) & 255) * (1.0f / 255.0f);
+                float dg = ((dst >> 8)  & 255) * (1.0f / 255.0f);
+                float db = ( dst        & 255) * (1.0f / 255.0f);
+                r  = r  * al + dr * (1.0f - al);
+                g  = g  * al + dg * (1.0f - al);
+                bl = bl * al + db * (1.0f - al);
+            }
+            if (depth_test) depth_buffer[idx] = depth;
             color_buffer[idx] = pack_color(r, g, bl);
         }
     }
 }
 
+static void emit_triangle(const Vert *a, const Vert *b, const Vert *c,
+                          const float *model, const float *proj) {
+    CVert tri[3] = { to_clip(a, model, proj), to_clip(b, model, proj), to_clip(c, model, proj) };
+    CVert poly[8];
+    int n = clip_near(tri, 3, poly);
+    if (n < 3) return;
+    Frag f0 = to_frag(&poly[0]);
+    for (int i = 1; i + 1 < n; i++) {
+        Frag f1 = to_frag(&poly[i]);
+        Frag f2 = to_frag(&poly[i + 1]);
+        raster_triangle(&f0, &f1, &f2);
+    }
+}
+
 void glEnd(void) {
-    float mvp[16];
-    mat_mul(mvp, proj_stack[proj_top], model_stack[model_top]);
+    const float *model = model_stack[model_top];
+    const float *proj  = proj_stack[proj_top];
 
     if (prim_mode == GL_TRIANGLES) {
-        for (int i = 0; i + 2 < vert_count; i += 3) {
-            Frag f0 = project(&verts[i], mvp);
-            Frag f1 = project(&verts[i + 1], mvp);
-            Frag f2 = project(&verts[i + 2], mvp);
-            raster_triangle(&f0, &f1, &f2);
-        }
+        for (int i = 0; i + 2 < vert_count; i += 3)
+            emit_triangle(&verts[i], &verts[i + 1], &verts[i + 2], model, proj);
     } else if (prim_mode == GL_QUADS) {
         for (int i = 0; i + 3 < vert_count; i += 4) {
-            Frag f0 = project(&verts[i], mvp);
-            Frag f1 = project(&verts[i + 1], mvp);
-            Frag f2 = project(&verts[i + 2], mvp);
-            Frag f3 = project(&verts[i + 3], mvp);
-            raster_triangle(&f0, &f1, &f2);
-            raster_triangle(&f0, &f2, &f3);
+            emit_triangle(&verts[i], &verts[i + 1], &verts[i + 2], model, proj);
+            emit_triangle(&verts[i], &verts[i + 2], &verts[i + 3], model, proj);
+        }
+    } else if (prim_mode == GL_TRIANGLE_FAN) {
+        for (int i = 1; i + 1 < vert_count; i++)
+            emit_triangle(&verts[0], &verts[i], &verts[i + 1], model, proj);
+    } else if (prim_mode == GL_TRIANGLE_STRIP) {
+        for (int i = 0; i + 2 < vert_count; i++) {
+            if (i & 1) emit_triangle(&verts[i + 1], &verts[i], &verts[i + 2], model, proj);
+            else       emit_triangle(&verts[i], &verts[i + 1], &verts[i + 2], model, proj);
         }
     }
     vert_count = 0;
+}
+
+/* ---- GLU quadrics (sphere only) ------------------------------------------ */
+struct GLUquadric { int texture; int normals; };
+static struct GLUquadric quadric_pool[4];
+static int quadric_next;
+
+GLUquadric *gluNewQuadric(void) {
+    if (quadric_next >= 4) return 0;
+    struct GLUquadric *q = &quadric_pool[quadric_next++];
+    q->texture = 0; q->normals = 1;
+    return q;
+}
+void gluDeleteQuadric(GLUquadric *q) { (void)q; }
+void gluQuadricTexture(GLUquadric *q, GLboolean on) { if (q) q->texture = on ? 1 : 0; }
+void gluQuadricNormals(GLUquadric *q, GLenum mode) { if (q) q->normals = (mode != 0); }
+
+void gluSphere(GLUquadric *q, GLdouble radius, GLint slices, GLint stacks) {
+    int textured = q ? q->texture : 0;
+    float rad = (float)radius;
+    for (int i = 0; i < stacks; i++) {
+        float rho0 = GL_PI * (float)i / (float)stacks;
+        float rho1 = GL_PI * (float)(i + 1) / (float)stacks;
+        float sr0 = sinf(rho0), cr0 = cosf(rho0);
+        float sr1 = sinf(rho1), cr1 = cosf(rho1);
+        glBegin(GL_QUADS);
+        for (int j = 0; j < slices; j++) {
+            float th0 = 2.0f * GL_PI * (float)j / (float)slices;
+            float th1 = 2.0f * GL_PI * (float)(j + 1) / (float)slices;
+            float ct0 = cosf(th0), st0 = sinf(th0);
+            float ct1 = cosf(th1), st1 = sinf(th1);
+            float s0 = (float)j / (float)slices, s1 = (float)(j + 1) / (float)slices;
+            float t0 = (float)i / (float)stacks, t1 = (float)(i + 1) / (float)stacks;
+
+            if (textured) glTexCoord2f(s0, t0);
+            glNormal3f(sr0 * ct0, cr0, sr0 * st0);
+            glVertex3f(rad * sr0 * ct0, rad * cr0, rad * sr0 * st0);
+
+            if (textured) glTexCoord2f(s0, t1);
+            glNormal3f(sr1 * ct0, cr1, sr1 * st0);
+            glVertex3f(rad * sr1 * ct0, rad * cr1, rad * sr1 * st0);
+
+            if (textured) glTexCoord2f(s1, t1);
+            glNormal3f(sr1 * ct1, cr1, sr1 * st1);
+            glVertex3f(rad * sr1 * ct1, rad * cr1, rad * sr1 * st1);
+
+            if (textured) glTexCoord2f(s1, t0);
+            glNormal3f(sr0 * ct1, cr0, sr0 * st1);
+            glVertex3f(rad * sr0 * ct1, rad * cr0, rad * sr0 * st1);
+        }
+        glEnd();
+    }
 }
 
 static void put_glyph(int x, int y, int c, uint32_t rgb) {

@@ -47,6 +47,37 @@ typedef void         GLvoid;
 #define GL_REPEAT             0x2901
 #define GL_MODULATE           0x2100
 #define GL_UNPACK_ALIGNMENT   0x0CF5
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#define GL_LINEAR_MIPMAP_LINEAR  0x2703
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#define GL_NEAREST_MIPMAP_LINEAR  0x2702
+
+#define GL_TRIANGLE_STRIP   0x0005
+#define GL_TRIANGLE_FAN     0x0006
+
+#define GL_FRONT_AND_BACK   0x0408
+#define GL_POSITION         0x1203
+#define GL_AMBIENT          0x1200
+#define GL_DIFFUSE          0x1201
+#define GL_SPECULAR         0x1202
+#define GL_SHININESS        0x1601
+#define GL_AMBIENT_AND_DIFFUSE 0x1602
+
+#define GL_BLEND            0x0BE2
+#define GL_SRC_ALPHA        0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+
+#define GL_FOG              0x0B60
+#define GL_FOG_MODE         0x0B65
+#define GL_FOG_DENSITY      0x0B62
+#define GL_FOG_START        0x0B63
+#define GL_FOG_END          0x0B64
+#define GL_FOG_COLOR        0x0B66
+
+typedef struct GLUquadric GLUquadric;
+#define GLU_NONE   100002
+#define GLU_FLAT   100000
+#define GLU_SMOOTH 100001
 
 int             gl_surface_init(int width, int height);
 uint32_t       *gl_surface_pixels(void);
@@ -82,10 +113,22 @@ void glVertex3f(GLfloat x, GLfloat y, GLfloat z);
 void glVertex3fv(const GLfloat *v);
 void glColor3f(GLfloat r, GLfloat g, GLfloat b);
 void glColor3fv(const GLfloat *c);
+void glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+void glColor4fv(const GLfloat *c);
 void glNormal3f(GLfloat x, GLfloat y, GLfloat z);
 void glNormal3fv(const GLfloat *n);
 void glTexCoord2f(GLfloat s, GLfloat t);
 void glTexCoord2fv(const GLfloat *st);
+
+void glBlendFunc(GLenum sfactor, GLenum dfactor);
+void glLightfv(GLenum light, GLenum pname, const GLfloat *params);
+void glLightf(GLenum light, GLenum pname, GLfloat param);
+void glMaterialfv(GLenum face, GLenum pname, const GLfloat *params);
+void glMaterialf(GLenum face, GLenum pname, GLfloat param);
+void glColorMaterial(GLenum face, GLenum mode);
+void glFogi(GLenum pname, GLint param);
+void glFogf(GLenum pname, GLfloat param);
+void glFogfv(GLenum pname, const GLfloat *params);
 
 void glGenTextures(GLsizei n, GLuint *textures);
 void glBindTexture(GLenum target, GLuint texture);
@@ -94,6 +137,14 @@ void glTexImage2D(GLenum target, GLint level, GLint internalformat,
                   GLsizei width, GLsizei height, GLint border,
                   GLenum format, GLenum type, const void *pixels);
 void glPixelStorei(GLenum pname, GLint param);
+int  gluBuild2DMipmaps(GLenum target, GLint internalFormat, GLsizei width,
+                       GLsizei height, GLenum format, GLenum type, const void *data);
+
+GLUquadric *gluNewQuadric(void);
+void gluDeleteQuadric(GLUquadric *q);
+void gluQuadricTexture(GLUquadric *q, GLboolean on);
+void gluQuadricNormals(GLUquadric *q, GLenum mode);
+void gluSphere(GLUquadric *q, GLdouble radius, GLint slices, GLint stacks);
 
 void glRasterPos2f(GLfloat x, GLfloat y);
 void glRasterPos2i(GLint x, GLint y);
