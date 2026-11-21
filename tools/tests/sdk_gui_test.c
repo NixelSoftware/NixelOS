@@ -11,13 +11,27 @@ static int sys_window_poll(unsigned h,user_window_event_t*e){assert(h==1);if(clo
 static int sys_window_present(unsigned h){assert(h==1);presents++;return 0;}
 static int sys_window_close(unsigned h){assert(h==1);return 0;}
 static void sys_yield(void){}
-static int sys_fs_read(const char*p,void*b,unsigned n){(void)p;(void)b;(void)n;return -1;}
+static char saved_source[16384],saved_source_path[128],saved_form_path[134];
+static unsigned char saved_form[10000];static int saved_source_size=-1,saved_form_size=-1;
+static int sys_fs_read(const char*p,void*b,unsigned n){
+ const void *data=0;int size=-1;
+ if(!strcmp(p,saved_source_path)){data=saved_source;size=saved_source_size;}
+ if(!strcmp(p,saved_form_path)){data=saved_form;size=saved_form_size;}
+ if(size<0)return -1;if(!b||!n)return size;
+ if(n>(unsigned)size)n=size;memcpy(b,data,n);return n;
+}
 static int sys_fs_read_at(const char*p,void*b,unsigned n,unsigned off){(void)p;(void)b;(void)n;(void)off;return -1;}
-static int sys_fs_write(const char*p,const void*b,unsigned n){(void)p;(void)b;return n;}
+static int sys_fs_write(const char*p,const void*b,unsigned n){
+ const char *extension=strrchr(p,'.');
+ if(extension&&!strcmp(extension,".form")){assert(n<=sizeof(saved_form));memcpy(saved_form,b,n);strcpy(saved_form_path,p);saved_form_size=n;}
+ else {assert(n<sizeof(saved_source));memcpy(saved_source,b,n);saved_source[n]=0;strcpy(saved_source_path,p);saved_source_size=n;}
+ return n;
+}
 static int sys_fs_chmod(const char*p,unsigned n){(void)p;(void)n;return 0;}
 static char last_launch[256];
 static int sys_app_launch(const char*p,const char*a){strcpy(last_launch,p);(void)a;return 0;}
 #include "../../src/sdk/ui.c"
+#include "../../src/sdk/objects.c"
 #include "../../src/apps/designer/main.c"
 static void event(user_window_event_t e){events[0]=e;event_count=1;event_index=0;}
 static void click(int x,int y){event((user_window_event_t){.type=USER_WINDOW_EVENT_MOUSE,.x=x,.y=y,.buttons=1});}
@@ -31,7 +45,7 @@ int main(void){
  events[3]=(user_window_event_t){.type=USER_WINDOW_EVENT_SCANCODE,.key=79};
  events[4]=(user_window_event_t){.type=USER_WINDOW_EVENT_CLOSE};
  event_index=0;event_count=5;user_main("");
- assert(code_mode==1&&form.count==1&&strstr(editor.text,"button(1,"));
+ assert(code_mode==1&&form.count==1&&strstr(editor.text,"void Button1OnPressed(void)")&&!strstr(editor.text,"button(")&&!strstr(editor.text,"window("));
  assert(editor.cursor>0);
  assert(sdk_open(&ui,"test",400,300)==1);
  assert(sdk_add(&ui,1,1,10,40,120,26,"Click")==1);
@@ -45,12 +59,38 @@ int main(void){
  event((user_window_event_t){.type=USER_WINDOW_EVENT_KEY,.key='A'});sdk_poll(&ui);assert(strcmp(sdk_find(&ui,2)->text,"A")==0);
  event((user_window_event_t){.type=USER_WINDOW_EVENT_KEY,.key=8});sdk_poll(&ui);assert(!sdk_find(&ui,2)->text[0]);
  click(20,130);assert(sdk_poll(&ui)==3&&sdk_find(&ui,3)->value==1);click(20,130);assert(sdk_poll(&ui)==3&&sdk_find(&ui,3)->value==0);
+ /* Public objects stay synchronized with native controls and event pulses. */
+ sdk_objects objects;sdk_objects_reset(&objects);
+ Button Button1;Checkbox Checkbox1;TextBox TextBox1;Window MainWindow;
+ assert(sdk_objects_bind(&objects,&ui,0,5,&MainWindow)==0);
+ assert(sdk_objects_bind(&objects,&ui,1,1,&Button1)==0);
+ assert(sdk_objects_bind(&objects,&ui,2,2,&TextBox1)==0);
+ assert(sdk_objects_bind(&objects,&ui,3,4,&Checkbox1)==0);
+ assert(MainWindow.windowLoaded&&MainWindow.isOpen);
+ click(20,50);assert(sdk_objects_poll(&objects,&ui)==1&&Button1.buttonIsPressed);
+ click(20,50);assert(sdk_objects_poll(&objects,&ui)==1&&Button1.buttonIsPressed);
+ event_count=event_index=0;sdk_objects_poll(&objects,&ui);assert(!Button1.buttonIsPressed);
+ Checkbox1.checkboxIsTicked=1;Button1.text="Updated";sdk_objects_flush(&objects,&ui);
+ assert(sdk_find(&ui,3)->value==1&&!strcmp(sdk_find(&ui,1)->text,"Updated"));
+ click(20,130);sdk_objects_poll(&objects,&ui);assert(Checkbox1.isChanged&&!Checkbox1.checkboxIsTicked);
+ click(20,90);sdk_objects_poll(&objects,&ui);
+ event((user_window_event_t){.type=USER_WINDOW_EVENT_KEY,.key='Z'});sdk_objects_poll(&objects,&ui);
+ assert(TextBox1.textChanged&&!strcmp(TextBox1.text,"Z"));
+ event_count=event_index=0;sdk_objects_poll(&objects,&ui);assert(!TextBox1.textChanged);
+ TextBox1.text="programmatic";sdk_objects_flush(&objects,&ui);sdk_objects_poll(&objects,&ui);assert(TextBox1.textChanged&&!strcmp(TextBox1.text,"programmatic"));
+ sdk_objects_poll(&objects,&ui);assert(!TextBox1.textChanged);
+ event((user_window_event_t){.type=USER_WINDOW_EVENT_CLOSE});assert(sdk_objects_poll(&objects,&ui)==-1&&!MainWindow.isOpen);
  /* Designer selection/property behavior and invalid bounds. */
- form=(sdk_design){"test",400,280,0,{{0}}};selected=-1;next_id=1;
+ form=(sdk_design){.title="test",.width=400,.height=280};selected=-1;next_id=1;
  sdk_close(&ui);close_first=1;user_main("");ui.handle=1;
- add(1);assert(selected==0&&form.count==1);assert(number(35)==1);
+ add(1);assert(selected==0&&form.count==1);assert(strcmp(value(35),"Button1")==0);
  numfield(31,50);apply();assert(form.controls[0].x==50);
  numfield(31,999);apply();assert(form.controls[0].x==50);
+ sdk_editor_set(&editor,"#include <nixel.h>\nvoid Button1OnPressed(void){print(\"application logic\");}\n");
+ assert(save());assert(saved_form_size>0&&strstr(saved_source,"application logic"));
+ assert(!strstr(saved_source,"button(")&&!strstr(saved_source,"window(")&&!strstr(saved_source,"int main("));
+ char original[16384];strcpy(original,saved_source);form.controls[0].x=60;assert(save());assert(!strcmp(original,saved_source));
+ sdk_editor_set(&editor,"changed");assert(open_project());assert(!strcmp(editor.text,original)&&form.controls[0].x==60);
  event((user_window_event_t){.type=USER_WINDOW_EVENT_CLOSE});assert(sdk_poll(&ui)==-1);
  strcpy(output,"MainWindow.bin");assert(launch_output()==0&&strcmp(last_launch,"./MainWindow.bin")==0);
  strcpy(output,"/root/MainWindow.bin");assert(launch_output()==0&&strcmp(last_launch,"/root/MainWindow.bin")==0);

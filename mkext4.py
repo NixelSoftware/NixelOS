@@ -27,7 +27,7 @@ BUNDLED_FILES = [
     "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
     "syndig.bin", "qksrv.bin", "resources/quark.cfg",
-    "qkftp.bin", "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
+    "qkftp.bin", "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "glcube.bin", "glscene.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
     "resources/default_user.bmp", "telnetd.bin", "taskmgr.bin", "tunnel.bin"
 ]
 
@@ -140,6 +140,8 @@ def main(output, nogui=False):
             (root / "usr/lib/nixel/sdkhost.bin").chmod(0o644)
         shutil.copyfile("src/sdk/nixel.h", root / "usr/share/nixel/sdk/nixel.h")
         (root / "usr/share/nixel/sdk/nixel.h").chmod(0o644)
+        shutil.copyfile("src/sdk/components.h", root / "usr/share/nixel/sdk/components.h")
+        (root / "usr/share/nixel/sdk/components.h").chmod(0o644)
         for asset in Path("resources/sdk").glob("*"):
             if asset.is_file():
                 shutil.copyfile(asset, root / "usr/share/nixel/sdk" / asset.name)

@@ -23,7 +23,7 @@ static uint32_t avatar_cache[AVATAR_SIZE * AVATAR_SIZE];
 static uint8_t avatar_loaded = 0;
 
 static int user_is_visible(const user_t* u) {
-    if (!u || !u->name[0]) return 0;
+    if (!user_can_logon(u)) return 0;
     
     const char* n = u->name;
     if (n[0] == 's' && n[1] == 'y' && n[2] == 's' && n[3] == 't' && n[4] == 'e' && n[5] == 'm' && n[6] == '\0')
@@ -414,6 +414,9 @@ void login_screen_task(void* arg) {
         mutex_unlock(&kernel_mutex);
         if (!available) task_sleep_ms(10);
     }
+
+    for (unsigned i = 0; i < sizeof(password); i++)
+        ((volatile char*)password)[i] = 0;
 
     int wm_pid = task_create(desktop_service, 0, "wm");
     if (wm_pid < 0 || task_detach_child(wm_pid) < 0) {

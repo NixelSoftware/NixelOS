@@ -91,6 +91,100 @@ static field fields[FIELD_COUNT]={
     {subject,sizeof(subject),100,180,628,30,"Subject"},
     {draft,sizeof(draft),28,240,700,208,"Message"}
 };
+/* Two alternating, checksummed snapshots retain the previous complete save
+ * when a write is interrupted. Passwords and transport state never enter it. */
+#define STATE_SIZE 36400u
+static unsigned char state_data[STATE_SIZE],state_best[STATE_SIZE];
+static unsigned state_generation,state_hash,state_tick;
+static int state_loaded;
+static char state_directory[256];
+static unsigned state_checksum(const unsigned char *data,unsigned n) {
+    unsigned h=2166136261u;
+    while(n--)h=(h^*data++)*16777619u;
+    return h;
+}
+static void state_put(unsigned offset,unsigned value) {
+    for(unsigned i=0;i<4;i++)state_data[offset+i]=(unsigned char)(value>>(i*8));
+}
+static unsigned state_get(unsigned offset) {
+    unsigned value=0;for(unsigned i=0;i<4;i++)value|=(unsigned)state_data[offset+i]<<(i*8);return value;
+}
+static void state_path(char *out,unsigned slot) {
+    mail_copy(out,256,state_directory);
+    unsigned n=mail_length(out);mail_copy(out+n,256-n,slot?"/state1":"/state0");
+}
+static unsigned state_pack(void) {
+    unsigned n=24;
+    for(unsigned i=0;i<FIELD_COUNT;i++) {
+        if(i==PASSWORD)continue;
+        for(unsigned j=0;j<fields[i].cap;j++)state_data[n++]=0;
+        mail_copy((char *)state_data+n-fields[i].cap,fields[i].cap,fields[i].text);
+    }
+    for(unsigned j=0;j<sizeof(reply_id);j++)state_data[n++]=0;
+    mail_copy((char *)state_data+n-sizeof(reply_id),sizeof(reply_id),reply_id);
+    state_put(20,(unsigned)pop);
+    return n;
+}
+static int state_valid(unsigned n) {
+    unsigned expected=24+sizeof(reply_id);
+    for(unsigned i=0;i<FIELD_COUNT;i++)if(i!=PASSWORD)expected+=fields[i].cap;
+    if(n!=expected||state_get(0)!=0x314c4d4eu||state_get(8)!=n||state_get(20)>1||
+       state_get(12)!=state_checksum(state_data+20,n-20))return 0;
+    unsigned offset=24;
+    for(unsigned i=0;i<=FIELD_COUNT;i++) {
+        if(i==PASSWORD)continue;
+        unsigned cap=i==FIELD_COUNT?sizeof(reply_id):fields[i].cap,j=0;
+        while(j<cap&&state_data[offset+j])j++;
+        if(j==cap)return 0;
+        offset+=cap;
+    }
+    return 1;
+}
+static void state_load(void) {
+    if(sys_fs_home(state_directory,sizeof(state_directory))<0)return;
+    unsigned n=mail_length(state_directory);
+    if(n+24>=sizeof(state_directory)){state_directory[0]=0;return;}
+    mail_copy(state_directory+n,sizeof(state_directory)-n,"/.config");
+    sys_fs_mkdir(state_directory);
+    n=mail_length(state_directory);mail_copy(state_directory+n,sizeof(state_directory)-n,"/mail");
+    sys_fs_mkdir(state_directory);
+    if(sys_fs_chmod(state_directory,0700)<0){state_directory[0]=0;return;}
+    unsigned best_size=0;
+    for(unsigned slot=0;slot<2;slot++) {
+        char path[256];state_path(path,slot);
+        int size=sys_fs_read(path,0,0);
+        if(size<=0||(unsigned)size>STATE_SIZE||sys_fs_read(path,state_data,(unsigned)size)!=size||!state_valid((unsigned)size))continue;
+        unsigned generation=state_get(4);
+        if(!best_size||(int)(generation-state_generation)>0) {
+            best_size=(unsigned)size;state_generation=generation;
+            for(unsigned j=0;j<best_size;j++)state_best[j]=state_data[j];
+        }
+    }
+    if(best_size) {
+        unsigned offset=24;
+        for(unsigned i=0;i<FIELD_COUNT;i++)if(i!=PASSWORD) {
+            mail_copy(fields[i].text,fields[i].cap,(char *)state_best+offset);offset+=fields[i].cap;
+        }
+        mail_copy(reply_id,sizeof(reply_id),(char *)state_best+offset);
+        pop=state_best[20];advanced=1;
+        if(*draft||*recipient||*subject)set_status("Recovered your saved draft. Open Compose to continue.");
+    }
+    n=state_pack();state_hash=state_checksum(state_data+20,n-20);state_loaded=1;
+}
+static void state_save(int force) {
+    if(!state_loaded||!state_directory[0])return;
+    unsigned now=sys_get_ticks();
+    if(!force&&now-state_tick<100)return;
+    state_tick=now;
+    unsigned n=state_pack(),hash=state_checksum(state_data+20,n-20);
+    if(hash==state_hash)return;
+    state_put(0,0x314c4d4eu);state_put(4,state_generation+1);state_put(8,n);state_put(12,hash);state_put(16,0);
+    char path[256];state_path(path,(state_generation+1)&1);
+    if(sys_fs_write(path,state_data,n)!=(int)n||sys_fs_chmod(path,0600)<0) {
+        set_status("Could not save mail settings/draft. Check available disk space.");return;
+    }
+    state_generation++;state_hash=hash;
+}
 static void draw(unsigned op,int x,int y,int w,int h,const char *s,unsigned color) {
     user_window_draw_t d={0};
     d.operation=op;d.x=x;d.y=y;d.width=w;d.height=h;d.text=s;d.color=color;
@@ -681,7 +775,7 @@ static void send_draft(void) {
     end_work(ok);
     socket_handle=incoming_socket;tls=incoming_tls;io=incoming_io;
     connected=incoming_connected;
-    if(ok&&page==COMPOSE)close_dialog();
+    if(ok){state_save(1);if(page==COMPOSE)close_dialog();}
     if(!ok&&!cancelled) {
         static char send_error[192];
         mail_copy(send_error,sizeof(send_error),"Send failed; draft retained. ");
@@ -764,7 +858,7 @@ static void click(int x,int y) {
         else if(inside(x,y,238,460,130,30)){close_connection();status="Disconnected.";}
     } else if(page==COMPOSE) {
         if(inside(x,y,28,460,100,30))send_draft();
-        else if(inside(x,y,140,460,112,30)){reply_id[0]=0;draft[0]=recipient[0]=subject[0]=0;draft_scroll=0;set_focus(RECIPIENT);status="Draft discarded.";}
+        else if(inside(x,y,140,460,112,30)){reply_id[0]=0;draft[0]=recipient[0]=subject[0]=0;draft_scroll=0;set_focus(RECIPIENT);status="Draft discarded.";state_save(1);}
     } else {
         if(inside(x,y,24,88,110,30))refresh(0);
         else if(inside(x,y,144,88,116,30)){if(inbox_end>INBOX_ROWS)refresh(inbox_end-INBOX_ROWS);else status="No older messages.";}
@@ -835,13 +929,15 @@ void user_main(const char *arguments) {
     }
     window=result;
     user_window_draw_t keys={0};keys.operation=USER_WINDOW_RAW_KEYS;keys.pressed=1;sys_window_draw(window,&keys);
-    sys_detach();open_dialog(ACCOUNT);
+    state_load();sys_detach();open_dialog(ACCOUNT);
     while(running) {
         drain_resolver();
         poll_events();
+        state_save(0);
         if(dirty)redraw();
     sys_yield();
     }
+    state_save(1);
     close_connection();for(unsigned i=0;i<sizeof(password);i++)((volatile char *)password)[i]=0;
     close_dialog();sys_window_close(window);
 }

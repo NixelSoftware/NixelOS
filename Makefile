@@ -191,7 +191,7 @@ src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
                  lspci demo3d irc telnetd taskmgr tunnel ncc designer
-APPS := $(STANDARD_APPS) doom syndig qksrv qkftp
+APPS := $(STANDARD_APPS) doom syndig qksrv qkftp glcube glscene
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin sdkhost.bin
 # Compiler support routines (memcpy/memset/memmove/memcmp) for freestanding apps.
 APP_RUNTIME := src/system/user/runtime.o
@@ -325,6 +325,30 @@ qkftp.bin: Makefile $(FTP_OBJ)
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(FTP_DIR)/qkftp.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('$(FTP_DIR)/qkftp.tmp').unlink(missing_ok=True)"
 
+# OpenGL cube: just the app (main + entry). The GL/GLU/GLUT implementation and
+# the math live in the system libraries libnixelgl and libnixelm; public GL
+# headers are in src/include/GL (already on the global include path).
+GLCUBE_DIR := src/apps/glcube
+GLCUBE_LIBS := src/system/libraries/gl/libnixelgl.a src/system/libraries/m/libnixelm.a
+GLCUBE_OBJ := $(GLCUBE_DIR)/entry.o $(GLCUBE_DIR)/main.o $(APP_RUNTIME)
+$(GLCUBE_DIR)/main.o: CFLAGS += -fno-builtin -fno-stack-protector
+$(GLCUBE_DIR)/main.o: src/include/GL/gl.h src/include/GL/glut.h $(GLCUBE_DIR)/texture_data.h
+glcube.bin: Makefile $(GLCUBE_DIR)/app.ld $(GLCUBE_OBJ) $(GLCUBE_LIBS)
+	$(LD) $(LDFLAGS) --omagic -T $(GLCUBE_DIR)/app.ld -e _start $(filter %.o,$^) $(GLCUBE_LIBS) -o $(GLCUBE_DIR)/glcube.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(GLCUBE_DIR)/glcube.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(GLCUBE_DIR)/glcube.tmp').unlink(missing_ok=True)"
+
+# OpenGL scene: a lit, fogged brick-floor scene with a textured gluSphere.
+# Same system libraries as glcube; main.c also uses the math library directly.
+GLSCENE_DIR := src/apps/glscene
+GLSCENE_OBJ := $(GLSCENE_DIR)/entry.o $(GLSCENE_DIR)/main.o $(APP_RUNTIME)
+$(GLSCENE_DIR)/main.o: CFLAGS += -Isrc/system/libraries/m -fno-builtin -fno-stack-protector
+$(GLSCENE_DIR)/main.o: src/include/GL/gl.h src/include/GL/glut.h $(GLSCENE_DIR)/boing_data.h $(GLSCENE_DIR)/brick_data.h
+glscene.bin: Makefile $(GLSCENE_DIR)/app.ld $(GLSCENE_OBJ) $(GLCUBE_LIBS)
+	$(LD) $(LDFLAGS) --omagic -T $(GLSCENE_DIR)/app.ld -e _start $(filter %.o,$^) $(GLCUBE_LIBS) -o $(GLSCENE_DIR)/glscene.tmp
+	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc $(GLSCENE_DIR)/glscene.tmp $@
+	$(PYTHON) -c "from pathlib import Path; Path('$(GLSCENE_DIR)/glscene.tmp').unlink(missing_ok=True)"
+
 .PHONY: fastfetch.bin
 fastfetch.bin: src/include/os_version.h
 	$(MAKE) -C src/apps/fastfetch CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NASM="$(NASM)" PYTHON="$(PYTHON)"
@@ -361,7 +385,7 @@ src/kernel/main.o src/system/init/main.o: src/system/init/nixinit.h
 .gui-config: FORCE_IMAGE_CONFIG
 	$(PYTHON) -c "from pathlib import Path; p=Path('.gui-config'); value='$(NOGUI)'; p.write_text(value) if not p.exists() or p.read_text()!=value else None"
 
-os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources/chess.bmp resources/twoballs.bmp $(wildcard resources/sdk/*) src/sdk/nixel.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
+os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources/chess.bmp resources/twoballs.bmp $(wildcard resources/sdk/*) src/sdk/nixel.h src/sdk/components.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
 	$(PYTHON) mkext4.py os.img.new $(if $(filter 1,$(NOGUI)),-nogui,)
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build
@@ -370,7 +394,7 @@ run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
 clean-build:
-	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost'.split()]]"
+	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost glcube glscene'.split()]]"
 
 clean: clean-build
 	$(PYTHON) -c "from pathlib import Path; Path('os.img').unlink(missing_ok=True)"
@@ -510,7 +534,7 @@ $(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o $(IWLEGACY_DIR)/pci_power.o 
 src/kernel/hal/net.o src/kernel/hal/wifi.o src/system/shell/commands.o src/system/graphics/settings/settings.o src/system/graphics/wm/wm.o: $(IWLEGACY_DIR)/iwlegacy.h $(IWLEGACY_DIR)/scan.h $(IWLEGACY_DIR)/station.h
 .PHONY: test-iwlegacy
 test-iwlegacy:
-	$(CC) -O2 -fno-builtin -shared -fPIC -DWOLFSSL_USER_SETTINGS -Isrc/kernel/net/wireless/security -Isrc/system/libraries/tls/vendor/wolfssl src/kernel/net/wireless/security/wpa2.c src/kernel/net/wireless/security/ccmp.c src/kernel/net/wireless/security/handshake.c $(addprefix src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/,$(addsuffix .c,sha hmac hash pwdbased aes)) -o /tmp/nixel-test-iwlegacy-crypto.so
+	$(CC) -O2 -fno-builtin -shared -fPIC -DWOLFSSL_USER_SETTINGS -Isrc/kernel/net/wireless/security -Isrc/system/libraries/tls/vendor/wolfssl src/kernel/net/wireless/security/wpa2.c src/kernel/net/wireless/security/ccmp.c src/kernel/net/wireless/security/handshake.c $(addprefix src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/,$(addsuffix .c,sha sha256 hmac hash pwdbased aes)) -o /tmp/nixel-test-iwlegacy-crypto.so
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror $(IWLEGACY_DIR)/tests/3945_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy
 	/tmp/nixel-test-iwlegacy
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror -fno-pie -no-pie $(IWLEGACY_DIR)/tests/pci_test.c $(IWLEGACY_NATIVE) -o /tmp/nixel-test-iwlegacy-pci
@@ -533,6 +557,10 @@ test-iwlegacy:
 # Reusable user-space TLS library; applications opt in by linking this archive.
 include src/system/libraries/tls/tls.mk
 
+# Reusable user-space math and OpenGL libraries; apps opt in by linking them.
+include src/system/libraries/m/m.mk
+include src/system/libraries/gl/gl.mk
+
 
 .PHONY: test-browser-https
 test-browser-https: browser.bin
@@ -550,7 +578,7 @@ src/apps/doom/compat/libc.o: src/system/user/sys_api.h
 # Separate objects prevent the TLS client's settings/allocator from leaking in.
 WIFI_SECURITY_DIR := src/kernel/net/wireless/security
 WIFI_CRYPTO_VENDOR := src/system/libraries/tls/vendor/wolfssl
-WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha hmac hash pwdbased aes))
+WIFI_CRYPTO_OBJECTS := $(addprefix $(WIFI_SECURITY_DIR)/wolf_,$(addsuffix .o,sha sha256 hmac hash pwdbased aes))
 WIFI_CRYPTO_FLAGS := -U__unix__ -U__linux__ -DWOLFSSL_USER_SETTINGS -I$(WIFI_SECURITY_DIR) -Isrc/system/libraries/tls/compat -I$(WIFI_CRYPTO_VENDOR) -fno-builtin -fno-stack-protector
 KERNEL_OBJ += $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o $(WIFI_CRYPTO_OBJECTS)
 src/kernel/kernel.bin: $(WIFI_SECURITY_DIR)/wpa2.o $(WIFI_SECURITY_DIR)/ccmp.o $(WIFI_SECURITY_DIR)/handshake.o $(WIFI_CRYPTO_OBJECTS)
@@ -640,14 +668,27 @@ test-mail-gui:
 	/tmp/nixel-test-mail-gui
 
 # On-device SDK: native C subset compiler, visual designer and app runtime.
-SDK_HEADERS := src/sdk/ui.h src/sdk/image.h src/sdk/compiler.h src/sdk/design.h src/sdk/editor.h
-src/apps/ncc/main.o src/apps/designer/main.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o: $(SDK_HEADERS)
-ncc.bin: src/sdk/compiler.o
-designer.bin: src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o
-sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/main.o src/sdk/ui.o $(APP_RUNTIME)
+SDK_HEADERS := src/sdk/ui.h src/sdk/image.h src/sdk/compiler.h src/sdk/design.h src/sdk/editor.h src/sdk/components.h src/sdk/objects.h src/sdk/project.h
+src/apps/ncc/main.o src/apps/designer/main.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o src/sdk/objects.o src/sdk/project.o: $(SDK_HEADERS)
+src/sdk/ui.o src/sdk/objects.o src/apps/sdkhost/main.o: src/system/user/sys_api.h src/system/user/window_api.h src/system/graphics/wm/theme.h
+ncc.bin: src/sdk/compiler.o src/sdk/design.o src/sdk/project.o
+designer.bin: src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o src/sdk/project.o
+sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/objects.o $(APP_RUNTIME)
 	$(LD) $(LDFLAGS) -T src/sdk/app.ld $(filter %.o,$^) -o src/apps/sdkhost/sdkhost.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss src/apps/sdkhost/sdkhost.tmp $@
 .PHONY: sdk test-sdk
 sdk: ncc.bin designer.bin sdkhost.bin
 test-sdk: sdk
 	$(PYTHON) tools/tests/test_sdk.py
+
+# Account hashing shares the allocation-free wolfCrypt configuration.
+src/kernel/users.o: CFLAGS += $(WIFI_CRYPTO_FLAGS)
+
+.PHONY: test-accounts
+test-accounts:
+	$(CC) -std=c99 -O2 -fno-builtin $(filter-out -Isrc/system/libraries/tls/compat,$(WIFI_CRYPTO_FLAGS)) src/kernel/tests/accounts_test.c $(WIFI_SECURITY_DIR)/wpa2.c $(addprefix $(WIFI_CRYPTO_VENDOR)/wolfcrypt/src/,$(addsuffix .c,sha sha256 hmac hash pwdbased aes)) -o /tmp/nixel-test-accounts
+	/tmp/nixel-test-accounts
+
+.PHONY: test-accounts-qemu
+test-accounts-qemu: os.img
+	$(PYTHON) tools/tests/test_accounts_qemu.py

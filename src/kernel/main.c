@@ -323,7 +323,12 @@ static void kernel_mount_filesystem(void) {
     nvme_init();
     debug_print("[INIT] FS init...\n");
     usb_poll(); /* Enumerate boot media before the root filesystem probe. */
-    fs_init();  
+    fs_init();
+    if (!users_init()) {
+        debug_print("[ACCOUNTS] Cannot initialize account database; stopping.\n");
+        __builtin_trap();
+    }
+    debug_print("[ACCOUNTS] Persistent account database ready.\n");
     time_init();
 }
 

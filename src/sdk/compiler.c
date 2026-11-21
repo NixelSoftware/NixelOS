@@ -1,5 +1,6 @@
 /* Small, bounded C-to-i386 compiler. No host services or dynamic allocation. */
 #include "compiler.h"
+#include "components.h"
 #define SYMBOLS 192
 #define FIXUPS 512
 #define LOCALS 64
@@ -9,14 +10,14 @@ enum {
 };
 typedef struct {
     char name[NAME];
-    int address,arity,defined,variable;
+    int address,arity,defined,variable,kind;
 } symbol;
 typedef struct {
     char name[NAME];
     int offset;
 } local;
 typedef struct {
-    int offset,symbol,argc;
+    int offset,symbol,argc,line;
 } fixup;
 typedef struct {
     const char *p;
@@ -336,8 +337,34 @@ static void store(int off,int addr) {
     }
 }
 static void expr(int min);
+static int component_kind(const char *name) {
+    if(same(name,"Button"))return 1;
+    if(same(name,"TextBox"))return 2;
+    if(same(name,"Label"))return 3;
+    if(same(name,"Checkbox"))return 4;
+    if(same(name,"Window"))return 5;
+    return 0;
+}
+static int component_field(int kind,const char *name,int *writable) {
+    *writable=0;
+    if(kind==1 && (same(name,"buttonIsPressed")||same(name,"isPressed")))return 8;
+    if(kind==4 && (same(name,"checkboxIsTicked")||same(name,"isTicked"))){*writable=1;return 12;}
+    if(kind==5 && (same(name,"windowLoaded")||same(name,"isLoaded")))return 16;
+    if(kind==5 && same(name,"isOpen"))return 20;
+    if(kind!=5 && same(name,"text")){*writable=1;return 24;}
+    if(kind==2 && same(name,"textChanged"))return 28;
+    if(kind==4 && same(name,"isChanged"))return 32;
+    return -1;
+}
 static void primary(void) {
     if(c.failed)return;
+    if(c.token=='&') {
+        next();
+        if(c.token!=ID){fail("expected component object after &");return;}
+        int s=sym(c.word);
+        if(!c.symbols[s].variable||!c.symbols[s].kind){fail("address-of requires a component object");return;}
+        imm(c.symbols[s].address);next();return;
+    }
     if(c.token==NUM) {
         imm(c.value);
         next();
@@ -380,6 +407,7 @@ static void primary(void) {
         return;
     }
     char name[NAME];
+    int call_line=c.line;
     copy(name,c.word,NAME);
     next();
     if(c.token=='(') {
@@ -398,7 +426,7 @@ static void primary(void) {
         }
         need(')');
         /* Expressions are evaluated left to right; reverse stack slots for cdecl. */
-for(int i=0;i<argc/2;i++) {
+        for(int i=0;i<argc/2;i++) {
             byte(0x8b);
             byte(0x44);
             byte(0x24);
@@ -429,7 +457,7 @@ for(int i=0;i<argc/2;i++) {
             return;
         }
         c.fixes[c.nf++]=(fixup) {
-            p,s,argc
+            p,s,argc,call_line
         };
         if(argc) {
             byte(0x83);
@@ -447,7 +475,18 @@ for(int i=0;i<argc/2;i++) {
         }
         addr=c.symbols[s].address;
     }
+    int writable=1;
+    if(c.token=='.') {
+        if(off){fail("component fields require a public global object");return;}
+        int kind=c.symbols[sym(name)].kind;
+        next();
+        if(!kind||c.token!=ID){fail("unknown component object");return;}
+        int field=component_field(kind,c.word,&writable);
+        if(field<0){fail("property is not available on this component type");return;}
+        addr+=field;next();
+    } else if(!off && c.symbols[sym(name)].kind){fail("access a component property, or pass its address with &");return;}
     if(c.token=='=') {
+        if(!writable){fail("event and window properties are read-only");return;}
         next();
         expr(1);
         store(off,addr);
@@ -537,13 +576,15 @@ static void expr(int min) {
     }
     c.depth--;
 }
-static void type(void) {
-    if(c.token!=INT&&c.token!=VOID&&c.token!=CHAR) {
-        fail("expected int, char or void");
-        return;
+static int type(void) {
+    int kind=c.token==ID?component_kind(c.word):0;
+    if(!kind&&c.token!=INT&&c.token!=VOID&&c.token!=CHAR) {
+        fail("expected a C type or public component type");return 0;
     }
     next();
+    if(kind&&c.token=='*'){fail("component pointers are supplied by the designer");return 0;}
     while(c.token=='*')next();
+    return kind;
 }
 static void statement(void) {
     if(c.failed)return;
@@ -557,8 +598,8 @@ static void statement(void) {
         while(c.token&&c.token!='}'&&!c.failed)statement();
         need('}');
     }
-    else if(c.token==INT||c.token==CHAR) {
-        type();
+    else if(c.token==INT||c.token==CHAR||(c.token==ID&&component_kind(c.word))) {
+        if(type()){fail("component objects must be global");goto done;}
         if(c.token!=ID) {
             fail("expected variable name");
             goto done;
@@ -640,7 +681,7 @@ int sdk_compile(const char*source,unsigned char*image,unsigned size,char*error,u
             break;
         }
     }
-    if(!c.meta||c.meta->version!=1||c.meta->code<SDK_BASE||c.meta->capacity!=SDK_CODE_SIZE) {
+    if(!c.meta||c.meta->version!=SDK_IMAGE_VERSION||c.meta->code<SDK_BASE||c.meta->capacity!=SDK_CODE_SIZE) {
         fail("invalid SDK runtime");
         return -1;
     }
@@ -664,7 +705,7 @@ int sdk_compile(const char*source,unsigned char*image,unsigned size,char*error,u
     }
     next();
     while(c.token&&!c.failed) {
-        type();
+        int kind=type();
         if(c.token!=ID) {
             fail("expected declaration name");
             break;
@@ -679,9 +720,10 @@ int sdk_compile(const char*source,unsigned char*image,unsigned size,char*error,u
             break;
         }
         if(c.token!='(') {
-            char bytes[4]= {0};
+            char bytes[SDK_OBJECT_BYTES]= {0};
             int value=0;
             if(c.token=='=') {
+                if(kind){fail("component objects are initialized by the designer");break;}
                 next();
                 int neg=0;
                 if(c.token=='-') {
@@ -697,10 +739,12 @@ int sdk_compile(const char*source,unsigned char*image,unsigned size,char*error,u
             }
             need(';');
             for(int j=0;j<4;j++)bytes[j]=(unsigned)value>>(j*8);
-            f->address=data(bytes,4);
+            f->address=data(bytes,kind?SDK_OBJECT_BYTES:4);
+            f->kind=kind;
             f->variable=f->defined=1;
             continue;
         }
+        if(kind){fail("functions cannot return component objects");break;}
         next();
         c.nl=0;
         int argc=0;
@@ -712,7 +756,7 @@ int sdk_compile(const char*source,unsigned char*image,unsigned size,char*error,u
             }
         }
         while(c.token!=')'&&!c.failed) {
-            type();
+            if(type()){fail("use public component globals inside functions");break;}
             if(c.token!=ID||argc==8) {
                 fail("expected named parameter (maximum 8)");
                 break;
@@ -745,8 +789,8 @@ int sdk_compile(const char*source,unsigned char*image,unsigned size,char*error,u
     for(int i=0;i<c.nf&&!c.failed;i++) {
         fixup*x=&c.fixes[i];
         symbol*s=&c.symbols[x->symbol];
-        if(!s->defined||s->variable)fail("undefined function");
-        else if(s->arity!=x->argc)fail("wrong number of function arguments");
+        if(!s->defined||s->variable){c.line=x->line;fail("undefined function");}
+        else if(s->arity!=x->argc){c.line=x->line;fail("wrong number of function arguments");}
         else patch(x->offset,s->address-(SDK_BASE+x->offset+4));
     }
     int main=-1;

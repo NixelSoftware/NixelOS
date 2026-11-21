@@ -2,7 +2,8 @@
 #define NIXEL_SDK_IMAGE_H
 #define SDK_BASE 0xC00000u
 #define SDK_CODE_SIZE 24576
-#define SDK_EXPORTS 14
+#define SDK_EXPORTS 15
+#define SDK_IMAGE_VERSION 2
 #define SDK_IMAGE_MAX 65536
 #define SDK_MARKER "NIXELSDKIMAGE01!"
 typedef struct {

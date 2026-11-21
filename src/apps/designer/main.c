@@ -2,12 +2,15 @@
 #include "../../sdk/design.h"
 #include "../../sdk/compiler.h"
 #include "../../sdk/editor.h"
+#include "../../sdk/project.h"
 #include "../../system/graphics/wm/theme.h"
 static sdk_window ui;
 static sdk_design form;
 static char old[16384],source[16384],error[160],output[128];
 static unsigned char image[SDK_IMAGE_MAX];
 static int selected=-1,next_id=1,code_mode;
+static unsigned char form_data[SDK_FORM_MAX];
+static char loaded_path[128];
 static sdk_editor editor;
 #define CX 170
 #define CY 200
@@ -52,7 +55,7 @@ static void props(void) {
     numfield(32,c->y);
     numfield(33,c->w);
     numfield(34,c->h);
-    numfield(35,c->id);
+    field(35,form.names[selected]);
 }
 static void paint(int op,int x,int y,int w,int h,const char*s,unsigned color) {
     user_window_draw_t d= {0};
@@ -134,35 +137,46 @@ static int read_source(const char*path) {
     old[n]=0;
     return n;
 }
-static int save(void) {
-    const char*path=value(20);
-    if(!*path) {
-        status("Enter a source path");
-        return 0;
-    }
-    if(code_mode) {
-        if(sys_fs_write(path,editor.text,editor.length)!=editor.length) {
-            status("Source save failed");
-            return 0;
-        }
-        sdk_copy(source,editor.text,sizeof(source));
-        status("C source saved");
-        return 1;
-    }
-    int r=read_source(path);
-    if(r==-2)return 0;
-    if(r<0)old[0]=0;
-    int n=sdk_design_save(&form,old,source,sizeof(source));
-    if(n<0) {
-        status("Save refused: missing designer markers or source too large");
-        return 0;
-    }
-    if(sys_fs_write(path,source,n)!=n) {
-        status("Source save failed");
-        return 0;
-    }
-    status("C source saved; code outside designer markers preserved");
+static int equal(const char *a,const char *b){while(*a&&*a==*b){a++;b++;}return *a==*b;}
+static void refresh_properties(void){
+    selected=-1;next_id=1;
+    for(int i=0;i<form.count;i++)if(form.controls[i].id>=next_id)next_id=form.controls[i].id+1;
+    field(22,form.title);numfield(23,form.width);numfield(24,form.height);
+    field(30,"");field(35,"");for(int i=31;i<=34;i++)field(i,"");
+}
+static int ensure_handlers(void){
+    sdk_copy(source,editor.text,sizeof(source));
+    if(sdk_project_handlers(&form,source,sizeof(source))<0){status("Cannot add event handlers: source is too large");return 0;}
+    if(!equal(source,editor.text)){int cursor=editor.cursor;sdk_editor_set(&editor,source);editor.cursor=cursor<=editor.length?cursor:editor.length;}
     return 1;
+}
+static int open_project(void){
+    char path[134];
+    if(sdk_form_path(value(20),path,sizeof(path))<0){status("Project path too long");return 0;}
+    int size=sys_fs_read(path,0,0);
+    if(size<0||size>SDK_FORM_MAX||sys_fs_read(path,form_data,size)!=size){status("Cannot open project .form file");return 0;}
+    /* Decode into a temporary object so failed opens preserve the current app. */
+    static sdk_design candidate;
+    if(sdk_form_load(&candidate,form_data,size)<0){status("Invalid project .form file");return 0;}
+    if(read_source(value(20))<0){status("Cannot open app source");return 0;}
+    form=candidate;sdk_editor_set(&editor,old);
+    sdk_copy(loaded_path,value(20),sizeof(loaded_path));refresh_properties();
+    status("Project opened; Code shows application event handlers");return 1;
+}
+static int save(void) {
+    const char *path=value(20);
+    if(!*path){status("Enter an application source path");return 0;}
+    if(!equal(loaded_path,path)&&sys_fs_read(path,0,0)>=0){status("Open the existing project before saving");return 0;}
+    char sidecar[134];
+    if(sdk_form_path(path,sidecar,sizeof(sidecar))<0){status("Project path too long");return 0;}
+    if(!equal(loaded_path,path)&&sys_fs_read(sidecar,0,0)>=0){status("Open the existing project before saving");return 0;}
+    if(!ensure_handlers())return 0;
+    int size=sdk_form_save(&form,form_data,sizeof(form_data));
+    if(size<0){status("Invalid component names or layout");return 0;}
+    if(sys_fs_write(sidecar,form_data,size)!=size){status("Form save failed");return 0;}
+    if(sys_fs_write(path,editor.text,editor.length)!=editor.length){status("Application source save failed");return 0;}
+    sdk_copy(loaded_path,path,sizeof(loaded_path));
+    status("Project saved: app code and designer layout are separate");return 1;
 }
 static int build(void) {
     if(!save())return 0;
@@ -180,7 +194,7 @@ static int build(void) {
         }
         off+=chunk;
     }
-    if(sdk_compile(source,image,n,error,sizeof(error))<0) {
+    if(sdk_project_compile(&form,editor.text,image,n,error,sizeof(error))<0) {
         status(error);
         return 0;
     }
@@ -226,6 +240,7 @@ static void add(int kind) {
     if(c->w>form.width-c->x)c->w=form.width-c->x;
     sdk_copy(c->text,kind==1?"Button":kind==2?"Text":kind==3?"Label":"Checkbox",SDK_TEXT);
     selected=form.count++;
+    sdk_design_default_name(&form,selected);
     props();
 }
 static void apply(void) {
@@ -234,9 +249,9 @@ static void apply(void) {
         status("Window size: 160..600 x 100..300");
         return;
     }
-    int x=number(31),y=number(32),w=number(33),h=number(34),id=number(35);
-    if(selected>=0&&(x<0||y<26||w<16||h<16||w>width-x||h>height-y||id<1)) {
-        status("Component bounds or ID invalid");
+    int x=number(31),y=number(32),w=number(33),h=number(34);
+    if(selected>=0&&(x<0||y<26||w<16||h<16||w>width-x||h>height-y)) {
+        status("Component bounds are invalid");
         return;
     }
     for(int i=0;i<form.count;i++) {
@@ -245,11 +260,12 @@ static void apply(void) {
             status("Window would clip an existing component");
             return;
         }
-        if(i!=selected&&c->id==id&&selected>=0) {
-            status("Component ID must be unique");
+        if(i!=selected&&selected>=0&&equal(form.names[i],value(35))) {
+            status("Component names must be unique");
             return;
         }
     }
+    if(selected>=0&&!sdk_component_name_valid(value(35))){status("Use a public component name, e.g. Button1");return;}
     form.width=width;
     form.height=height;
     sdk_copy(form.title,value(22),32);
@@ -259,19 +275,15 @@ static void apply(void) {
         c->y=y;
         c->w=w;
         c->h=h;
-        c->id=id;
-        if(id>=next_id)next_id=id+1;
+        sdk_copy(form.names[selected],value(35),32);
         sdk_copy(c->text,value(30),SDK_TEXT);
     }
     status("Properties applied");
 }
 void user_main(const char*args) {
     if(sdk_open(&ui,"Nixel SDK - Window Designer",780,540)<0)return;
-    form=(sdk_design) {
-        "Main Window",400,280,0, {
-            {0}
-        }
-    };
+    form=(sdk_design){0};
+    sdk_copy(form.title,"Main Window",32);form.width=400;form.height=280;
     sdk_add(&ui,3,80,12,35,754,20,"C Window Designer | select a component, then click empty canvas to move it");
     sdk_add(&ui,3,81,12,63,55,20,"Source");
     sdk_add(&ui,2,20,70,60,280,26,"MainWindow.c");
@@ -287,17 +299,19 @@ void user_main(const char*args) {
     sdk_add(&ui,2,23,380,96,70,26,"400");
     sdk_add(&ui,3,84,464,99,70,20,"Height");
     sdk_add(&ui,2,24,530,96,70,26,"280");
-    sdk_add(&ui,1,14,620,96,100,26,"Apply");
+    sdk_add(&ui,1,14,620,96,70,26,"Apply");
     sdk_add(&ui,3,85,12,139,55,20,"Text");
     sdk_add(&ui,2,30,70,136,150,26,"");
     const char*labels[]= {
-        "X","Y","W","H","ID"
+        "X","Y","W","H"
     };
-    for(int i=0;i<5;i++) {
+    for(int i=0;i<4;i++) {
         sdk_add(&ui,3,100+i,230+i*90,139,24,20,labels[i]);
         sdk_add(&ui,2,31+i,252+i*90,136,54,26,"");
     }
-    sdk_add(&ui,1,15,694,136,70,26,"Delete");
+    sdk_add(&ui,3,104,594,139,40,20,"Name");
+    sdk_add(&ui,2,35,636,136,128,26,"");
+    sdk_add(&ui,1,15,700,96,64,26,"Delete");
     const char*palette[]= {
         "+ Button","+ Text box","+ Label","+ Checkbox"
     };
@@ -305,7 +319,9 @@ void user_main(const char*args) {
     sdk_add(&ui,3,86,12,380,144,24,"Click to select");
     sdk_add(&ui,3,87,12,406,144,24,"Edit bounds above");
     sdk_add(&ui,3,90,12,510,754,24,"Use Code to write event handlers, then Save, Build or Run");
-    code_mode=0;
+    code_mode=0;loaded_path[0]=0;
+    sdk_editor_set(&editor,"#include <nixel.h>\n\nvoid MainWindowOnLoaded(void) {\n}\n");
+    if(args&&*args)open_project();
     render();
     while(ui.handle>=0) {
         int e=sdk_poll(&ui);
@@ -317,34 +333,9 @@ void user_main(const char*args) {
             dirty=1;
         }
         if(e==16) {
-            if(!code_mode) {
-                int r=read_source(value(20));
-                if(r==-1) {
-                    old[0]=0;
-                    r=0;
-                }
-                if(r>=0) {
-                    int generated=sdk_design_save(&form,old,source,sizeof(source));
-                    sdk_editor_set(&editor,generated>=0?source:old);
-                    code_mode=1;
-                    ui.focus=0;
-                    field(16,"Design");
-                    status("C editor: arrows, Home/End, Delete, Backspace; Save, Build or Run");
-                }
-            }
-            else if(sdk_design_load(&form,editor.text)==0) {
-                if(save()) {
-                    code_mode=0;
-                    field(16,"Code");
-                    field(22,form.title);
-                    numfield(23,form.width);
-                    numfield(24,form.height);
-                    selected=-1;
-                    next_id=1;
-                    for(int i=0;i<form.count;i++)if(form.controls[i].id>=next_id)next_id=form.controls[i].id+1;
-                }
-            }
-            else status("Keep designer markers and literal MainWindow calls to return to Design");
+            if(!code_mode){
+                if(ensure_handlers()){code_mode=1;ui.focus=0;field(16,"Design");status("Write Button1OnPressed() and other application handlers here");}
+            }else{code_mode=0;field(16,"Code");status("Layout remains in the designer; application code is preserved");}
             user_window_draw_t mode= {0};
             mode.operation=USER_WINDOW_RAW_KEYS;
             mode.pressed=code_mode;
@@ -357,28 +348,7 @@ void user_main(const char*args) {
             sys_window_draw(ui.handle,&mode);
         }
         if(!code_mode&&e>=1&&e<=4)add(e);
-        if(e==10&&code_mode) {
-            if(read_source(value(20))>=0) {
-                sdk_editor_set(&editor,old);
-                status("Source opened in C editor");
-            }
-        }
-        if(e==10&&!code_mode) {
-            int r=read_source(value(20));
-            if(r<0) {
-                if(r==-1)status("Cannot open source");
-            }
-            else if(sdk_design_load(&form,old)<0)status("Invalid or unsupported designer definition");
-            else {
-                selected=-1;
-                next_id=1;
-                for(int i=0;i<form.count;i++)if(form.controls[i].id>=next_id)next_id=form.controls[i].id+1;
-                field(22,form.title);
-                numfield(23,form.width);
-                numfield(24,form.height);
-                status("Window definition opened");
-            }
-        }
+        if(e==10)open_project();
         if(e==11)save();
         if(e==12)build();
         if(e==13&&build()) {
@@ -387,7 +357,7 @@ void user_main(const char*args) {
         }
         if(e==14&&!code_mode)apply();
         if(e==15&&!code_mode&&selected>=0) {
-            for(int i=selected;i<form.count-1;i++)form.controls[i]=form.controls[i+1];
+            for(int i=selected;i<form.count-1;i++){form.controls[i]=form.controls[i+1];sdk_copy(form.names[i],form.names[i+1],32);}
             form.count--;
             selected=-1;
             status("Component deleted");

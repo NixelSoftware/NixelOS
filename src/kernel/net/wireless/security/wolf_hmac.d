@@ -18,6 +18,7 @@ src/kernel/net/wireless/security/wolf_hmac.o: \
  src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/hmac.h \
  src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/hash.h \
  src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/sha.h \
+ src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/sha256.h \
  src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/misc.c \
  src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/misc.h
 src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/libwolfssl_sources.h:
@@ -39,5 +40,6 @@ src/system/libraries/tls/compat/stdio.h:
 src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/hmac.h:
 src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/hash.h:
 src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/sha.h:
+src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/sha256.h:
 src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/misc.c:
 src/system/libraries/tls/vendor/wolfssl/wolfssl/wolfcrypt/misc.h:

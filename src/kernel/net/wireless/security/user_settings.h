@@ -31,7 +31,6 @@
 #define NO_RC4
 #define NO_MD4
 #define NO_MD5
-#define NO_SHA256
 #define NO_SHA512
 #define NO_SHA3
 #define NO_PSK
