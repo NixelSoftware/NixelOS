@@ -361,7 +361,7 @@ src/kernel/main.o src/system/init/main.o: src/system/init/nixinit.h
 .gui-config: FORCE_IMAGE_CONFIG
 	$(PYTHON) -c "from pathlib import Path; p=Path('.gui-config'); value='$(NOGUI)'; p.write_text(value) if not p.exists() or p.read_text()!=value else None"
 
-os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) $(wildcard resources/sdk/*) src/sdk/nixel.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
+os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) resources/chess.bmp resources/twoballs.bmp $(wildcard resources/sdk/*) src/sdk/nixel.h resources Makefile src/boot.bin src/boot_stage2.bin src/kernel/kernel.bin $(APP_BINS) mkext4.py tools/disk_layout.py tools/ext4_builder.py
 	$(PYTHON) mkext4.py os.img.new $(if $(filter 1,$(NOGUI)),-nogui,)
 	$(PYTHON) -c "from pathlib import Path; Path('os.img.new').replace('os.img')"
 	$(MAKE) clean-build

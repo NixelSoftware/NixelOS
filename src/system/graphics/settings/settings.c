@@ -2,6 +2,8 @@
 #include "../../services/audio/mixer.h"
 #include "settings.h"
 #include "../wm/wm.h"
+#include "../wm/desktop_wallpaper.h"
+#include "../../../kernel/fs.h"
 #include "../wm/theme.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../../kernel/drivers/display/font.h"
@@ -15,6 +17,31 @@
 static Window window;
 static int tab, mode, busy, network_action;
 static unsigned wifi_scroll, wifi_selected;
+static char wallpaper_files[FS_MAX_FILES][FS_MAX_FILENAME];
+static uint8_t wallpaper_types[FS_MAX_FILES];
+static int wallpaper_count, wallpaper_index;
+static void refresh_wallpapers(void) {
+    char path[FS_MAX_PATH];
+    fs_home_path("/Pictures/Wallpapers", path);
+    int count = fs_list_dir_types(path, wallpaper_files, wallpaper_types);
+    wallpaper_count = 0;
+    for (int i = 0; i < count; i++) {
+        char* name = wallpaper_files[i]; int n = 0;
+        while (name[n]) n++;
+        if ((wallpaper_types[i] & FS_ATTR_DIRECTORY) || n < 5 || name[n-4] != '.' ||
+            (name[n-3] | 32) != 'b' || (name[n-2] | 32) != 'm' || (name[n-1] | 32) != 'p') continue;
+        if (wallpaper_count != i) {
+            int j = 0; do { wallpaper_files[wallpaper_count][j] = name[j]; } while (name[j++]);
+        }
+        wallpaper_count++;
+    }
+    wallpaper_index = 0;
+    for (int i = 0; i < wallpaper_count; i++) {
+        int j = 0; const char* current = desktop_wallpaper_name();
+        while (wallpaper_files[i][j] && wallpaper_files[i][j] == current[j]) j++;
+        if (!wallpaper_files[i][j] && !current[j]) wallpaper_index = i;
+    }
+}
 static char wifi_password[64];
 static void clear_password(void) {
     volatile char* p=wifi_password;
@@ -187,6 +214,10 @@ static void draw(Window* win) {
              "This display could not apply the mode." : state == 2 ? "Resolution applied." :
              video_can_set_resolution() ? "Choose a mode and click Apply." :
              "Firmware mode: resolution switching unavailable.", COLOR_TEXT_MUTED);
+        text(20, 278, "Wallpaper (~/Pictures/Wallpapers)", COLOR_TEXT_PRIMARY);
+        button(20, 306, 40, "<", 0);
+        button(72, 306, 220, wallpaper_count ? wallpaper_files[wallpaper_index] : "No BMP images", 0);
+        button(304, 306, 40, ">", 0); button(356, 306, 104, "Apply", 0);
     } else if (tab == 1) {
         const char* name = 0; sys_net_get_device_info(0, 0, &name);
         text(20, 88, name ? name : "No network adapter", COLOR_TEXT_PRIMARY);
@@ -315,12 +346,19 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     if (!(buttons & 1)) return;
     for (int i = 0; i < 4; i++) if (hit(x, y, 16 + i * 112, 36, 104)) {
         if(!busy) clear_password();
-        tab = i; field = -1; if (tab == 3) load_time();
+        tab = i; field = -1; if (tab == 3) load_time(); if (tab == 0) refresh_wallpapers();
     }
     if (tab == 0) {
         if (hit(x,y,20,188,40)) mode = (mode + mode_count - 1) % mode_count;
         if (hit(x,y,304,188,40)) mode = (mode + 1) % mode_count;
         if (hit(x,y,356,188,104)) video_request_resolution(widths[mode], heights[mode]);
+        if (wallpaper_count && hit(x,y,20,306,40)) wallpaper_index = (wallpaper_index + wallpaper_count - 1) % wallpaper_count;
+        if (wallpaper_count && hit(x,y,304,306,40)) wallpaper_index = (wallpaper_index + 1) % wallpaper_count;
+        if (wallpaper_count && hit(x,y,356,306,104)) {
+            int result = desktop_wallpaper_select(wallpaper_files[wallpaper_index]);
+            set_message(result == 1 ? "Wallpaper applied." : result == 2 ?
+                "Applied, but could not save selection." : "Could not load this BMP image.");
+        }
     } else if (tab == 1 && !busy) {
         for (int i = 0; i < 3; i++) if (hit(x,y,158,144 + i * 36,302)) {
             field = i; replace_field = 1;
@@ -396,6 +434,7 @@ void settings_open(int initial_tab) {
     if (mode >= mode_count) mode = 0;
     for (int i = 0; i < mode_count; i++) if (widths[i] == (uint32_t)SCREEN_WIDTH && heights[i] == (uint32_t)SCREEN_HEIGHT) mode = i;
     if (!busy) load_manual();
+    refresh_wallpapers();
     if (tab == 3) load_time();
     if (wm_register_window(&window) < 0) return;
     wm_bring_to_front(&window); request_redraw();
