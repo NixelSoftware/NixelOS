@@ -114,6 +114,7 @@ def main(output, nogui=False):
             "usr/share/nixel": (0, 0o755), "usr/share/nixel/audio": (0, 0o755),
             "usr/share/nixel/sdk": (0, 0o755),
             "usr/share/nixel/images": (0, 0o755), "usr/share/games": (0, 0o755),
+            "usr/share/time": (0, 0o755),
             "usr/share/games/doom": (0, 0o755), "var": (0, 0o755),
             "var/log": (0, 0o755), "var/cache": (0, 0o755), "var/lib": (0, 0o755),
             "var/lib/nixel": (1000, 0o755), "var/www": (1000, 0o755), "sbin": (0, 0o755),
@@ -142,6 +143,8 @@ def main(output, nogui=False):
         (root / "usr/share/nixel/sdk/nixel.h").chmod(0o644)
         shutil.copyfile("src/sdk/components.h", root / "usr/share/nixel/sdk/components.h")
         (root / "usr/share/nixel/sdk/components.h").chmod(0o644)
+        shutil.copyfile("resources/timezones.json", root / "usr/share/time/timezones.json")
+        (root / "usr/share/time/timezones.json").chmod(0o644)
         for asset in Path("resources/sdk").glob("*"):
             if asset.is_file():
                 shutil.copyfile(asset, root / "usr/share/nixel/sdk" / asset.name)
