@@ -20,3 +20,5 @@ struct
 
 .gui-config
 .boot-config
+
+/src/apps/nixelcraft/*

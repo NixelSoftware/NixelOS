@@ -9,7 +9,7 @@ GLLIB_OBJECTS := $(GLLIB_SOURCES:.c=.o)
 all: nixelgl
 clean-build: clean-nixelgl
 
-$(GLLIB_OBJECTS): CFLAGS += -Isrc/system/libraries/m -fno-builtin -fno-stack-protector
+$(GLLIB_OBJECTS): CFLAGS += -Isrc/system/libraries/m -fno-builtin -fno-stack-protector -o2
 $(GLLIB_OBJECTS): $(GLLIB_DIR)/gl.mk $(GLLIB_DIR)/mem.h $(GLLIB_DIR)/font8x8.h \
                   src/include/GL/gl.h src/include/GL/glut.h src/system/libraries/m/math.h
 $(GLLIB_OBJECTS): %.o: %.c
