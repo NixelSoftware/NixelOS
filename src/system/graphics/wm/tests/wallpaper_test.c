@@ -4,7 +4,7 @@ extern int printf(const char*, ...);
 static uint8_t image[3000000], frames[TARGET_PAGES][PAGE_SIZE];
 static uint32_t screen[SCREEN_W * SCREEN_H];
 static uint32_t image_size, next_frame, reads, writes;
-static int fail_read;
+static int fail_read, user_chess_available, user_chess_reads, shared_chess_reads;
 static void put16(int offset, uint32_t v) { image[offset]=v; image[offset+1]=v>>8; }
 static void put32(int offset, uint32_t v) { put16(offset,v); put16(offset+2,v>>16); }
 static uint32_t expected(int x, int y) { return ((uint32_t)(x & 255)<<16) | ((uint32_t)(y & 255)<<8) | ((x+y)&255); }
@@ -21,7 +21,14 @@ static void make_image(int w, int h, int bpp, int top_down) {
 }
 int fs_home_path(const char* suffix, char out[FS_MAX_PATH]) { int i=0; do { out[i]=suffix[i]; } while (suffix[i++]); return 1; }
 int fs_read_file_at(const char* path, uint8_t* dest, uint32_t size, uint32_t off) {
-    if (path[1]=='.') return -1;
+    if (__builtin_strcmp(path, WALLPAPER_USER_DIR "/chess.bmp") == 0) {
+        if (!user_chess_available) return -1;
+        user_chess_reads++;
+    } else if (__builtin_strcmp(path, WALLPAPER_SHARED_DIR "/chess.bmp") == 0) {
+        shared_chess_reads++;
+    } else if (__builtin_strcmp(path, WALLPAPER_USER_DIR "/test.bmp") != 0) {
+        return -1;
+    }
     if (!dest || !size) return image_size;
     reads++;
     if (fail_read) return -1;
@@ -57,9 +64,13 @@ int main(void) {
         !test(73,41,24,0,WALLPAPER_MODE_TILE)) return 1;
     make_image(720,540,24,0); writes=reads=0;
     desktop_wallpaper_init(&api,WALLPAPER_MODE_STRETCH);
-    if (!desktop_wallpaper_is_loaded() || writes || reads>25) return 2;
+    if (!desktop_wallpaper_is_loaded() || writes || reads>25 || !shared_chess_reads) return 2;
+    unsigned boot_reads = reads;
+    user_chess_available = 1;
+    shared_chess_reads = 0;
+    if (!desktop_wallpaper_select("chess.bmp") || !user_chess_reads || shared_chess_reads) return 3;
     fail_read=1;
-    if (desktop_wallpaper_select("bad.bmp")) return 3;
-    printf("wallpaper tests passed; boot BMP reads: %u\n", reads);
+    if (desktop_wallpaper_select("test.bmp")) return 4;
+    printf("wallpaper tests passed; boot BMP reads: %u\n", boot_reads);
     return 0;
 }

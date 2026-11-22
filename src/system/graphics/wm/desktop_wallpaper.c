@@ -44,7 +44,7 @@ static char selected_name[FS_MAX_FILENAME] = "chess.bmp";
 static os_api_t* wallpaper_api;
 static int load_wallpaper(const char* name, int persist);
 
-static int valid_name(const char* name) {
+int desktop_wallpaper_valid_name(const char* name) {
     int n = 0;
     while (name[n] && n < FS_MAX_FILENAME - 1) {
         if (name[n] == '/' || name[n] == '\\') return 0;
@@ -86,7 +86,7 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
     char config[FS_MAX_PATH], name[FS_MAX_FILENAME];
     fs_home_path("/.config/desktop/wallpaper", config);
     int n = fs_read_file(config, (uint8_t*)name, sizeof(name) - 1);
-    if (n > 0 && n < FS_MAX_FILENAME) { name[n] = 0; if (valid_name(name)) copy_name(selected_name, name); }
+    if (n > 0 && n < FS_MAX_FILENAME) { name[n] = 0; if (desktop_wallpaper_valid_name(name)) copy_name(selected_name, name); }
     if (!load_wallpaper(selected_name, 0)) {
         copy_name(selected_name, "chess.bmp");
         load_wallpaper(selected_name, 0);
@@ -98,15 +98,20 @@ int desktop_wallpaper_select(const char* name) {
 }
 
 static int load_wallpaper(const char* name, int persist) {
-    if (!wallpaper_api || !valid_name(name)) return 0;
-    char suffix[FS_MAX_FILENAME + 21] = "/Pictures/Wallpapers/";
-    int j = 21, i = 0;
-    while (name[i]) suffix[j++] = name[i++];
-    suffix[j] = 0;
-    fs_home_path(suffix, wallpaper_path);
-    int bytes_read = wallpaper_api->fs.read(wallpaper_path, bmp_header_buf, sizeof(bmp_header_buf));
+    if (!wallpaper_api || !desktop_wallpaper_valid_name(name)) return 0;
+    char suffix[sizeof(WALLPAPER_USER_DIR) + FS_MAX_FILENAME] = WALLPAPER_USER_DIR "/";
+    copy_name(suffix + sizeof(WALLPAPER_USER_DIR), name);
+    int bytes_read = -1;
+    if (fs_home_path(suffix, wallpaper_path))
+        bytes_read = wallpaper_api->fs.read(wallpaper_path, bmp_header_buf, sizeof(bmp_header_buf));
+    if (bytes_read < 0) {
+        const char shared[] = WALLPAPER_SHARED_DIR "/";
+        for (unsigned i = 0; i < sizeof(shared) - 1; i++) wallpaper_path[i] = shared[i];
+        copy_name(wallpaper_path + sizeof(shared) - 1, name);
+        bytes_read = wallpaper_api->fs.read(wallpaper_path, bmp_header_buf, sizeof(bmp_header_buf));
+    }
     if (bytes_read < 54 || bmp_header_buf[0] != 'B' || bmp_header_buf[1] != 'M') {
-        debug_print("[WALLPAPER] WALLPAPR.BMP not found or invalid header.\n");
+        debug_print("[WALLPAPER] Wallpaper not found or invalid header.\n");
         return 0;
     }
 

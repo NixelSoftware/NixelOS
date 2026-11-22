@@ -28,13 +28,15 @@ BUNDLED_FILES = [
     "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
     "syndig.bin", "qksrv.bin", "resources/quark.cfg",
     "qkftp.bin", "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "glcube.bin", "glscene.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
-    "resources/default_user.bmp", "telnetd.bin", "taskmgr.bin", "tunnel.bin", "nixelcraft.bin"
+    "resources/default_user.bmp", "resources/chess.bmp", "resources/twoballs.bmp",
+    "resources/purpleaero.bmp", "resources/nixel.bmp",
+    "telnetd.bin", "taskmgr.bin", "tunnel.bin", "nixelcraft.bin"
 ]
 
 
 def inode_metadata(path, name, directories):
     owner, mode = directories.get(name, (
-        1000 if name.startswith(("var/www/", "home/user/Pictures/Wallpapers/")) or name == "var/log/quark.log" else 0,
+        1000 if name.startswith("var/www/") or name == "var/log/quark.log" else 0,
         0o755 if path.suffix == ".bin" else 0o644))
     if name == "etc/time.cfg":
         mode = 0o777
@@ -126,10 +128,6 @@ def main(output, nogui=False):
         for name, (_, mode) in directories.items():
             (root / name).mkdir(mode=mode)
             (root / name).chmod(mode)
-        for home in ("home/user", "root"):
-            for name in ("chess.bmp", "twoballs.bmp", "purpleaero.bmp", "nixel.bmp"):
-                shutil.copyfile(Path("resources") / name, root / home / "Pictures/Wallpapers" / name)
-                (root / home / "Pictures/Wallpapers" / name).chmod(0o644)
         if kernel.exists():
             shutil.copyfile(kernel, root / "boot/kernel.bin")
             (root / "boot/kernel.bin").chmod(0o644)

@@ -17,30 +17,37 @@
 static Window window;
 static int tab, mode, busy, network_action;
 static unsigned wifi_scroll, wifi_selected;
-static char wallpaper_files[FS_MAX_FILES][FS_MAX_FILENAME];
+static char wallpaper_files[2 * FS_MAX_FILES][FS_MAX_FILENAME];
 static uint8_t wallpaper_types[FS_MAX_FILES];
 static int wallpaper_count, wallpaper_index;
-static void refresh_wallpapers(void) {
-    char path[FS_MAX_PATH];
-    fs_home_path("/Pictures/Wallpapers", path);
-    int count = fs_list_dir_types(path, wallpaper_files, wallpaper_types);
-    wallpaper_count = 0;
+static int wallpaper_name_index(const char* name) {
+    for (int i = 0; i < wallpaper_count; i++) {
+        int j = 0;
+        while (wallpaper_files[i][j] && wallpaper_files[i][j] == name[j]) j++;
+        if (!wallpaper_files[i][j] && !name[j]) return i;
+    }
+    return -1;
+}
+static void list_wallpapers(const char* path) {
+    char (*files)[FS_MAX_FILENAME] = wallpaper_files + wallpaper_count;
+    int count = fs_list_dir_types(path, files, wallpaper_types);
     for (int i = 0; i < count; i++) {
-        char* name = wallpaper_files[i]; int n = 0;
-        while (name[n]) n++;
-        if ((wallpaper_types[i] & FS_ATTR_DIRECTORY) || n < 5 || name[n-4] != '.' ||
-            (name[n-3] | 32) != 'b' || (name[n-2] | 32) != 'm' || (name[n-1] | 32) != 'p') continue;
-        if (wallpaper_count != i) {
+        char* name = files[i];
+        if ((wallpaper_types[i] & FS_ATTR_DIRECTORY) || !desktop_wallpaper_valid_name(name) ||
+            wallpaper_name_index(name) >= 0) continue;
+        if (wallpaper_files[wallpaper_count] != name) {
             int j = 0; do { wallpaper_files[wallpaper_count][j] = name[j]; } while (name[j++]);
         }
         wallpaper_count++;
     }
-    wallpaper_index = 0;
-    for (int i = 0; i < wallpaper_count; i++) {
-        int j = 0; const char* current = desktop_wallpaper_name();
-        while (wallpaper_files[i][j] && wallpaper_files[i][j] == current[j]) j++;
-        if (!wallpaper_files[i][j] && !current[j]) wallpaper_index = i;
-    }
+}
+static void refresh_wallpapers(void) {
+    char path[FS_MAX_PATH];
+    wallpaper_count = 0;
+    if (fs_home_path(WALLPAPER_USER_DIR, path)) list_wallpapers(path);
+    list_wallpapers(WALLPAPER_SHARED_DIR);
+    wallpaper_index = wallpaper_name_index(desktop_wallpaper_name());
+    if (wallpaper_index < 0) wallpaper_index = 0;
 }
 static char wifi_password[64];
 static void clear_password(void) {
@@ -214,7 +221,7 @@ static void draw(Window* win) {
              "This display could not apply the mode." : state == 2 ? "Resolution applied." :
              video_can_set_resolution() ? "Choose a mode and click Apply." :
              "Firmware mode: resolution switching unavailable.", COLOR_TEXT_MUTED);
-        text(20, 278, "Wallpaper (~/Pictures/Wallpapers)", COLOR_TEXT_PRIMARY);
+        text(20, 278, "Wallpaper", COLOR_TEXT_PRIMARY);
         button(20, 306, 40, "<", 0);
         button(72, 306, 220, wallpaper_count ? wallpaper_files[wallpaper_index] : "No BMP images", 0);
         button(304, 306, 40, ">", 0); button(356, 306, 104, "Apply", 0);
