@@ -10,6 +10,7 @@ static void mutex_lock(mutex_t* lock) { (void)lock; }
 static void mutex_unlock(mutex_t* lock) { (void)lock; }
 extern int printf(const char*, ...);
 extern int puts(const char*);
+volatile uint32_t frame_timer;
 #include "../mixer.c"
 static uint32_t selected_device, queued, init_calls, shutdown_calls;
 static uint32_t capture_frames, write_calls, write_mode;
@@ -84,6 +85,7 @@ static void reset(void) {
     selected_device = queued = init_calls = shutdown_calls = capture_frames = write_calls =
         write_mode = 0;
     hardware_open = 0;
+    frame_timer = 0;
 }
 static void consume(uint32_t frames) { queued = queued > frames ? queued - frames : 0; }
 int main(void) {
@@ -161,11 +163,28 @@ int main(void) {
     CHECK(audio_mixer_open(8, &b) == 0);
     CHECK(audio_mixer_write(8, stereo, 31 * 2) == 31 * 2);
     audio_mixer_service();
+    CHECK(find(8)->count == 31 && capture_frames == 0);
+    frame_timer += PARTIAL_WAIT_TICKS;
+    audio_mixer_service();
     CHECK(find(8)->count == 0 && find(8)->phase == 375);
     consume(queued);
     audio_mixer_write(8, stereo, 31 * 2);
     audio_mixer_service();
+    CHECK(find(8)->count == 31);
+    frame_timer += PARTIAL_WAIT_TICKS;
+    audio_mixer_service();
     CHECK(find(8)->count == 0 && find(8)->phase == 750);
+
+    reset();
+    CHECK(audio_mixer_open(8, &a) == 0);
+    for (unsigned i = 0; i < 2048; i++) stereo[i] = 1234;
+    CHECK(audio_mixer_write(8, stereo, 2048) == 2048);
+    audio_mixer_service();
+    CHECK(capture_frames == 0);
+    CHECK(audio_mixer_write(8, stereo + 1024, 2048) == 2048);
+    audio_mixer_service();
+    CHECK(capture_frames == 1024 && capture[511][0] == 1234 &&
+          capture[512][0] == 1234 && capture[1023][0] == 1234);
 
     reset();
     b = (user_audio_format_t){192000, 1, USER_AUDIO_S32_LE};
