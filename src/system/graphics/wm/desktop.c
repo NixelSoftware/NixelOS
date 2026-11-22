@@ -277,7 +277,7 @@ static void save_icon(int i) {
     record.x = icons[i].x; record.y = icons[i].y;
     char path[FS_MAX_PATH]; layout_path(i, path);
     if (fs_mkdir(layout_dir) < 0 || fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
-        show_info_dialog("Desktop", "Could not save icon position.");
+        show_error_dialog("Desktop", "Could not save icon position.");
 }
 static void refresh_desktop(void) {
     char files[FS_MAX_FILES][FS_MAX_FILENAME], old_names[NUM_ICONS][FS_MAX_FILENAME];
@@ -340,18 +340,18 @@ void desktop_poll(void) {
 static void open_path(const char* path) {
     if (fs_is_directory(path)) {
         if (app_loader_launch_detached(desktop_api, "/usr/bin/files.bin", path) < 0)
-            show_info_dialog("Desktop", "Cannot open File Explorer.");
+            show_error_dialog("Desktop", "Cannot open File Explorer.");
     } else if (suffix(path, ".MID") || suffix(path, ".MIDI")) {
         if (app_loader_launch_detached(desktop_api, "/usr/bin/syndig.bin", path) < 0)
-            show_info_dialog("Desktop", "Cannot launch Syndig.");
+            show_error_dialog("Desktop", "Cannot launch Syndig.");
     } else if (suffix(path, ".BIN")) {
         if (app_loader_launch_detached(desktop_api, path, "") < 0)
-            show_info_dialog("Desktop", "Cannot launch application.");
+            show_error_dialog("Desktop", "Cannot launch application.");
     } else if (suffix(path, ".BMP") && desktop_api->shell.shell_open_viewer) {
         desktop_api->shell.shell_open_viewer(path);
     } else {
         int bytes = fs_read_file(path, (uint8_t*)preview, sizeof(preview)-1);
-        if (bytes < 0) { show_info_dialog("Desktop", "Cannot read file."); return; }
+        if (bytes < 0) { show_error_dialog("Desktop", "Cannot read file."); return; }
         preview[bytes] = 0;
         for (int i = 0; i < bytes; i++)
             if ((unsigned char)preview[i] < 32 && preview[i] != '\n' && preview[i] != '\t') preview[i] = '.';
@@ -397,7 +397,7 @@ static void create_shortcut(void) {
         fs_stat_t st;
         if (!fs_stat(name, &st)) { copy_text(path, name, FS_MAX_PATH); break; }
     }
-    if (slot == 1000 || icon_count >= NUM_ICONS) { show_info_dialog("Desktop", "Desktop is full."); return; }
+    if (slot == 1000 || icon_count >= NUM_ICONS) { show_error_dialog("Desktop", "Desktop is full."); return; }
     const char* program_name = pending;
     for (int i = 0; pending[i]; i++) if (pending[i] == '/') program_name = pending+i+1;
     char named_path[FS_MAX_PATH];
@@ -416,7 +416,7 @@ static void create_shortcut(void) {
     if (suffix(name, ".BIN")) name[length-4] = 0;
     copy_text(record.label, name, sizeof(record.label));
     if (fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
-        show_info_dialog("Desktop", "Could not save shortcut.");
+        show_error_dialog("Desktop", "Could not save shortcut.");
 }
 /* Called before normal window dispatch only for an active overlay/drag, or
  * a right-button press on uncovered desktop. */

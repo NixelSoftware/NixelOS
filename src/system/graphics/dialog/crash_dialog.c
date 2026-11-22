@@ -1,4 +1,5 @@
 #include "crash_dialog.h"
+#include "../../services/audio/system_sound.h"
 #include "../wm/theme.h"
 #include "../wm/wm.h"
 #include "../../../kernel/window.h"
@@ -119,6 +120,7 @@ void crash_dialog_init(os_api_t* api) {
 
 void crash_dialog_show(const char* app_name, uint32_t vector, uint32_t eip, uint32_t err_code) {
     if (!os) return;
+    system_sound_error();
 
     int p = 0;
     const char* pfx = "Illegal operation has occurred";

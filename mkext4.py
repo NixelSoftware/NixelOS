@@ -34,7 +34,7 @@ BUNDLED_FILES = [
 
 def inode_metadata(path, name, directories):
     owner, mode = directories.get(name, (
-        1000 if name.startswith("var/www/") or name == "var/log/quark.log" else 0,
+        1000 if name.startswith(("var/www/", "home/user/Pictures/Wallpapers/")) or name == "var/log/quark.log" else 0,
         0o755 if path.suffix == ".bin" else 0o644))
     if name == "etc/time.cfg":
         mode = 0o777
@@ -120,12 +120,16 @@ def main(output, nogui=False):
             "bin": (0, 0o755), "lib": (0, 0o755), "lib/firmware": (0, 0o755)
         }
         for home, owner in (("home/user", 1000), ("root", 0)):
-            for child in ("Desktop", "Documents", "Downloads", "Pictures", "Music",
+            for child in ("Desktop", "Documents", "Downloads", "Pictures", "Pictures/Wallpapers", "Music",
                           ".config", ".config/desktop", ".config/desktop/layout", ".config/doom"):
                 directories[f"{home}/{child}"] = (owner, 0o755 if not child.startswith(".") else 0o700)
         for name, (_, mode) in directories.items():
             (root / name).mkdir(mode=mode)
             (root / name).chmod(mode)
+        for home in ("home/user", "root"):
+            for name in ("chess.bmp", "twoballs.bmp", "purpleaero.bmp", "nixel.bmp"):
+                shutil.copyfile(Path("resources") / name, root / home / "Pictures/Wallpapers" / name)
+                (root / home / "Pictures/Wallpapers" / name).chmod(0o644)
         if kernel.exists():
             shutil.copyfile(kernel, root / "boot/kernel.bin")
             (root / "boot/kernel.bin").chmod(0o644)
