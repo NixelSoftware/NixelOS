@@ -6,12 +6,15 @@
 #define QUEUE_FRAMES 4096u
 #define BLOCK_FRAMES 1024u
 #define AHEAD_FRAMES (3u * BLOCK_FRAMES)
+#define PARTIAL_WAIT_TICKS 2u
+
+extern volatile uint32_t frame_timer;
 
 typedef struct {
     uint32_t owner, rate, channels, format, bytes_per_frame;
-    uint32_t head, count, phase;
+    uint32_t head, count, phase, partial_since;
     uint64_t last_frame;
-    uint8_t active, draining;
+    uint8_t active, draining, waiting_for_input;
     int16_t samples[QUEUE_FRAMES][2];
 } mixer_stream_t;
 static mixer_stream_t streams[STREAMS];
@@ -101,7 +104,7 @@ int32_t audio_mixer_open(uint32_t owner, const user_audio_format_t* format) {
     stream->bytes_per_frame = format->channels * format->sample_format;
     stream->head = stream->count = stream->phase = 0;
     stream->last_frame = 0;
-    stream->draining = 0;
+    stream->draining = stream->waiting_for_input = 0;
     stream->active = 1;
     result = 0;
 done:
@@ -144,12 +147,37 @@ static int32_t interpolate(int32_t a, int32_t b, uint32_t phase) {
     return a + (delta < 0 ? -amount : amount);
 }
 static int mix_block(void) {
+    mixer_stream_t* inputs[STREAMS];
+    uint32_t input_count = 0;
+    uint32_t now = frame_timer;
+    for (uint32_t i = 0; i < STREAMS; i++) {
+        mixer_stream_t* s = &streams[i];
+        if (!s->active || !s->count)
+            continue;
+        uint32_t last_phase = s->phase + (BLOCK_FRAMES - 1u) * s->rate;
+        if (!s->draining && (last_phase / output_rate >= s->count ||
+                             (last_phase + s->rate) / output_rate > s->count)) {
+            /* Give split writes time to supply a full block, but bound the
+             * wait for live producers that send less than one block. */
+            if (!s->waiting_for_input) {
+                s->partial_since = now;
+                s->waiting_for_input = 1;
+            }
+            if (now - s->partial_since < PARTIAL_WAIT_TICKS)
+                continue;
+        }
+        s->waiting_for_input = 0;
+        inputs[input_count++] = s;
+    }
+    if (!input_count)
+        return 0;
+
     int contributed = 0;
     for (uint32_t n = 0; n < BLOCK_FRAMES; n++) {
         int32_t left = 0, right = 0;
-        for (uint32_t i = 0; i < STREAMS; i++) {
-            mixer_stream_t* s = &streams[i];
-            if (!s->active || !s->count)
+        for (uint32_t i = 0; i < input_count; i++) {
+            mixer_stream_t* s = inputs[i];
+            if (!s->count)
                 continue;
             uint32_t phase = s->phase + s->rate, advance = phase / output_rate;
             if (advance > s->count && !s->draining)
