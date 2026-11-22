@@ -127,7 +127,7 @@ def main(output, nogui=False):
             (root / name).mkdir(mode=mode)
             (root / name).chmod(mode)
         for home in ("home/user", "root"):
-            for name in ("chess.bmp", "twoballs.bmp"):
+            for name in ("chess.bmp", "twoballs.bmp", "purpleaero.bmp", "nixel.bmp"):
                 shutil.copyfile(Path("resources") / name, root / home / "Pictures/Wallpapers" / name)
                 (root / home / "Pictures/Wallpapers" / name).chmod(0o644)
         if kernel.exists():

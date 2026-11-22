@@ -14,9 +14,35 @@ static wallpaper_mode_t current_mode = WALLPAPER_MODE_STRETCH;
 
 static uint8_t   bmp_header_buf[54];
 static char wallpaper_path[FS_MAX_PATH];
-static uint8_t   row_scratch[SCREEN_W * 4];
+#define WALLPAPER_CACHE_SIZE 65536u
+static uint8_t image_cache[2][WALLPAPER_CACHE_SIZE];
+static uint32_t cache_start[2], cache_size[2], image_file_size, cache_next;
+
+/* Two blocks avoid rereading boundaries when bottom-up rows cross them. */
+static int read_pixel(uint32_t offset, uint32_t bytes, uint32_t* color) {
+    uint8_t pixel[4];
+    for (uint32_t i = 0; i < bytes; i++) {
+        uint32_t pos = offset + i, slot;
+        for (slot = 0; slot < 2; slot++)
+            if (pos >= cache_start[slot] && pos - cache_start[slot] < cache_size[slot]) break;
+        if (slot == 2) {
+            slot = cache_next; cache_next ^= 1;
+            cache_start[slot] = pos & ~(WALLPAPER_CACHE_SIZE - 1u);
+            cache_size[slot] = image_file_size - cache_start[slot];
+            if (cache_size[slot] > WALLPAPER_CACHE_SIZE) cache_size[slot] = WALLPAPER_CACHE_SIZE;
+            if (fs_read_file_at(wallpaper_path, image_cache[slot], cache_size[slot], cache_start[slot]) != (int)cache_size[slot]) {
+                cache_size[slot] = 0;
+                return 0;
+            }
+        }
+        pixel[i] = image_cache[slot][pos - cache_start[slot]];
+    }
+    *color = ((uint32_t)pixel[2] << 16) | ((uint32_t)pixel[1] << 8) | pixel[0];
+    return 1;
+}
 static char selected_name[FS_MAX_FILENAME] = "chess.bmp";
 static os_api_t* wallpaper_api;
+static int load_wallpaper(const char* name, int persist);
 
 static int valid_name(const char* name) {
     int n = 0;
@@ -61,13 +87,17 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
     fs_home_path("/.config/desktop/wallpaper", config);
     int n = fs_read_file(config, (uint8_t*)name, sizeof(name) - 1);
     if (n > 0 && n < FS_MAX_FILENAME) { name[n] = 0; if (valid_name(name)) copy_name(selected_name, name); }
-    if (!desktop_wallpaper_select(selected_name)) {
+    if (!load_wallpaper(selected_name, 0)) {
         copy_name(selected_name, "chess.bmp");
-        desktop_wallpaper_select(selected_name);
+        load_wallpaper(selected_name, 0);
     }
 }
 
 int desktop_wallpaper_select(const char* name) {
+    return load_wallpaper(name, 1);
+}
+
+static int load_wallpaper(const char* name, int persist) {
     if (!wallpaper_api || !valid_name(name)) return 0;
     char suffix[FS_MAX_FILENAME + 21] = "/Pictures/Wallpapers/";
     int j = 21, i = 0;
@@ -108,93 +138,23 @@ int desktop_wallpaper_select(const char* name) {
     uint32_t image_size = row_stride * (uint32_t)img_h;
     if (data_offset > file_size || image_size > file_size - data_offset) return 0;
 
-    if (current_mode == WALLPAPER_MODE_STRETCH) {
-        int last_fetched_src_y = -1, cached_chunk = -1;
-
-        for (int y = 0; y < SCREEN_H; y++) {
-            int src_y = (y * img_h) / SCREEN_H;
-            if (src_y >= img_h) src_y = img_h - 1;
-            int file_row_y = flip_y ? (img_h - 1 - src_y) : src_y;
-
-            if (file_row_y != last_fetched_src_y) { cached_chunk = -1; last_fetched_src_y = file_row_y; }
-
-
-            for (int x = 0; x < SCREEN_W; x++) {
-                int src_x = (x * img_w) / SCREEN_W;
-                if (src_x >= img_w) src_x = img_w - 1;
-
-                int chunk = src_x / SCREEN_W;
-                if (chunk != cached_chunk) {
-                    uint32_t bytes_per_pixel = bpp / 8;
-                    uint32_t first = (uint32_t)chunk * SCREEN_W;
-                    uint32_t pixels = (uint32_t)img_w - first;
-                    if (pixels > SCREEN_W) pixels = SCREEN_W;
-                    uint32_t size = pixels * bytes_per_pixel;
-                    uint32_t offset = data_offset + (uint32_t)file_row_y * row_stride + first * bytes_per_pixel;
-                    if (offset < data_offset || fs_read_file_at(wallpaper_path, row_scratch, size, offset) != (int)size) { wallpaper_loaded = 0; return 0; }
-                    cached_chunk = chunk;
-                }
-                src_x %= SCREEN_W;
-                uint32_t color;
-                if (bpp == 24) {
-                    uint8_t b = row_scratch[src_x * 3 + 0];
-                    uint8_t g = row_scratch[src_x * 3 + 1];
-                    uint8_t r = row_scratch[src_x * 3 + 2];
-                    color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-                } else {
-                    uint8_t b = row_scratch[src_x * 4 + 0];
-                    uint8_t g = row_scratch[src_x * 4 + 1];
-                    uint8_t r = row_scratch[src_x * 4 + 2];
-                    color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-                }
-                uint32_t pixel = y * SCREEN_W + x;
-                uint32_t* page = (uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
-                page[pixel % (PAGE_SIZE / 4u)] = color;
+    image_file_size = file_size;
+    cache_size[0] = cache_size[1] = cache_next = 0;
+    uint32_t bytes_per_pixel = bpp / 8;
+    for (int y = 0; y < SCREEN_H; y++) {
+        int src_y = current_mode == WALLPAPER_MODE_TILE ? y % img_h : (y * img_h) / SCREEN_H;
+        int file_row_y = flip_y ? img_h - 1 - src_y : src_y;
+        uint32_t row_offset = data_offset + (uint32_t)file_row_y * row_stride;
+        for (int x = 0; x < SCREEN_W; x++) {
+            int src_x = current_mode == WALLPAPER_MODE_TILE ? x % img_w : (x * img_w) / SCREEN_W;
+            uint32_t color;
+            if (!read_pixel(row_offset + (uint32_t)src_x * bytes_per_pixel, bytes_per_pixel, &color)) {
+                wallpaper_loaded = 0;
+                return 0;
             }
-        }
-    }
-
-    else if (current_mode == WALLPAPER_MODE_TILE) {
-        int last_fetched_src_y = -1, cached_chunk = -1;
-
-        for (int y = 0; y < SCREEN_H; y++) {
-            int src_y = y % img_h;
-            int file_row_y = flip_y ? (img_h - 1 - src_y) : src_y;
-
-            if (file_row_y != last_fetched_src_y) { cached_chunk = -1; last_fetched_src_y = file_row_y; }
-
-
-            for (int x = 0; x < SCREEN_W; x++) {
-                int src_x = x % img_w;
-
-                int chunk = src_x / SCREEN_W;
-                if (chunk != cached_chunk) {
-                    uint32_t bytes_per_pixel = bpp / 8;
-                    uint32_t first = (uint32_t)chunk * SCREEN_W;
-                    uint32_t pixels = (uint32_t)img_w - first;
-                    if (pixels > SCREEN_W) pixels = SCREEN_W;
-                    uint32_t size = pixels * bytes_per_pixel;
-                    uint32_t offset = data_offset + (uint32_t)file_row_y * row_stride + first * bytes_per_pixel;
-                    if (offset < data_offset || fs_read_file_at(wallpaper_path, row_scratch, size, offset) != (int)size) { wallpaper_loaded = 0; return 0; }
-                    cached_chunk = chunk;
-                }
-                src_x %= SCREEN_W;
-                uint32_t color;
-                if (bpp == 24) {
-                    uint8_t b = row_scratch[src_x * 3 + 0];
-                    uint8_t g = row_scratch[src_x * 3 + 1];
-                    uint8_t r = row_scratch[src_x * 3 + 2];
-                    color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-                } else {
-                    uint8_t b = row_scratch[src_x * 4 + 0];
-                    uint8_t g = row_scratch[src_x * 4 + 1];
-                    uint8_t r = row_scratch[src_x * 4 + 2];
-                    color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-                }
-                uint32_t pixel = y * SCREEN_W + x;
-                uint32_t* page = (uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
-                page[pixel % (PAGE_SIZE / 4u)] = color;
-            }
+            uint32_t pixel = y * SCREEN_W + x;
+            uint32_t* page = (uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
+            page[pixel % (PAGE_SIZE / 4u)] = color;
         }
     }
 
@@ -202,7 +162,7 @@ int desktop_wallpaper_select(const char* name) {
     char config_path[FS_MAX_PATH];
     fs_home_path("/.config/desktop/wallpaper", config_path);
     int len = 0; while (selected_name[len]) len++;
-    int saved = fs_write_file(config_path, (const uint8_t*)selected_name, len) == len;
+    int saved = !persist || fs_write_file(config_path, (const uint8_t*)selected_name, len) == len;
     wallpaper_loaded = 1;
     debug_print("[WALLPAPER] Applied wallpaper successfully.\n");
     return saved ? 1 : 2;

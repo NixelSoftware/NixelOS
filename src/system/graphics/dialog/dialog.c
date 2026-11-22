@@ -3,6 +3,7 @@
 #include "../wm/theme.h"
 #include "../../../kernel/window.h"
 #include "../../../kernel/os_api.h"
+#include "../../services/audio/system_sound.h"
 
 #define COLOR_WIN_BG     0x00C0C0C0
 #define COLOR_DARK_GRAY  0x00808080
@@ -122,4 +123,9 @@ void show_info_dialog(const char* title, const char* message) {
 
     os->windows.register_window(&dialog_window);
     dialog_active = 1;
+}
+
+void show_error_dialog(const char* title, const char* message) {
+    system_sound_error();
+    show_info_dialog(title, message);
 }
