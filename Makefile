@@ -186,7 +186,7 @@ $(KERNEL_OBJ): $(KERNEL_HEADERS)
 .audio-debug-config: FORCE_AUDIO_DEBUG_CONFIG
 	$(PYTHON) -c "from pathlib import Path; p=Path('$@'); value='$(NO_AUDIO_DEBUG)\n'; p.write_text(value) if not p.exists() or p.read_text() != value else None"
 
-src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o: .audio-debug-config src/kernel/drivers/serial.h
+src/kernel/hal/audio.o src/kernel/drivers/hda.o src/kernel/drivers/sb16_driver.o src/kernel/syscall.o src/system/services/audio/system_sound.o: .audio-debug-config src/kernel/drivers/serial.h
 
 STANDARD_APPS := files mines chess calc hexview floppy_debug ping netdiag http_test curl \
                  crash_debug shutdown userhello sound oobe sysdiag reboot setwall \
