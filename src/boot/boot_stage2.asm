@@ -66,83 +66,47 @@ stage2_entry:
     mov si, msg_kok
     call print_string
 
-    xor ax, ax
-    mov es, ax
+    call probe_display
     mov di, 0x9000
     mov dword [es:di], 'VBE2'
     mov ax, 0x4F00
-    int 0x10
+    call video_bios
     cmp ax, 0x004F
     jne .vbe_fail
 
-    mov si, [es:0x900E]
-    mov ax, [es:0x9010]
-    mov fs, ax
+    cmp word [mode_width], 0
+    je .fallback
+    call set_display_mode
+    jnc .mode_found
 
-.find_mode_loop:
-    mov cx, [fs:si]
-    cmp cx, 0xFFFF
-    je .try_fallback_mode
-    add si, 2
-    push si
-
-    mov ax, 0x4F01
-    mov di, 0x9200
-    int 0x10
-    pop si
-    cmp ax, 0x004F
-    jne .find_mode_loop
-
-    mov ax, [es:0x9200]
-    and ax, 0x0091
-    cmp ax, 0x0091
-    jne .find_mode_loop
-
-    cmp word [es:0x9212], 800
-    jne .find_mode_loop
-
-    cmp word [es:0x9214], 600
-    jne .find_mode_loop
-
-    mov al, [es:0x9219]
-    cmp al, 32
-    je .mode_found
-    cmp al, 24
-    jne .find_mode_loop
-    mov [fallback_mode], cx
-    jmp .find_mode_loop
-
-.try_fallback_mode:
-    mov cx, [fallback_mode]
-    cmp cx, 0xFFFF
-    je .no_mode_found
-    mov ax, 0x4F01
-    mov di, 0x9200
-    int 0x10
-    cmp ax, 0x004F
-    jne .no_mode_found
+.fallback:
+    mov word [mode_width], 800
+    mov word [mode_height], 600
+    call set_display_mode
+    jc .no_mode_found
 
 .mode_found:
-    mov [selected_mode], cx
-
-    mov eax, [es:0x9228]
+    mov eax, [0x9228]
     mov [0x9000], eax
-    movzx eax, byte [es:0x9219]
-    mov [0x9004], eax
-    movzx eax, word [es:0x9210]
+    movzx eax, byte [0x9219]
+    mov ebx, eax
+    movzx eax, word [0x9210]
+    cmp word [0x9004], 0x0300
+    jb .pitch_ready
+    movzx edx, word [0x9232] ; VBE 3 linear bytes per scan line
+    test edx, edx
+    jz .pitch_ready
+    mov eax, edx
+.pitch_ready:
     mov [0x9008], eax
+    mov [0x9004], ebx
 
     ; Boot flags handoff for the kernel (bit 0 = -debug serial port,
-    ; bit 1 = -verbose on-screen boot log).
+    ; bit 1 = -verbose on-screen boot log), followed by packed width/height.
     mov eax, [boot_flags]
     mov [0x900C], eax
-
-    mov bx, [selected_mode]
-    or bx, 0x4000
-    mov ax, 0x4F02
-    int 0x10
-    cmp ax, 0x004F
-    jne .vbe_fail
+    mov eax, [0x9212]
+    mov [0x9010], eax
 
     cli
     mov al, 0xFF
@@ -168,6 +132,144 @@ freeze:
     cli
     hlt
     jmp freeze
+
+; Read the primary display's EDID base block via VBE/DDC.
+probe_display:
+    xor ax, ax
+    mov es, ax
+    mov di, 0x9300
+    mov bx, 1
+    xor cx, cx
+    xor dx, dx
+    mov ax, 0x4F15
+    call video_bios
+    cmp ax, 0x004F
+    jne .done
+    cmp dword [0x9300], 0xFFFFFF00
+    jne .done
+    cmp dword [0x9304], 0x00FFFFFF
+    jne .done
+    mov si, 0x9300
+    mov cx, 128
+    xor al, al
+.checksum:
+    add al, [si]
+    inc si
+    loop .checksum
+    test al, al
+    jnz .done
+
+    ; The first detailed timing describes the preferred mode when flagged.
+    test byte [0x9318], 2
+    jz .done
+    mov si, 0x9336
+    cmp word [si], 0
+    je .done
+    test byte [si + 17], 0x80 ; interlaced
+    jnz .done
+    mov al, [si + 2]
+    mov ah, [si + 4]
+    shr ah, 4
+    mov dl, [si + 5]
+    mov dh, [si + 7]
+    shr dh, 4
+    ; Keep the framebuffer within the kernel's supported desktop geometry.
+    cmp ax, 640
+    jb .done
+    cmp ax, 1920
+    ja .done
+    cmp dx, 480
+    jb .done
+    cmp dx, 1080
+    ja .done
+    mov [mode_width], ax
+    mov [mode_height], dx
+.done:
+    ret
+
+; Look for an exact match, trying 32-bit before 24-bit.
+; On success the selected mode's info block is still at 0x9200.
+set_display_mode:
+    mov si, [0x900E]
+    mov fs, [0x9010]
+    mov bp, 1024
+    mov word [fallback_mode], 0xFFFF
+.next:
+    mov cx, [fs:si]
+    cmp cx, 0xFFFF
+    je .try_24
+    add si, 2
+    call read_mode_info
+    cmp ax, 0x004F
+    jne .continue
+    mov ax, [0x9200]
+    and ax, 0x0091
+    cmp ax, 0x0091
+    jne .continue
+    mov ax, [mode_width]
+    cmp [0x9212], ax
+    jne .continue
+    mov ax, [mode_height]
+    cmp [0x9214], ax
+    jne .continue
+    cmp byte [0x9219], 32
+    je .try_32
+    cmp byte [0x9219], 24
+    jne .continue
+    mov [fallback_mode], cx
+    jmp .continue
+
+.try_32:
+    call activate_mode
+    jnc .done
+.continue:
+    dec bp
+    jnz .next
+.try_24:
+    mov cx, [fallback_mode]
+    cmp cx, 0xFFFF
+    je .failed
+    call read_mode_info
+    cmp ax, 0x004F
+    jne .failed
+    jmp activate_mode
+.failed:
+    stc
+.done:
+    ret
+
+read_mode_info:
+    mov ax, 0x4F01
+    mov di, 0x9200
+    jmp video_bios
+
+activate_mode:
+    mov bx, cx
+    or bx, 0x4000
+    mov ax, 0x4F02
+    call video_bios
+    cmp ax, 0x004F
+    je .done
+    stc
+.done:
+    ret
+
+; Preserve the enumeration cursor and segment registers across firmware calls.
+video_bios:
+    push cx
+    push si
+    push bp
+    push ds
+    push es
+    push fs
+    int 0x10
+    pop fs
+    pop es
+    pop ds
+    pop bp
+    pop si
+    pop cx
+    ret
 
 ; E820 handoff: count at 0x5000, up to 128 packed 24-byte entries.
 ; Publish only a complete map; unsupported/failed/truncated maps stay empty.
@@ -401,7 +503,8 @@ str_verbose   db "-verbose", 0
 default_bootargs db DEFAULT_BOOTARGS, 0
 
 fallback_mode dw 0xFFFF
-selected_mode dw 0
+mode_width    dw 0
+mode_height   dw 0
 boot_drive    db 0
 boot_flags    dd 0
 bootargs_buf  times BOOTARGS_MAX + 8 db 0

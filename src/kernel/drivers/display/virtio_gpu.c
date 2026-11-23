@@ -104,12 +104,16 @@ int virtio_gpu_3d_available(void) { return active && virgl_feature; }
 int virtio_gpu_command(const void* packet, uint32_t size) {
     return exchange(packet, size, GPU_OK, 0);
 }
-static int get_size(uint32_t* width, uint32_t* height) {
+static int get_scanout_size(uint32_t* width, uint32_t* height) {
     command_init(GPU_DISPLAY_INFO);
     if (!submit(sizeof(gpu_header_t), GPU_OK + 1)) return 0;
     if (!response.modes[0].enabled) return 0;
     *width = response.modes[0].rect.width;
     *height = response.modes[0].rect.height;
+    return 1;
+}
+static int get_size(uint32_t* width, uint32_t* height) {
+    if (!get_scanout_size(width, height)) return 0;
     /* Bound allocation and keep legacy desktop controls usable. */
     if (*width < 640) *width = 640;
     if (*height < 480) *height = 480;
@@ -245,9 +249,13 @@ int virtio_gpu_init(video_framebuffer_t* fb) {
     pci_set_master(gpu_device, 1);
     common[20] = 15; /* DRIVER_OK */
     active = 1;
-    /* Start at the boot geometry. Process UI hints after the desktop starts,
-     * avoiding splash/login assumptions and boot-time window feedback. */
-    return set_mode(fb, SCREEN_DEFAULT_WIDTH, SCREEN_DEFAULT_HEIGHT);
+    uint32_t width, height;
+    if (!get_scanout_size(&width, &height) || width < 640 || height < 480 ||
+        width > SCREEN_MAX_WIDTH || height > SCREEN_MAX_HEIGHT) {
+        width = SCREEN_WIDTH;
+        height = SCREEN_HEIGHT;
+    }
+    return set_mode(fb, width, height);
 }
 
 int virtio_gpu_poll_resize(video_framebuffer_t* fb) {

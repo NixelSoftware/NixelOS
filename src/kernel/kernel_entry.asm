@@ -27,6 +27,8 @@ start:
     mov ecx, [0x9008]
     mov ebx, [0x900C]           ; boot flags from the loader (bit 0 = -debug)
 
+    sub esp, 12                 ; keep the stack aligned before calling C
+    push dword [0x9010]         ; VBE width in low word, height in high word
     push ebx
     push ecx
     push edx

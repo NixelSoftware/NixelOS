@@ -452,7 +452,8 @@ void desktop_service(void* arg) {
 #define BOOT_FLAG_DEBUG   0x1u
 #define BOOT_FLAG_VERBOSE 0x2u
 
-void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch, uint32_t boot_flags) {
+void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch,
+                 uint32_t boot_flags, uint32_t geometry) {
     __asm__ volatile ("cli");
 
     paging_init();
@@ -469,6 +470,12 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch, uint32_t bo
 
     debug_print("[INIT] Display init...\n");
 
+    uint32_t width = geometry & 0xFFFFu, height = geometry >> 16;
+    if (width >= 640 && width <= SCREEN_MAX_WIDTH &&
+        height >= 480 && height <= SCREEN_MAX_HEIGHT) {
+        screen_width = width;
+        screen_height = height;
+    }
     display_init(lfb_address, bpp, pitch);
 
     if (boot_flags & BOOT_FLAG_VERBOSE) {
