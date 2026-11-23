@@ -22,16 +22,19 @@ TOTAL_SIZE_MB = 50
 TOTAL_SECTORS = TOTAL_SIZE_MB * 1024 * 1024 // SECTOR_SIZE
 BUNDLED_FILES = [
     "ncc.bin", "designer.bin", "chess.bin", "calc.bin", "files.bin", "hexview.bin", "mines.bin",
-    "floppy_debug.bin", "ping.bin", "netdiag.bin", "image.bmp",
+    "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
-    "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
-    "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
-    "syndig.bin", "qksrv.bin", "resources/quark.cfg",
-    "qkftp.bin", "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "glcube.bin", "glscene.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
+    "userhello.bin", "sound.bin", "fastfetch.bin", "oobe.bin", "setwall.bin",
+    "syndig.bin", "resources/quark.cfg",
+    "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "glcube.bin", "glscene.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
     "resources/default_user.bmp", "resources/chess.bmp", "resources/twoballs.bmp",
     "resources/purpleaero.bmp", "resources/nixel.bmp",
-    "telnetd.bin", "taskmgr.bin", "tunnel.bin", "nixelcraft.bin"
+    "taskmgr.bin", "tunnel.bin", "nixelcraft.bin"
 ]
+SBIN_FILES = {
+    "shutdown.bin", "reboot.bin", "floppy_debug.bin", "sysdiag.bin",
+    "qksrv.bin", "qkftp.bin", "telnetd.bin",
+}
 
 
 def inode_metadata(path, name, directories):
@@ -149,6 +152,7 @@ def main(output, nogui=False):
                 (root / "usr/share/nixel/sdk" / asset.name).chmod(0o644)
 
         files = [Path(name) for name in BUNDLED_FILES if Path(name).is_file()]
+        files += [Path(name) for name in sorted(SBIN_FILES) if Path(name).is_file()]
         files += sorted(p for p in Path("resources").rglob("*")
                         if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav", ".mp3"})
         names = set()
@@ -156,7 +160,8 @@ def main(output, nogui=False):
             if len(path.name.encode()) >= 32 or any(c in path.name for c in '\n\r"\\'):
                 raise ValueError(f"Unsupported filename: {path}")
             suffix = path.suffix.lower()
-            folder = ("usr/bin" if suffix == ".bin" else
+            folder = ("usr/sbin" if path.name in SBIN_FILES else
+                      "usr/bin" if suffix == ".bin" else
                       "usr/share/games/doom" if suffix == ".wad" else
                       "usr/share/nixel/audio" if suffix in {".mid", ".midi", ".wav", ".mp3"} else
                       "etc" if suffix == ".cfg" else "usr/share/nixel/images")

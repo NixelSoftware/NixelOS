@@ -93,6 +93,32 @@ static int resolve_path(const char* input, char out[FS_MAX_PATH], int create) {
     }
     return 1;
 }
+
+static int resolve_command(const char* name, char path[FS_MAX_PATH]) {
+    const char* directories[] = {"", "/usr/bin/", "/usr/sbin/"};
+    const char* extensions[] = {"", ".bin", ".BIN"};
+    char candidate[FS_MAX_PATH];
+    unsigned length = 0;
+    unsigned directory_count = user_uid() == USER_ROOT ? 3 : 2;
+    while (name[length]) {
+        if (name[length] == '/') directory_count = 1;
+        length++;
+    }
+    for (unsigned dir = 0; dir < directory_count; dir++) {
+        unsigned prefix = 0;
+        while (directories[dir][prefix]) prefix++;
+        for (unsigned ext = 0; ext < 3; ext++) {
+            if (prefix + length + (ext ? 4 : 0) >= sizeof(candidate)) continue;
+            copy_text(candidate, directories[dir], sizeof(candidate));
+            copy_text(candidate + prefix, name, sizeof(candidate) - prefix);
+            copy_text(candidate + prefix + length, extensions[ext],
+                      sizeof(candidate) - prefix - length);
+            if (resolve_path(candidate, path, 0)) return 1;
+        }
+    }
+    return 0;
+}
+
 void shell_format_prompt(terminal_t* terminal, char* out, unsigned capacity) {
     shell_session_t* session = session_for(terminal);
     uint16_t uid = session ? session->uid : USER_REGULAR;
@@ -605,22 +631,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         while (command[length] && out < SHELL_ARGUMENT_MAX - 1)
             shell_args[out++] = command[length++];
         shell_args[out] = '\0';
-        int found = resolve_path(name, path, 0);
-        char candidate[FS_MAX_PATH];
-        unsigned n = 0; while (name[n]) n++;
-        const char* extensions[] = {"", ".bin", ".BIN"};
-        for (int root = 0; root < 2 && !found; root++) {
-            if (root && name[0] == '/') break;
-            for (int ext = 0; ext < 3 && !found; ext++) {
-                unsigned prefix = root ? 9 : 0;
-                if (n + prefix + (ext ? 4 : 0) >= sizeof(candidate)) continue;
-                if (root) copy_text(candidate, "/usr/bin/", sizeof(candidate));
-                copy_text(candidate+prefix, name, sizeof(candidate)-prefix);
-                copy_text(candidate+prefix+n, extensions[ext], sizeof(candidate)-prefix-n);
-                found = resolve_path(candidate, path, 0);
-            }
-        }
-        int result = found ? app_loader_launch_wait(shell_api, path, shell_args) : -1;
+        int result = resolve_command(name, path) ? app_loader_launch_wait(shell_api, path, shell_args) : -1;
         if (result == 0) return;
         if (result == -2) print("Invalid executable format.\n");
         else print("Unknown cmd. Type 'help'\n");
