@@ -22,7 +22,7 @@ struct terminal {
     uint8_t term_bg[TERM_MAX_LINES][TERM_MAX_COLS];
     char password[64];
     unsigned password_length;
-    int password_pending, password_done;
+    int password_pending, password_done, reply_echo;
     unsigned ansi_fg, ansi_bg, ansi_bold, ansi_inverse;
     unsigned ansi_state, ansi_count, ansi_params[16], ansi_invalid;
 };
@@ -312,10 +312,18 @@ static void terminal_handle_key(Window* win, char c) {
             t->password_pending = 0;
             terminal_append_output(t, (uint8_t)c == 3 ? "^C\n" : "\n");
         } else if (c == '\b') {
-            if (t->password_length) t->password[--t->password_length] = 0;
+            if (t->password_length) {
+                t->password[--t->password_length] = 0;
+                if (t->reply_echo && t->term_cursor_col)
+                    t->term_lines[t->term_cursor_row][--t->term_cursor_col] = 0;
+            }
         } else if (c >= ' ' && c <= '~' && t->password_length < sizeof(t->password) - 1) {
             t->password[t->password_length++] = c;
             t->password[t->password_length] = 0;
+            if (t->reply_echo) {
+                char text[] = {c, 0};
+                terminal_append_output(t, text);
+            }
         }
         wm_invalidate();
         return;
@@ -416,8 +424,8 @@ void terminal_command_done(terminal_t* t) {
     wm_invalidate();
 }
 
-/* The shell sleeps while the window task collects input without echo. */
-int terminal_read_password(char* output, uint32_t capacity) {
+/* The shell sleeps while the window task collects the reply. */
+static int terminal_read_input(char* output, uint32_t capacity, int echo) {
     mutex_lock(&kernel_mutex);
     terminal_t* t = current_task ? current_task->terminal : 0;
     if (!t || !t->active || !output || capacity < sizeof(t->password)) {
@@ -427,6 +435,7 @@ int terminal_read_password(char* output, uint32_t capacity) {
     t->password_length = 0;
     t->password[0] = 0;
     t->password_done = 0;
+    t->reply_echo = echo;
     t->password_pending = 1;
     while (!t->password_done && t->active && !current_task->terminate_requested) {
         mutex_unlock(&kernel_mutex);
@@ -438,8 +447,16 @@ int terminal_read_password(char* output, uint32_t capacity) {
         output[i] = ok ? t->password[i] : 0;
         ((volatile char*)t->password)[i] = 0;
     }
-    t->password_pending = t->password_done = 0;
+    t->password_pending = t->password_done = t->reply_echo = 0;
     t->password_length = 0;
     mutex_unlock(&kernel_mutex);
     return ok;
+}
+
+int terminal_read_password(char* output, uint32_t capacity) {
+    return terminal_read_input(output, capacity, 0);
+}
+
+int terminal_read_reply(char* output, uint32_t capacity) {
+    return terminal_read_input(output, capacity, 1);
 }

@@ -31,7 +31,7 @@ int fs_is_directory(const char* path);
 void fs_init(void);
 
 #define FS_MAX_MOUNTS 8
-#define FS_DISK_COUNT 79u /* 32 ATA, 16 UHCI + 30 EHCI root ports, one NVMe. */
+#define FS_DISK_COUNT 111u /* ATA, USB, NVMe and AHCI disks. */
 typedef struct { uint32_t start, sectors; uint8_t type; } fs_partition_t;
 typedef struct {
     char name[16];
@@ -43,6 +43,15 @@ typedef struct {
 } fs_mount_info_t;
 /* Device names: ata0, usb0, nvme0; append p1..p4 for MBR partitions. */
 int fs_block_info(unsigned disk, fs_block_info_t* out);
+typedef struct {
+    unsigned disk;
+    uint32_t sectors, media_generation;
+    char name[20];
+    uint8_t mbr[512];
+} fs_install_target_t;
+const char* fs_install_probe(const char* name, fs_install_target_t* target);
+const char* fs_install_nixel(const fs_install_target_t* target, const char* image);
+
 int fs_mount_snapshot(fs_mount_info_t out[FS_MAX_MOUNTS]);
 /* Return NULL on success, otherwise an explanatory error. Root only. */
 const char* fs_mount(const char* device, const char* target);

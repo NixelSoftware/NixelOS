@@ -87,7 +87,7 @@ static int ahci_find_cmdslot(hba_port_t* port) {
 }
 
 static int ahci_access_sectors(uint8_t port_no, uint64_t lba, uint32_t count, void* buf, int is_write) {
-    if (!abar || !(ports_active_mask & (1 << port_no))) return -1;
+    if (!ahci_is_drive_available(port_no)) return -1;
 
     hba_port_t* port = &abar->ports[port_no];
     port->is = (uint32_t)-1;
@@ -99,7 +99,7 @@ static int ahci_access_sectors(uint8_t port_no, uint64_t lba, uint32_t count, vo
     cmd_header += slot;
     cmd_header->cfl = sizeof(fis_reg_h2d_t) / sizeof(uint32_t);
     cmd_header->w = is_write ? 1 : 0;
-    cmd_header->prdtl = 1;
+    cmd_header->prdtl = count ? 1 : 0;
 
     hba_cmd_table_t* cmd_tbl = (hba_cmd_table_t*)(cmd_header->ctba);
     uint8_t* p = (uint8_t*)cmd_tbl;
@@ -107,13 +107,14 @@ static int ahci_access_sectors(uint8_t port_no, uint64_t lba, uint32_t count, vo
 
     cmd_tbl->prdt_entry[0].dba = (uint32_t)buf;
     cmd_tbl->prdt_entry[0].dbau = 0;
-    cmd_tbl->prdt_entry[0].dbc = (count << 9) - 1; /* 512 bytes per sector */
+    cmd_tbl->prdt_entry[0].dbc = count ? (count << 9) - 1 : 0;
     cmd_tbl->prdt_entry[0].i = 1;
 
     fis_reg_h2d_t* cmdfis = (fis_reg_h2d_t*)(&cmd_tbl->cfis);
     cmdfis->fis_type = 0x27; /* Register FIS - Host to Device */
     cmdfis->c = 1;
-    cmdfis->command = is_write ? ATA_CMD_WRITE_DMA_EX : ATA_CMD_READ_DMA_EX;
+    cmdfis->command = !count ? ATA_CMD_FLUSH_CACHE_EX :
+        is_write ? ATA_CMD_WRITE_DMA_EX : ATA_CMD_READ_DMA_EX;
 
     cmdfis->lba0 = (uint8_t)lba;
     cmdfis->lba1 = (uint8_t)(lba >> 8);
@@ -136,7 +137,7 @@ static int ahci_access_sectors(uint8_t port_no, uint64_t lba, uint32_t count, vo
 
     while (1) {
         if ((port->ci & (1 << slot)) == 0) break;
-        if (port->is & (1 << 30)) return -3; /* Task File Error */
+        if ((port->is & (1 << 30)) || !ahci_is_drive_available(port_no)) return -3;
     }
 
     if (port->is & (1 << 30)) return -3;
@@ -149,6 +150,10 @@ int ahci_read(uint8_t port_no, uint64_t lba, uint32_t count, void* buf) {
 
 int ahci_write(uint8_t port_no, uint64_t lba, uint32_t count, const void* buf) {
     return ahci_access_sectors(port_no, lba, count, (void*)buf, 1);
+}
+
+int ahci_flush(uint8_t port_no) {
+    return ahci_access_sectors(port_no, 0, 0, 0, 0);
 }
 
 static void probe_ports(hba_mem_t* mem) {
@@ -166,7 +171,7 @@ static void probe_ports(hba_mem_t* mem) {
                     debug_hex(i);
                     debug_print("\n");
                     ahci_port_rebase(port, i);
-                    ports_active_mask |= (1 << i);
+                    ports_active_mask |= (1u << i);
                 }
             }
         }
@@ -236,7 +241,7 @@ void ahci_init(void) {
 static uint64_t port_sector_counts[32] = {0};
 
 static int ahci_identify_device(uint8_t port_no, void* buf) {
-    if (!abar || !(ports_active_mask & (1 << port_no))) return -1;
+    if (!ahci_is_drive_available(port_no)) return -1;
 
     hba_port_t* port = &abar->ports[port_no];
     port->is = (uint32_t)-1;
@@ -273,7 +278,7 @@ static int ahci_identify_device(uint8_t port_no, void* buf) {
 
     while (1) {
         if ((port->ci & (1 << slot)) == 0) break;
-        if (port->is & (1 << 30)) return -3;
+        if ((port->is & (1 << 30)) || !ahci_is_drive_available(port_no)) return -3;
     }
 
     if (port->is & (1 << 30)) return -3;
@@ -281,11 +286,21 @@ static int ahci_identify_device(uint8_t port_no, void* buf) {
 }
 
 uint64_t ahci_get_sector_count(uint8_t port_no) {
-    if (port_no >= 32) return 0;
+    static uint16_t identify[256] __attribute__((aligned(512)));
+    if (!ahci_is_drive_available(port_no)) return 0;
+    if (!port_sector_counts[port_no]) {
+        if (ahci_identify_device(port_no, identify) != 0) return 0;
+        if ((identify[106] & 0xd000u) == 0x5000u &&
+            (identify[117] != 256 || identify[118] != 0)) return 0;
+        if (!(identify[83] & (1u << 10))) return 0;
+        port_sector_counts[port_no] = (uint64_t)identify[100] |
+            (uint64_t)identify[101] << 16 | (uint64_t)identify[102] << 32 |
+            (uint64_t)identify[103] << 48;
+    }
     return port_sector_counts[port_no];
 }
 
 int ahci_is_drive_available(uint8_t port_no) {
-    if (port_no >= 32) return 0;
-    return (ports_active_mask & (1 << port_no)) != 0;
+    if (port_no >= 32 || !(ports_active_mask & (1u << port_no))) return 0;
+    return (abar->ports[port_no].ssts & 0xfu) == HBA_PORT_DET_PRESENT;
 }

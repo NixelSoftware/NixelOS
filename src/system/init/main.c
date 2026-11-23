@@ -60,13 +60,18 @@ static void console_print(const char* text) {
     display_blit();
 }
 
-static void console_readline(char* line, unsigned capacity, int secret) {
+static int console_readline(char* line, unsigned capacity, int secret) {
     unsigned length = 0;
     for (;;) {
         os_input_event_t event;
         if (!input_poll_event(&event)) { task_sleep_ms(10); continue; }
         if (event.type != OS_INPUT_KEY || !event.scancode) continue;
         char c = kbd_scancode_to_ascii(event.scancode);
+        if (c == 3) {
+            line[0] = 0;
+            console_print("^C\n");
+            return 0;
+        }
         if (c == '\n' || c == '\r') break;
         if (c == '\b' && length) {
             length--;
@@ -78,6 +83,11 @@ static void console_readline(char* line, unsigned capacity, int secret) {
     }
     line[length] = 0;
     console_print("\n");
+    return 1;
+}
+
+static int console_read_reply(char* line, uint32_t capacity) {
+    return console_readline(line, capacity, 0);
 }
 
 void nixinit_session_task(void* arg) {
@@ -118,8 +128,8 @@ void nixinit_session_task(void* arg) {
         char command[256];
         console_print(user_by_id(current_task->uid)->name);
         console_print(" $ ");
-        console_readline(command, sizeof(command), 0);
-        shell_execute_command(command, console_print, console_clear);
+        if (console_readline(command, sizeof(command), 0))
+            shell_execute_command(command, console_print, console_clear, console_read_reply);
     }
 }
 

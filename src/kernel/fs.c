@@ -7,6 +7,7 @@
 #include "fs.h"
 #include "emergency.h"
 #include "users.h"
+#include "crypto/entropy.h"
 #include "drivers/ata.h"
 #include "drivers/nvme.h"
 #include "drivers/ahci.h"
@@ -24,7 +25,8 @@
 #define ROOT_INO 2u
 
 enum { STORAGE_ATA, STORAGE_NVME, STORAGE_USB, STORAGE_AHCI };
-_Static_assert(FS_DISK_COUNT==ATA_DRIVE_COUNT+USB_MSC_COUNT+1,"block device count");
+enum { NVME_DISK = ATA_DRIVE_COUNT + USB_MSC_COUNT, AHCI_FIRST_DISK = NVME_DISK + 1 };
+_Static_assert(FS_DISK_COUNT == AHCI_FIRST_DISK + 32, "block device count");
 typedef struct {
     uint8_t v_super[1024], v_group[BLOCK_SIZE];
     uint32_t v_base, v_blocks, v_inodes, v_inode_table, v_block_bitmap, v_inode_bitmap;
@@ -77,10 +79,9 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
 static int select_storage(unsigned disk) {
     active_volume->disk = disk;
 
-    /* If disk 0 and an AHCI drive was actually discovered on port 0 */
-    if (disk == 0 && ahci_is_drive_available(0)) {
+    if (disk >= AHCI_FIRST_DISK && disk < FS_DISK_COUNT) {
         storage_kind = STORAGE_AHCI;
-        return 1;
+        return ahci_get_sector_count(disk - AHCI_FIRST_DISK) != 0;
     }
 
     if (disk < ATA_DRIVE_COUNT) {
@@ -94,10 +95,22 @@ static int select_storage(unsigned disk) {
                usb_msc_select_media(disk - ATA_DRIVE_COUNT, active_volume->media_generation);
     }
     storage_kind = STORAGE_NVME; 
-    return disk == FS_DISK_COUNT - 1 && nvme_is_ready();
+    return disk == NVME_DISK && nvme_is_ready();
+}
+static uint32_t storage_capacity(void) {
+    if (storage_kind == STORAGE_ATA) return ata_get_sector_count();
+    if (storage_kind == STORAGE_NVME) return nvme_get_sector_count();
+    if (storage_kind == STORAGE_AHCI) {
+        uint64_t sectors = ahci_get_sector_count(active_volume->disk - AHCI_FIRST_DISK);
+        return sectors <= 0xffffffffu ? (uint32_t)sectors : 0xffffffffu;
+    }
+    uint32_t sectors, generation;
+    return usb_msc_info(active_volume->disk - ATA_DRIVE_COUNT, &sectors, &generation) &&
+        generation == active_volume->media_generation ? sectors : 0;
 }
 static int select_volume_media(void) {
-    if (storage_kind == STORAGE_AHCI) return 1;
+    if (storage_kind == STORAGE_AHCI)
+        return ahci_is_drive_available(active_volume->disk - AHCI_FIRST_DISK);
     if (storage_kind == STORAGE_ATA) return ata_select_drive(active_volume->disk);
     if (storage_kind == STORAGE_USB)
         return usb_msc_select_media(active_volume->disk - ATA_DRIVE_COUNT, active_volume->media_generation);
@@ -106,7 +119,7 @@ static int select_volume_media(void) {
 static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
     if (!select_volume_media()) return 0;
     if (storage_kind == STORAGE_AHCI) {
-        return ahci_read(0, lba, count, buf) == 0;
+        return ahci_read(active_volume->disk - AHCI_FIRST_DISK, lba, count, buf) == 0;
     }
     if (storage_kind == STORAGE_USB) return usb_msc_read(lba, count, buf);
     if (storage_kind == STORAGE_NVME) {
@@ -118,7 +131,7 @@ static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
 static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf) {
     if (!select_volume_media()) return 0;
     if (storage_kind == STORAGE_AHCI) {
-        return ahci_write(0, lba, count, buf) == 0;
+        return ahci_write(active_volume->disk - AHCI_FIRST_DISK, lba, count, buf) == 0;
     }
     if (storage_kind == STORAGE_USB) return usb_msc_write(lba, count, buf);
     if (storage_kind == STORAGE_NVME) {
@@ -488,7 +501,7 @@ static void mount_boot_disk(const volatile uint8_t* boot) {
     if (boot[510]!=0x55 || boot[511]!=0xaa || boot[450]!=0x83) {
         debug_print("[ext4] Invalid boot disk handoff.\n"); return;
     }
-    const unsigned total = ATA_DRIVE_COUNT + USB_MSC_COUNT + 1;
+    const unsigned total = FS_DISK_COUNT;
     unsigned found=total;
     unsigned retries=0;
 probe_boot_disk:
@@ -535,7 +548,7 @@ void fs_init(void) {
     }
     storage_kind=STORAGE_ATA;
 
-    if (select_storage(FS_DISK_COUNT-1)) {
+    if (select_storage(NVME_DISK)) {
         debug_print("[FS] Probing NVMe namespace for ext4...\n");
         static const uint32_t partitions[] = { 0, 500, 2048 };
 
@@ -580,11 +593,11 @@ void fs_init(void) {
     }
 }
 static void device_name(unsigned disk, unsigned partition, char* out) {
-    const char* prefix = (storage_kind == STORAGE_AHCI) ? "sata" :
-        (disk < ATA_DRIVE_COUNT ? "ata" :
-        (disk < ATA_DRIVE_COUNT + USB_MSC_COUNT ? "usb" : "nvme"));
+    const char* prefix = disk >= AHCI_FIRST_DISK ? "sata" :
+        disk == NVME_DISK ? "nvme" : disk < ATA_DRIVE_COUNT ? "ata" : "usb";
     unsigned index = disk < ATA_DRIVE_COUNT ? disk :
-        disk < ATA_DRIVE_COUNT + USB_MSC_COUNT ? disk - ATA_DRIVE_COUNT : 0;
+        disk < NVME_DISK ? disk - ATA_DRIVE_COUNT :
+        disk >= AHCI_FIRST_DISK ? disk - AHCI_FIRST_DISK : 0;
     unsigned n = length(prefix); copy(out, prefix, n);
     if (index >= 10) out[n++] = '0' + index / 10;
     out[n++] = '0' + index % 10;
@@ -614,10 +627,8 @@ int fs_block_info(unsigned disk, fs_block_info_t* out) {
     zero(out,sizeof(*out));
     if (ok) {
         device_name(disk,0,out->name);
-        if (storage_kind==STORAGE_AHCI) out->sectors=ahci_get_sector_count(0);
-        else if (storage_kind==STORAGE_ATA) out->sectors=ata_get_sector_count();
-        else if (storage_kind==STORAGE_NVME) out->sectors=nvme_get_sector_count();
-        else ok=usb_msc_info(disk-ATA_DRIVE_COUNT,&out->sectors,&probe.media_generation);
+        out->sectors = storage_capacity();
+        ok = out->sectors != 0;
         if (ok && storage_read_sectors(0,1,io) && io[510]==0x55 && io[511]==0xaa) {
             for (unsigned p=0; p<4; p++) {
                 const uint8_t* entry=io+446+p*16;
@@ -630,6 +641,157 @@ int fs_block_info(unsigned disk, fs_block_info_t* out) {
     active_volume=saved;
     return ok;
 }
+
+static int disk_is_mounted(unsigned disk) {
+    for (unsigned m = 0; m < FS_MAX_MOUNTS; m++)
+        if (volumes[m].v_ready && volumes[m].disk == disk) return 1;
+    return 0;
+}
+
+const char* fs_install_probe(const char* name, fs_install_target_t* target) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (user_uid() != USER_ROOT) return "root required";
+    unsigned disk, partition;
+    if (!parse_device(name, &disk, &partition) || partition)
+        return "select a whole disk from lsblk";
+    if (disk_is_mounted(disk)) return "the boot disk or a mounted disk cannot be overwritten";
+
+    volume_t probe = {0};
+    volume_t* saved = active_volume;
+    active_volume = &probe;
+    uint32_t sectors = select_storage(disk) ? storage_capacity() : 0;
+    int ok = sectors && storage_read_sectors(0, 1, target->mbr);
+    active_volume = saved;
+    if (!ok) return "disk unavailable or unsupported";
+    target->disk = disk;
+    target->sectors = sectors;
+    target->media_generation = probe.media_generation;
+    device_name(disk, 0, target->name);
+    return 0;
+}
+
+#define INSTALL_CHUNK_SECTORS 64u
+/* AHCI uses these kernel buffers directly for DMA. The filesystem lock also
+ * pins the source filesystem and excludes mounts and writes during the copy. */
+static uint8_t install_data[INSTALL_CHUNK_SECTORS * 512u] __attribute__((aligned(512)));
+static uint8_t install_check[sizeof(install_data)] __attribute__((aligned(512)));
+
+static int bytes_match(const uint8_t* a, const uint8_t* b, unsigned n) {
+    for (unsigned i = 0; i < n; i++) if (a[i] != b[i]) return 0;
+    return 1;
+}
+
+static int install_read(const char* image, uint32_t lba, uint8_t count, uint8_t* data) {
+    active_volume = &volumes[0];
+    return image ? fs_read_file_at(image, data, count * 512u, lba * 512u) == (int)(count * 512u)
+                 : storage_read_sectors(lba, count, data);
+}
+
+static int install_write(uint32_t lba, uint8_t count, const uint8_t* data) {
+    return storage_write_sectors(lba, count, data) &&
+        (storage_kind != STORAGE_AHCI || ahci_flush(active_volume->disk - AHCI_FIRST_DISK) == 0) &&
+        storage_read_sectors(lba, count, install_check) &&
+        bytes_match(data, install_check, count * 512u);
+}
+
+const char* fs_install_nixel(const fs_install_target_t* target, const char* image) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (user_uid() != USER_ROOT) return "root required";
+    if (target->disk >= FS_DISK_COUNT || disk_is_mounted(target->disk))
+        return "the boot disk or a mounted disk cannot be overwritten";
+
+    volume_t probe = {0};
+    volume_t* saved = active_volume;
+    const char* error = "source is not a supported bootable Nixel disk image";
+    uint8_t boot_mbr[512] __attribute__((aligned(512)));
+    uint8_t incomplete_mbr[512] __attribute__((aligned(512)));
+    uint32_t sectors = volumes[0].v_ready ? volumes[0].v_base + volumes[0].sector_count : 0;
+    if (image) {
+        int bytes = fs_read_file(image, 0, 0);
+        sectors = bytes > 0 && bytes % 512 == 0 ? (uint32_t)bytes / 512u : 0;
+    }
+    if (!sectors || !install_read(image, 0, 1, boot_mbr) ||
+        !bytes_match(boot_mbr + 3, (const uint8_t*)"NIXEL   ", 8) ||
+        u16(boot_mbr + 510) != 0xaa55 || boot_mbr[446] != 0x80 || boot_mbr[450] != 0x83)
+        goto done;
+    for (unsigned partition = 1; partition < 4; partition++)
+        if (boot_mbr[450 + partition * 16]) goto done;
+    uint32_t start = u32(boot_mbr + 454), count = u32(boot_mbr + 458);
+    if (start < 9 || start >= sectors || count < 8 || count > sectors - start ||
+        !install_read(image, start + 2, 2, install_data) ||
+        u16(install_data + 56) != 0xef53 || u16(install_data + 58) != 1 ||
+        u32(install_data + 24) != 2 || !u32(install_data + 4) ||
+        u32(install_data + 4) > count / 8)
+        goto done;
+    sectors = start + count;
+    if (sectors > target->sectors) {
+        error = "target is too small for this image";
+        goto done;
+    }
+
+    /* Stage 2 matches the BIOS MBR against every disk, so each copy needs its
+     * own disk identity even when its source will remain attached. */
+    uint32_t original_id = u32(boot_mbr + 440);
+    if (kernel_entropy(0, boot_mbr + 440, 4) != 0) {
+        error = "could not generate a unique disk identity";
+        goto done;
+    }
+    uint32_t id = u32(boot_mbr + 440);
+    if (!id || id == original_id || id == u32(target->mbr + 440)) {
+        error = "disk identity collision; retry the installation";
+        goto done;
+    }
+
+    active_volume = &probe;
+    if (!select_storage(target->disk) || probe.media_generation != target->media_generation ||
+        storage_capacity() != target->sectors || !storage_read_sectors(0, 1, install_check) ||
+        !bytes_match(target->mbr, install_check, 512)) {
+        error = "target changed or was disconnected; select it again";
+        goto done;
+    }
+    if (current_task && current_task->terminate_requested) {
+        error = "installation cancelled";
+        goto done;
+    }
+
+    /* Publish the boot sector last. Interrupted copies cannot masquerade as
+     * valid Nixel boot disks. The marker also detects changed target media. */
+    zero(incomplete_mbr, sizeof(incomplete_mbr));
+    w32(incomplete_mbr + 440, id);
+    error = "target write or read-back failed; disk may be incomplete";
+    if (!install_write(0, 1, incomplete_mbr)) goto done;
+    for (uint32_t lba = 1; lba < sectors;) {
+        if (current_task && current_task->terminate_requested) {
+            error = "installation cancelled; target is incomplete";
+            goto done;
+        }
+        uint32_t remaining = sectors - lba;
+        uint8_t chunk = remaining > INSTALL_CHUNK_SECTORS ? INSTALL_CHUNK_SECTORS : remaining;
+        if (!install_read(image, lba, chunk, install_data)) {
+            error = "source read failed; target is incomplete";
+            goto done;
+        }
+        active_volume = &probe;
+        if (!storage_read_sectors(0, 1, install_check) ||
+            !bytes_match(incomplete_mbr, install_check, 512) ||
+            !install_write(lba, chunk, install_data)) goto done;
+        lba += chunk;
+        task_yield();
+    }
+    if (current_task && current_task->terminate_requested) {
+        error = "installation cancelled; target is incomplete";
+        goto done;
+    }
+    if (!storage_read_sectors(0, 1, install_check) ||
+        !bytes_match(incomplete_mbr, install_check, 512) ||
+        !install_write(0, 1, boot_mbr)) goto done;
+    change_generation++;
+    error = 0;
+done:
+    active_volume = saved;
+    return error;
+}
+
 int fs_mount_snapshot(fs_mount_info_t out[FS_MAX_MOUNTS]) {
     MUTEX_GUARD(filesystem_mutex);
     if (!out) return 0;

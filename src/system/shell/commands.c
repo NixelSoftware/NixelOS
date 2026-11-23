@@ -351,6 +351,62 @@ static int storage_command(const char* command) {
     return 1;
 }
 
+static void install_usage(void) {
+    print("Usage: sudo install <disk> <path-to-os.img>\n"
+          "       sudo install <disk> --clone\n"
+          "Use lsblk to find the whole target disk.\n");
+}
+
+static int install_command(const char* command, int (*read_reply)(char*, uint32_t)) {
+    if (!has_prefix(command, "install") || (command[7] && command[7] != ' ')) return 0;
+    char device[20], image[FS_MAX_PATH];
+    const char* source = storage_argument(command + 7, device, sizeof(device));
+    if (!source || !device[0] || !*source) {
+        install_usage();
+        if (source && !device[0]) storage_command("lsblk");
+        return 1;
+    }
+    if (user_uid() != USER_ROOT) {
+        print("install: root required; use sudo.\n");
+        return 1;
+    }
+    int clone = equal(source, "--clone");
+    if (!clone && !resolve_path(source, image, 0)) {
+        print("install: source image not found.\n");
+        return 1;
+    }
+    usb_poll();
+    fs_install_target_t target;
+    const char* error = fs_install_probe(device, &target);
+    if (!error) {
+        print("Target: "); print(target.name); print(" (");
+        print_u32(target.sectors / 2048); print(" MiB)\n");
+        if (clone)
+            print("Source: running boot disk, including its accounts and files.\n");
+        else {
+            print("Source image: "); print(image); print("\n");
+        }
+        print("This overwrites the target disk's partition table and data.\nType ERASE ");
+        print(target.name); print(" to continue, or Ctrl+C to cancel.\n> ");
+        char expected[64], reply[64];
+        copy_text(expected, "ERASE ", sizeof(expected));
+        copy_text(expected + 6, target.name, sizeof(expected) - 6);
+        if (!read_reply || !read_reply(reply, sizeof(reply)) || !equal(expected, reply)) {
+            print("Installation cancelled.\n");
+            return 1;
+        }
+        print("Writing and verifying Nixel.\n");
+        if (current_task->terminal) print("Ctrl+C cancels the copy.\n");
+        error = fs_install_nixel(&target, clone ? 0 : image);
+    }
+    if (error) {
+        print("install: "); print(error); print(".\n");
+    } else {
+        print("Installation complete. Boot the target\nusing the legacy BIOS boot menu.\n");
+    }
+    return 1;
+}
+
 static int account_command(const char* command) {
     if (has_prefix(command, "whoami") && !command[6]) {
         const user_t* u = user_by_id(user_uid());
@@ -426,7 +482,7 @@ static int account_command(const char* command) {
 }
 
 void shell_execute_command(const char* command, shell_output_fn output,
-                           shell_clear_fn clear) {
+                           shell_clear_fn clear, int (*read_reply)(char*, uint32_t)) {
     shell_output = output;
     shell_clear = clear;
     if (!shell_api) return;
@@ -464,7 +520,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
             if (session) copy_text(session->cwd, fs_getcwd(), sizeof(session->cwd));
             print("Started root login shell.\n");
         } else {
-            shell_execute_command(elevated, output, clear);
+            shell_execute_command(elevated, output, clear, read_reply);
             current_task->uid = uid;
             current_task->gid = gid;
         }
@@ -473,6 +529,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
     if (account_command(command)) return;
     if (serial_output_command(command)) return;
     if (storage_command(command)) return;
+    if (install_command(command, read_reply)) return;
     if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
         print("Commands:\n"
                     " ver             Show OS version and build ID\n"
@@ -490,6 +547,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"
                     " lsblk           List disks, partitions and mount points\n"
+                    " install         Show Nixel disk installation options\n"
                     " mount [dev dir] List mounts or mount ext4 (root)\n"
                     " unmount <dir>   Unmount a volume (root; also umount)\n"
                     " pwd             Show current directory\n"
@@ -720,7 +778,7 @@ void shell_service(void* argument) {
         s->pending = 0; s->active = 1;
         current_task->terminate_requested = 0;
         mutex_unlock(&kernel_mutex);
-        shell_execute_command(command, s->output, s->clear);
+        shell_execute_command(command, s->output, s->clear, terminal_read_reply);
         mutex_lock(&kernel_mutex);
         current_task->terminate_requested = 0;
         s->active = 0;

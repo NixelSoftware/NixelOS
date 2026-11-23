@@ -25,6 +25,7 @@
 
 #define ATA_CMD_READ_DMA_EX       0x25
 #define ATA_CMD_WRITE_DMA_EX      0x35
+#define ATA_CMD_FLUSH_CACHE_EX    0xEA
 #define ATA_CMD_IDENTIFY          0xEC
 
 #pragma pack(push, 1)
@@ -128,6 +129,7 @@ typedef struct {
 void ahci_init(void);
 int  ahci_read(uint8_t port_no, uint64_t lba, uint32_t count, void* buf);
 int  ahci_write(uint8_t port_no, uint64_t lba, uint32_t count, const void* buf);
+int  ahci_flush(uint8_t port_no);
 uint64_t ahci_get_sector_count(uint8_t port_no);
 int ahci_is_drive_available(uint8_t port_no);
 
