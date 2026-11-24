@@ -863,6 +863,9 @@ static void tg3_update_link(void) {
     tg3_link_up = 1;
 }
 
+/* Cached carrier state, refreshed by tg3_poll(); no MDIO traffic. */
+uint8_t tg3_link_is_up(void) { return tg3_ready && tg3_link_up; }
+
 uint8_t tg3_is_ready(void) {
     if (tg3_ready) tg3_update_link();
     return tg3_ready && tg3_link_up;

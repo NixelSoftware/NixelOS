@@ -12,6 +12,9 @@ void il_station_capture_failure(il_station_t* s,int error) {
     s->runtime_error=error;
     s->runtime_irq=s->io.read32(s->io.context,CSR_INT);
     s->runtime_fh=s->io.read32(s->io.context,CSR_FH_INT_STATUS);
-    if(error==IL_VERIFY)
-        (void)il3945_read_error_log(&s->io,s->error_log_base,&s->firmware_error);
+    if(error==IL_VERIFY) {
+        (void)il3945_read_error_log(&s->io,s->error_log_base,s->firmware_version,&s->firmware_error);
+        if(s->runtime_irq & CSR_INT_BIT_SW_ERR)
+            (void)il3945_read_event_log(&s->io,s->event_log_base,&s->firmware_events);
+    }
 }

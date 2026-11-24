@@ -7,7 +7,8 @@
 int il_station_transmit(il_station_t* s,const uint8_t* frame,unsigned n,uint16_t ether_type) {
     int r=il_station_wait_tx(s); if(r) return r;
     s->tx.cts_protection=s->ap.band==2 && s->ap.erp_valid && (s->ap.erp&2);
-    r=il3945_tx_submit(&s->io,&s->tx,frame,n,0,s->tx_plcp);
+    uint8_t rate=s->active && ether_type ? s->data_plcp : s->tx_plcp;
+    r=il3945_tx_submit(&s->io,&s->tx,frame,n,0,rate);
     if(!r) {
         s->tx.submitted.ether_type=ether_type;
         s->tx_history[s->tx_history_next]=s->tx.submitted;

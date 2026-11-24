@@ -6,6 +6,8 @@
 struct udp_socket { unsigned used; } peer;
 static udp_data_handler_t handler;
 static unsigned sends;
+static uint8_t switch_link;
+static dhcp_lease_t new_lease;
 static uint32_t configured, configured_gateway;
 mutex_t kernel_mutex;
 void mutex_lock(mutex_t* m) { (void)m; }
@@ -13,7 +15,12 @@ void mutex_unlock(mutex_t* m) { (void)m; }
 int scheduler_running(void) { return 1; }
 uint64_t scheduler_clock(void) { static uint64_t clock; return ++clock*1000000; }
 void task_sleep_ms(uint32_t n) { (void)n; }
-void sys_net_poll(void) { }
+void sys_net_poll(void) {
+    if (!switch_link) return;
+    switch_link = 0;
+    dhcp_clear_lease();
+    assert(dhcp_request(&new_lease,1));
+}
 uint8_t sys_net_is_ready(void) { return 1; }
 uint64_t sys_net_get_mac_address(void) { return 0x020000000001ull; }
 void rtc_get_time(rtc_time_t* t) { t->second=0; }
@@ -49,12 +56,17 @@ uint8_t udp_send(udp_socket_t* s,const uint8_t* data,uint16_t length) {
     reply[i++]=3; reply[i++]=4; write_be32(reply+i,0xc0a80101); i+=4;
     reply[i++]=6; reply[i++]=4; write_be32(reply+i,0xc0a80101); i+=4;
     reply[i++]=255;
-    handler(s,0xc0a80101,67,reply,i); return 1;
+    if (!switch_link) handler(s,0xc0a80101,67,reply,i);
+    return 1;
 }
 int main(void) {
     dhcp_lease_t lease;
     assert(dhcp_request(&lease,1));
     assert(sends==2 && lease.leased && lease.dns==0xc0a80101);
     assert(configured==0xc0a80164 && configured_gateway==0xc0a80101);
-    puts("DHCP: DNS/gateway requested in DISCOVER and REQUEST, lease applied passed");
+    switch_link = 1;
+    assert(!dhcp_request(&lease,1));
+    assert(sends==5 && new_lease.leased && dhcp_get_lease()->leased);
+    assert(configured==new_lease.address && !peer.used);
+    puts("DHCP: requested options, lease application and in-flight link switch passed");
 }

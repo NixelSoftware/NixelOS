@@ -592,7 +592,16 @@ load_ext4_kernel:
     mov dword [logical_block], 0
 .next:
     call map_block
+    jc .zero_block
     call read_block
+    jmp .copy_block
+.zero_block:
+    xor ax, ax
+    mov es, ax
+    mov di, 0x2000
+    mov cx, 2048
+    rep stosw
+.copy_block:
     xor ax, ax
     mov ds, ax
     mov ax, [load_segment]
@@ -650,6 +659,7 @@ lookup:
     cmp eax, [file_blocks]
     jae fs_error
     call map_block
+    jc fs_error
     call read_block
     mov bx, 0x2000
 .entry:
@@ -690,8 +700,8 @@ lookup:
     inc dword [logical_block]
     jmp .block
 
-; Map a logical block through a bounded ext4 extent tree. Holes/unwritten
-; extents are rejected: a boot image must consist entirely of initialized data.
+; Map a logical block through a bounded ext4 extent tree. Carry marks a
+; sparse or unwritten block, whose file contents are defined to be zero.
 map_block:
     test dword [0x3020], 0x80000
     jz fs_error
@@ -701,8 +711,6 @@ map_block:
     cmp word [si], 0xF30A
     jne fs_error
     movzx ecx, word [si + 2]
-    test cx, cx
-    jz fs_error
     cmp cx, [si + 4]
     ja fs_error
     mov ax, 4
@@ -715,13 +723,19 @@ map_block:
     mov dx, [si + 6]
     cmp dx, bp
     ja fs_error
+    test cx, cx
+    jnz .entries
+    test dx, dx
+    jnz fs_error
+    jmp .hole
+.entries:
     add si, 12
     mov eax, [logical_block]
     test dx, dx
     jz .leaf
 .index:
     cmp eax, [si]
-    jb fs_error
+    jb .hole
     cmp cx, 1
     je .descend
     cmp eax, [si + 12]
@@ -741,15 +755,25 @@ map_block:
 .leaf:
     mov ebx, eax
     sub ebx, [si]
-    jc fs_error
+    jc .hole
     movzx edx, word [si + 4]
+    test edx, edx
+    jz fs_error
     cmp edx, 32768
-    ja fs_error
+    jbe .initialized
+    sub edx, 32768
+    cmp ebx, edx
+    jb .hole
+    jmp .advance
+.initialized:
     cmp ebx, edx
     jb .found
+.advance:
     add si, 12
     loop .leaf
-    jmp fs_error
+.hole:
+    stc
+    ret
 .found:
     cmp word [si + 6], 0
     jne fs_error

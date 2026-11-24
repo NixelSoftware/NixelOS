@@ -133,6 +133,7 @@ void sys_wifi_disconnect(void) {
     int r=iwlegacy_disconnect();
     status.intel.state=r ? IL_FIRMWARE_FAILED : IL_EEPROM_READY;
     status.intel.error=r; status.generation++;
+    sys_net_wifi_down();
 }
 int sys_wifi_is_connected(void) {
     MUTEX_GUARD(kernel_mutex);
@@ -151,7 +152,7 @@ void sys_wifi_poll(void) {
     if(r) {
         iwlegacy_get_runtime_status(&status.intel);
         /* Drop stale addressing immediately when the authorized port closes. */
-        sys_net_shutdown();
+        sys_net_wifi_down();
         status.intel.state=IL_CONNECTION_FAILED; status.intel.error=r; status.generation++;
     }
 }

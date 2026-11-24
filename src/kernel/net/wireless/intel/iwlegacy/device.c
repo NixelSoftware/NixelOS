@@ -131,6 +131,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     info->error_reply=(il3945_error_reply_t){0};
     info->last_data_tx=(il3945_tx_snapshot_t){0};
     info->firmware_error=(il3945_error_log_t){0};
+    info->firmware_events=(il3945_event_log_t){0};
     info->security_phase=info->port_authorized=info->port_active=0; info->tx_history_count=0;
     info->connection_phase=0; info->connection_reject=IL_REJECT_NONE;
     info->management_status=info->association_capability=info->association_aid=0;
@@ -143,7 +144,9 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
     if (!raw.address) return info->error = IL_NOMEM;
     uint8_t* file = (uint8_t*)(unsigned long)raw.address;
     int bytes = fs_read_file_at("/lib/firmware/iwlwifi-3945-2.ucode",file,FW_MAX + 1,0);
-    if (bytes < 0) bytes = fs_read_file_at("/lib/firmware/iwlwifi-3945-1.ucode",file,FW_MAX + 1,0);
+    if (bytes < 0) {
+        bytes = fs_read_file_at("/lib/firmware/iwlwifi-3945-1.ucode",file,FW_MAX + 1,0);
+    }
     il3945_firmware_t fw;
     if (bytes < 0) {
         release(raw); info->state = IL_FIRMWARE_MISSING; return info->error = IL_NO_FIRMWARE;
@@ -242,7 +245,9 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
             if (!result) info->firmware_version = fw.version;
             if (!result && connect) {
                 station = (il_station_t){0}; station.io = io; station.rx = queue; station.awake_flags = power_flags;
+                station.firmware_version = fw.version;
                 station.error_log_base = alive.error_log;
+                station.event_log_base = alive.event_log;
                 result = il3945_command_prepare(&station.commands,(void*)(unsigned long)rings[4],
                     (uint8_t*)(unsigned long)command_buffer,command_buffer);
                 if (!result) result = il3945_tx_prepare(&station.tx,(void*)(unsigned long)rings[IL3945_TX_QUEUE],
@@ -270,7 +275,7 @@ static int boot_operation(iwlegacy_info_t* info, il_scan_results_t* results, con
                 if (!result) result = il3945_command_send(&io,&queue,&commands,0x9b,bt,sizeof(bt),1000,0,0);
                 uint8_t rxon[44] = {0};
                 for (unsigned i = 0; i < 6; i++) rxon[i] = info->eeprom.mac[i];
-                rxon[24] = 3; rxon[25] = 10; rxon[28] = 0xFF; rxon[29] = 15;
+                rxon[24] = 3; rxon[28] = 0xFF; rxon[29] = 15;
                 unsigned first = 0;
                 while (first < IL3945_CHANNEL_COUNT && !(info->eeprom.channels[first].flags & 1)) first++;
                 if (first == IL3945_CHANNEL_COUNT) result = IL_BAD_EEPROM;
@@ -381,6 +386,7 @@ void iwlegacy_get_runtime_status(iwlegacy_info_t* info) {
     info->error_reply=station.error_reply;
     info->last_data_tx=station.last_data_tx.valid ? station.last_data_tx : station.tx.submitted;
     info->firmware_error=station.firmware_error;
+    info->firmware_events=station.firmware_events;
     info->runtime_error=station.runtime_error;
     info->runtime_irq=station.runtime_irq; info->runtime_fh=station.runtime_fh;
     info->data_tx_pending=station.tx.pending; info->data_tx_poisoned=station.tx.poisoned;

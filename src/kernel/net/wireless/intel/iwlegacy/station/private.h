@@ -21,6 +21,7 @@ int il_station_transmit(il_station_t*,const uint8_t*,unsigned,uint16_t ether_typ
 unsigned il_station_management(il_station_t*,unsigned);
 int il_station_process(il_station_t*);
 int il_station_rates(il_station_t*,const il_network_t*);
+void il_station_rate_table(const il_station_t* s,unsigned id,uint8_t table[52]);
 int il_station_start_radio(il_station_t*);
 int il_station_management_rx(il_station_t*,const uint8_t*,unsigned);
 int il_station_monitor(il_station_t*);

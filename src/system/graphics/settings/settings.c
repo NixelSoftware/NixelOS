@@ -288,7 +288,7 @@ static void draw(Window* win) {
         }
         button(20, 276, 212, "Detect adapter", 0);
         button(244, 276, 216, "Scan networks", 0);
-        button(20, 310, 212, "Wired settings", 0);
+        button(20, 310, 212, "Network settings", 0);
         if(sys_wifi_is_connected()) button(244,310,216,"Disconnect",0);
     } else if (tab == 3) {
         text(20, 82, time_sync_status(), COLOR_TEXT_PRIMARY);
@@ -327,7 +327,7 @@ static void network_worker(void* arg) {
         const char* result=sys_wifi_connect(wifi_selected,(const uint8_t*)wifi_password,length);
         MUTEX_GUARD(kernel_mutex);
         clear_password(); set_message(result); tab=4;
-    } else if (network_action == 7) sys_net_shutdown();
+    } else if (network_action == 7) sys_wifi_disconnect();
     else if (network_action == 4) sys_wifi_probe();
     else if (network_action == 5) {
         const char* result = sys_wifi_scan();

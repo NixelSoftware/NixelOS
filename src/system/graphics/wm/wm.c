@@ -485,10 +485,11 @@ static void network_draw(void) {
     wm_api->graphics.fill_rect(x, y, 380, 160, COLOR_SURFACE);
     wm_api->graphics.draw_string(x + 12, y + 12, "Network", COLOR_TEXT_PRIMARY);
     wm_api->graphics.draw_string(x + 12, y + 38,
-        sys_net_is_ready() ? "Wired: connected" : "Wired: disconnected", COLOR_TEXT_MUTED);
+        sys_net_link_is_ready(SYS_NET_ETHERNET) ? "Wired: connected" : "Wired: disconnected", COLOR_TEXT_MUTED);
     wifi_status_t wifi; sys_wifi_get_status(&wifi);
     wm_api->graphics.draw_string(x + 12, y + 64,
-        wifi.adapter.vendor ? "Wi-Fi: adapter detected, unavailable" : "Wi-Fi: no compatible adapter", COLOR_TEXT_MUTED);
+        sys_net_link_is_ready(SYS_NET_WIFI) ? "Wi-Fi: connected" :
+        (wifi.adapter.vendor || wifi.intel.vendor) ? "Wi-Fi: adapter detected, not connected" : "Wi-Fi: no compatible adapter", COLOR_TEXT_MUTED);
     wm_api->graphics.draw_button(x + 12, y + 98, 170, 36, "Wi-Fi settings", 0);
     wm_api->graphics.draw_button(x + 194, y + 98, 170, 36, "Wired settings", 0);
 }

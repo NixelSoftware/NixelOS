@@ -15,7 +15,8 @@ int il_station_power(il_station_t* s) {
 
 int il_station_rxon(il_station_t* s,unsigned aid) {
     uint8_t p[44]={0}; copy(p,s->eeprom.mac,6); copy(p+8,s->ap.bssid,6);
-    p[24]=3; p[25]=10; p[28]=s->ofdm_basic; p[29]=s->cck_basic; put16(p+30,aid);
+    /* RXON air_propagation (byte 25) uses the Intel ESS default of zero. */
+    p[24]=3; p[28]=s->ofdm_basic; p[29]=s->cck_basic; put16(p+30,aid);
     put32(p+32,il3945_bss_flags(&s->ap));
     put32(p+36,4|8|16|64|(aid?32:0)); p[40]=s->ap.channel;
     int r=il_station_command(s,0x10,p,sizeof(p));
@@ -32,15 +33,9 @@ int il_station_rxon(il_station_t* s,unsigned aid) {
         /* Status is one byte; the RX payload may include DMA padding. */
         if(!r && (s->commands.response_length<1 || s->commands.response[0]!=1)) r=IL_VERIFY;
     }
-    /* Conservative fixed basic-rate fallback. Both control/data tables use
-     * firmware table order OFDM 6..54 then CCK 1..11, as in upstream. */
-    static const uint8_t plcp[12]={13,15,5,7,9,11,1,3,10,20,55,110};
     for(unsigned t=0;!r && t<2;t++) {
-        uint8_t rates[52]={0}; rates[0]=t;
-        for(unsigned i=0;i<12;i++) {
-            rates[4+4*i]=plcp[i]; rates[6+4*i]=1;
-            rates[7+4*i]=s->fallback;
-        }
+        uint8_t rates[52]={0};
+        il_station_rate_table(s,t,rates);
         r=il_station_command(s,0x47,rates,sizeof(rates));
     }
     if(!r) s->bss_dirty=0;
@@ -50,7 +45,10 @@ int il_station_rxon(il_station_t* s,unsigned aid) {
 /* Legacy association advertises no WMM IE. Keep EDCA update disabled, while
  * supplying valid legacy contention parameters for each firmware FIFO. */
 int il_station_start_radio(il_station_t* s) {
-    uint8_t awake[32]={0},bt[12]={0},qos[36]={0};
+    uint8_t awake[32]={0},qos[36]={0};
+    /* Intel's 3945 coexistence defaults: announce channels and honor BT
+     * priority, with the standard lead time and maximum TX kills. */
+    uint8_t bt[12]={3,0x1e,5};
     awake[0]=s->awake_flags & 8;
     int r=il_station_command(s,0x77,awake,sizeof(awake));
     if(!r) r=il_station_command(s,0x9b,bt,sizeof(bt));

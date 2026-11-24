@@ -29,7 +29,7 @@ static volatile uint8_t rx_buffers[COUNT][BUFFER_SIZE] __attribute__((aligned(64
 static uint8_t tx_buffers[COUNT][BUFFER_SIZE] __attribute__((aligned(64)));
 static uint32_t mmio, pci_address, ip;
 static uint64_t mac;
-static uint8_t ready, phy, tx_prod, tx_cons, rx_cons;
+static uint8_t ready, link_up, phy, tx_prod, tx_cons, rx_cons;
 static uint32_t link_poll;
 static uint8_t core_accessible;
 static net_receive_handler_t handler;
@@ -109,7 +109,11 @@ static uint8_t phy_write(uint8_t reg, uint16_t value) {
 static void update_link(void) {
     uint16_t status, local, remote;
     /* BMSR link status is latched low; read twice. */
-    if (!mdio(1, &status, 0) || !mdio(1, &status, 0) || !(status & 4)) return;
+    if (!mdio(1, &status, 0) || !mdio(1, &status, 0) || !(status & 4)) {
+        link_up = 0;
+        return;
+    }
+    link_up = 1;
     if ((status & 0x20) && mdio(4, &local, 0) && mdio(5, &remote, 0)) {
         uint16_t common = local & remote;
         uint8_t full = (common & 0x100) || (!(common & 0x80) && (common & 0x40));
@@ -333,6 +337,8 @@ void b44_poll(void) {
     write_reg(B44_ISTAT, status);
 }
 uint8_t b44_is_ready(void) { return ready; }
+/* Cached PHY carrier state, refreshed by b44_poll(). */
+uint8_t b44_link_is_up(void) { return ready && link_up; }
 void b44_set_receive_handler(net_receive_handler_t fn) { handler = fn; }
 uint64_t b44_get_mac_address(void) { return mac; }
 void b44_set_ip_address(uint32_t value) { ip = value; }

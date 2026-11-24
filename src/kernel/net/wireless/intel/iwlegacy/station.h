@@ -30,10 +30,11 @@ typedef struct {
     uint32_t rx_sequence_valid;
     uint8_t probing,probe_pending,bss_dirty;
     int error, temperature;
-    uint32_t runtime_irq, runtime_fh, error_log_base;
+    uint32_t runtime_irq, runtime_fh, firmware_version, error_log_base, event_log_base;
     il3945_error_reply_t error_reply;
     il3945_tx_snapshot_t last_data_tx;
     il3945_error_log_t firmware_error;
+    il3945_event_log_t firmware_events;
     int runtime_error;
     unsigned failure_phase;
     uint8_t failure_security_phase,failure_authorized,failure_active;
@@ -43,7 +44,7 @@ typedef struct {
     uint16_t management_status, association_capability, association_aid;
     uint16_t aid;
     uint8_t awake_flags; /* PCI_PM (bit 3), derived from PCIe Link Control. */
-    uint8_t active, processing, tx_plcp, fallback, ofdm_basic, cck_basic, management[512];
+    uint8_t active, processing, tx_plcp, data_plcp, ofdm_basic, cck_basic, management[512];
 } il_station_t;
 /* Caller serializes access, supplies initialized firmware and pinned rings.
  * Explicit software crypto; firmware decryption stays disabled. */

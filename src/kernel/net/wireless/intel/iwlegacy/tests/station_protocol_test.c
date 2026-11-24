@@ -15,6 +15,9 @@ int main(void) {
     m.assoc_ies[0]=42; m.assoc_ies[1]=1; m.assoc_ies[2]=6; m.assoc_ie_length=3;
     assert(!il3945_station_connect(&native,&e,&ap,0,0,0,0));
     assert(native.ap.erp_valid && native.ap.erp==6);
+    /* Firmware ACK rate selection needs Linux's fixed basic masks even when
+     * the AP's basic set is CCK-only (empty OFDM mask stalls the 3945 ARC). */
+    assert(native.ofdm_basic==0x15 && native.cck_basic==0x03);
     /* Non-WMM configuration is observable in the submitted firmware command. */
     assert(IL3945_TX_QUEUE==2 && (native.tx.sequence>>8)==2);
     native.receive=receive_frame; expected_length=46; received=0;
@@ -27,11 +30,11 @@ int main(void) {
     receive_data(&m,0x130,1,1); assert(!il3945_station_poll(&native,102) && received==4);
     receive_data(&m,0x130,1,1); assert(!il3945_station_poll(&native,102) && received==4);
     uint8_t eth[64]={0}; memcpy(eth+6,e.mac,6); eth[12]=8;
-    native.tx_plcp=13; /* Exercise OFDM protection independently of fixed rate. */
+    assert(native.tx_plcp==10 && native.data_plcp==13);
     assert(!il3945_station_send(&native,eth,sizeof(eth)));
     assert((native.tx.submitted.flags&0x84)==0x84);
     assert(!il3945_station_poll(&native,103));
-    native.tx_plcp=10;
+    native.data_plcp=10; /* Exercise the legacy CCK transmit path too. */
     assert(!il3945_station_send(&native,eth,sizeof(eth)));
     assert(!(native.tx.submitted.flags&0x84));
     assert(!il3945_station_poll(&native,104));

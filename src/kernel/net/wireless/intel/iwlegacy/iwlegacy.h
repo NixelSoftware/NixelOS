@@ -44,8 +44,20 @@ typedef struct {
 /* Intel 3945 error table: count followed by seven-word records. */
 typedef struct {
     uint32_t count, entry[7];
+    uint16_t rx_frame_control;
+    uint8_t rx_frame_valid;
+    uint32_t gp_window[32], gp_tail[4];
     int read_error;
 } il3945_error_log_t;
+#define IL3945_EVENT_HISTORY 20
+typedef struct {
+    uint32_t id, time, data;
+} il3945_event_t;
+typedef struct {
+    uint32_t count, mode, wraps;
+    int read_error;
+    il3945_event_t entries[IL3945_EVENT_HISTORY];
+} il3945_event_log_t;
 typedef struct {
     uint16_t endpoint_before,endpoint_after,parent_before,parent_after;
     uint8_t valid,parent_present;
@@ -72,6 +84,7 @@ typedef struct {
     il3945_error_reply_t error_reply;
     il3945_tx_snapshot_t last_data_tx;
     il3945_error_log_t firmware_error;
+    il3945_event_log_t firmware_events;
     int runtime_error;
     unsigned connection_phase;
     uint8_t security_phase,port_authorized,port_active;

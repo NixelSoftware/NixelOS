@@ -11,7 +11,7 @@ static uint8_t cmd_buffer[4096] __attribute__((aligned(4096)));
 static uint8_t tx_ring[16384] __attribute__((aligned(256)));
 static uint8_t tx_storage[IL3945_TX_STORAGE_BYTES] __attribute__((aligned(4096)));
 static uint8_t* tx_data;
-typedef struct { transport_t t; il_station_t* station; unsigned mode, commands, transmitted, secure, eapol, stations, station_adds, error_count, deferred_tx,early_m1,radio_associated; uint8_t assoc_ies[32]; unsigned assoc_ie_length,override_capability; uint16_t response_capability,response_aid,response_status; } station_model_t;
+typedef struct { transport_t t; il_station_t* station; unsigned mode, commands, transmitted, secure, eapol, stations, station_adds, error_count, deferred_tx,early_m1,radio_associated; uint8_t assoc_ies[32]; uint32_t error_nmi_pc, fault_line, scratch_reads; unsigned assoc_ie_length,override_capability; uint16_t response_capability,response_aid,response_status; } station_model_t;
 static void post(station_model_t* m,uint8_t id,uint16_t seq,const uint8_t* data,unsigned n) {
     unsigned idx=status[0]&255;
     uint8_t* p=m->station->rx.slots[idx].data;
@@ -33,9 +33,27 @@ static uint32_t station_read(void* context,uint32_t reg) {
         post(m,0x1c,m->station->tx.sequence,done,sizeof(done));
     }
     if(reg==HBUS_TARG_MEM_RDAT && m->t.mode==14) {
-        static const uint32_t words[8]={1,5,1234,0x1111,0x2222,0x3333,0x4444,77};
+        unsigned addr = m->t.memory_offset;
+        if ((addr >= 0x8049c0 && addr < 0x804a40) ||
+            (addr >= 0x804aa0 && addr < 0x804ab0)) {
+            m->t.memory_offset += 4;
+            m->scratch_reads++;
+            return addr == 0x8049c8 ? 0x12344208 : addr;
+        }
+        if (m->t.memory_offset>=0x800200) {
+            static const uint32_t events[]={3,1,2,1,0,0,
+                401,40,0x400,402,20,0x200,403,30,0x300};
+            unsigned index=(m->t.memory_offset-0x800200)/4;
+            assert(index<sizeof(events)/sizeof(events[0]));
+            m->t.memory_offset+=4;
+            return events[index];
+        }
+        static const uint32_t words[8]={1,5,1234,0x1111,0x2222,0x3333,0x3564,116};
         unsigned idx=(m->t.memory_offset-0x800100)/4;
-        assert(idx<8); m->t.memory_offset+=4; return idx ? words[idx] : m->error_count;
+        assert(idx<8); m->t.memory_offset+=4;
+        if (idx == 7) return m->fault_line;
+        if (idx == 6) return m->error_nmi_pc;
+        return idx ? words[idx] : m->error_count;
     }
     if(reg==CSR_INT && m->mode==5 && m->station->tx.pending) {
         assert(m->t.m.regs[CSR_GP_CNTRL/4] & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
@@ -48,7 +66,8 @@ static uint32_t station_read(void* context,uint32_t reg) {
 static void station_write(void* context,uint32_t reg,uint32_t value) {
     station_model_t* m=context;
     if(reg==HBUS_TARG_MEM_RADDR && m->t.mode==14) {
-        assert(value==0x800100); m->t.memory_offset=value; return;
+        assert(value==0x800100 || value==0x8049c0 || value==0x804aa0 || (value>=0x800200 && value<=0x800230));
+        m->t.memory_offset=value; return;
     }
     transport_write(&m->t,reg,value);
     if(reg!=HBUS_TARG_WRPTR) return;
@@ -60,6 +79,10 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
             return;
         }
         if (cmd_buffer[0]==0x77) assert(cmd_buffer[4]==(m->station->awake_flags & 8));
+        if(cmd_buffer[0]==0x9b) {
+            assert(cmd_buffer[4]==3 && cmd_buffer[5]==0x1e && cmd_buffer[6]==5);
+            for(unsigned i=7;i<16;i++) assert(!cmd_buffer[i]);
+        }
         if(cmd_buffer[0]==0x13) {
             assert(!il_le32(cmd_buffer+4)); /* No negotiated WMM. */
             unsigned minimum=m->station->ap.rate_count>1?15:31;
@@ -70,6 +93,14 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
         }
         uint8_t answer[4]={1}; unsigned n=4; /* firmware status may be DMA-padded */
         if (cmd_buffer[0]==0x10 && !(cmd_buffer[4+36]&32)) m->stations=0;
+        if (cmd_buffer[0]==0x47) {
+            const uint8_t* rate=cmd_buffer+8;
+            assert(cmd_buffer[4]<2);
+            assert(rate[0]==13 && rate[2]==1);
+            assert(rate[3]==(m->station->aid && m->station->ap.rate_count==1 ? 8 : 10));
+            assert(rate[4*7+3]==(m->station->aid && m->station->ap.rate_count==1 ? 8 : 6));
+            assert(rate[4*8+3]==8);
+        }
         if (cmd_buffer[0]==0x18) {
             unsigned id=cmd_buffer[4+12]; assert(id==0 || id==24);
             assert(cmd_buffer[4+59]==0xc0);
@@ -77,7 +108,10 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
             if (m->mode==4 || (m->stations & (1u<<id))) answer[0]=2; /* Duplicate firmware entry. */
             else m->stations |= 1u<<id;
         }
-        if(cmd_buffer[0]==0x10) m->radio_associated=!!(cmd_buffer[4+36]&32);
+        if(cmd_buffer[0]==0x10) {
+            assert(cmd_buffer[4+25]==0);
+            m->radio_associated=!!(cmd_buffer[4+36]&32);
+        }
         post(m,cmd_buffer[0],il_le16(cmd_buffer+2),answer,n);
         if(m->secure && !m->early_m1 && cmd_buffer[0]==0x10 && (cmd_buffer[4+36]&32)) ap_eapol(m,ap_m1,sizeof(ap_m1));
         return;
@@ -90,7 +124,9 @@ static void station_write(void* context,uint32_t reg,uint32_t value) {
     assert((il_le32(t)>>24&15)==(n>h?2:1));
     assert(il_le32(t+4)==0x19000+idx*IL3945_TX_SLOT_BYTES && il_le32(t+8)==((56+h+3)&~3u));
     if(n>h) assert(il_le32(t+12)==0x19080+idx*IL3945_TX_SLOT_BYTES && il_le32(t+16)==n-h);
-    assert(tx_data[12]==m->station->tx_plcp && !tx_data[13] && !tx_data[15]);
+    uint8_t expected_rate=m->station->active && (tx_data[56]&0xfc)==8
+        ? m->station->data_plcp : m->station->tx_plcp;
+    assert(tx_data[12]==expected_rate && !tx_data[13] && !tx_data[15]);
     assert((il_le32(tx_data+8)&(1u<<13)) == (h==24 ? 1u<<13 : 0));
     if(m->mode==2 || m->mode==5) return; /* Firmware retains ownership indefinitely. */
     uint8_t done[12]={0}; done[8]=m->mode==3?0x83:1;
@@ -139,7 +175,7 @@ static void station_setup(station_model_t* m,il3945_eeprom_t* e,il_network_t* ap
     memset(tx_storage,0,sizeof(tx_storage)); tx_data=tx_storage;
     transport_setup(&m->t); m->station=&native; native.rx=m->t.rx;
     native.io=(il_io_t){m,station_read,station_write,station_delay};
-    native.awake_flags=8; m->error_count=1;
+    native.awake_flags=8; m->error_count=1; m->error_nmi_pc=0x3564; m->fault_line=116;
     assert(!il3945_rx_start(&native.io,&native.rx));
     assert(!il3945_command_prepare(&native.commands,tfds,cmd_buffer,0x18000));
     assert(!il3945_tx_prepare(&native.tx,tx_ring,tx_storage,0x19000,sizeof(tx_storage)));
