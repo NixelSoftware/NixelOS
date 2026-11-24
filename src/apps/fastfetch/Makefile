@@ -1,19 +1,27 @@
 # Independent, opt-in build. Never invokes the OS image builder.
-CC = gcc
+CC ?= gcc
 NASM ?= nasm
-LD = ld
+LD ?= ld
 OBJCOPY ?= objcopy
 PYTHON ?= python3
 CFLAGS = -O2 -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-leading-underscore -Wall -Wextra
 
 ifeq ($(OS),Windows_NT)
-    LD_EMULATION = i386pe
-    NASM_FMT     = win32
-	PYTHON := python
-else
-    LD_EMULATION = elf_i386
-    NASM_FMT     = elf32
+    ifeq ($(origin CC),default)
+        CC := i686-elf-gcc
+    endif
+    ifeq ($(origin LD),default)
+        LD := i686-elf-ld
+    endif
+    ifeq ($(origin OBJCOPY),file)
+        OBJCOPY := i686-elf-objcopy
+    endif
+    ifeq ($(origin PYTHON),file)
+        PYTHON := python
+    endif
 endif
+LD_EMULATION = elf_i386
+NASM_FMT = elf32
 
 .PHONY: all package clean FORCE_VERSION
 all: fastfetch.bin

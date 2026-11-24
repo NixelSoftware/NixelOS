@@ -40,18 +40,34 @@ sudo xbps-install -S base-devel nasm qemu-system-x86_64 e2fsprogs
 ```
 
 ### Windows
-Install [MSYS2](https://www.msys2.org/) and Download [i686-elf-tools](https://github.com/lordmilko/i686-elf-tools).
-In MINGW2, Install MAKE
-```cmd
+Install [MSYS2](https://www.msys2.org/) and download [i686-elf-tools](https://github.com/lordmilko/i686-elf-tools).
+In the MSYS2 shell, install GNU Make:
+```sh
 pacman -S mingw-w64-x86_64-make
 ```
 
-Add both to your path
+Add Make and the cross-toolchain's `bin` directory to your Windows `PATH`,
+along with Python 3.8+, NASM, and QEMU. The compiler must produce ELF objects
+for NixelOS.
+
+For image creation, no extra tools are needed: when `mke2fs` and `debugfs`
+are unavailable, `mkext4.py` writes the ext4 filesystem directly in Python.
+
+Then build from PowerShell or Command Prompt in the checkout:
+
+```powershell
+mingw32-make
+mingw32-make run
+```
+
+Compilation uses the Windows tools. Native Windows e2fsprogs tools on `PATH`
+are used when present, but they are optional. Tool choices can be overridden,
+for example `mingw32-make PYTHON=python CC=i686-elf-gcc`.
 
 # Building
-Install GNU Make, GCC, NASM, binutils, Python, e2fsprogs, and QEMU, then run `make` to build
-`os.img` or `make run` to build and start it in QEMU. Set
-`DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
+Install GNU Make, GCC, NASM, binutils, Python, and QEMU (e2fsprogs is optional),
+then run `make` to build `os.img` or `make run` to build and start it in QEMU.
+Set `DEBUG_SUBSYSTEMS=1` to enable verbose subsystem traces. Use `make clean` to
 remove generated build artifacts.
 
 `make run` automatically prefers KVM hardware acceleration on Linux/x86 when
@@ -64,9 +80,9 @@ application needs more than the default 128 MiB.
 
 ## Filesystem layout
 
-The image uses ext4, built without root access by `mkext4.py` using `mke2fs`
-and `debugfs` from e2fsprogs. On Windows, build the image in a Linux/WSL
-environment with those tools installed.
+The image uses ext4, built without root access by `mkext4.py`. It uses
+`mke2fs` and `debugfs` from e2fsprogs when available, and otherwise writes the
+filesystem directly, so Windows builds need no extra filesystem tools.
 
 | Path | Contents |
 | :--- | :--- |
@@ -102,6 +118,13 @@ layout, and `python3 tools/test_boot.py` after building for QEMU boot checks.
 | `QEMU_MEMORY` | `any` | `128M` | Set the amount of RAM in QEMU |
 | `QEMU_DHCP` | `any` | `10.0.1.0/24,dhcpstart=10.0.1.227` | DHCP Range for QEMU VM |
 | `QEMU_EXTRA` | `any` | `null` | Extra arguments to pass to QEMU |
+
+# Boot arguments
+
+| Argument | Value | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `DEBUG` | `1` | `0` | Enable serial debugging |
+| `VERBOSE` | `1` | `0` | Enable on-screen boot logging |
 
 ## Supported Hardware
 
@@ -173,3 +196,67 @@ commit's committer Unix timestamp (`git log -1 --format=%ct`). Rebuilding a
 commit keeps its build ID; uncommitted edits do not change it. Source archives
 without Git metadata report build ID `0` (unknown). The standalone Fastfetch
 build uses the same generator.
+
+## TLS library
+
+Nixel includes a freestanding TLS 1.2/1.3 client library with a user-space TCP
+adapter. Build it with `make tls` and run interoperability checks with
+`make test-tls`. See [TLS integration and platform requirements](src/system/libraries/tls/README.md).
+
+Build a headless image with `python3 build.py -nogui` (or `make NOGUI=1`).
+Use `python3 build.py` or `make NOGUI=0` to restore GUI packaging. The headless
+image omits both component manifests and boots to text login and systemshell.
+Graphics code remains linked into the kernel; the text console uses the
+framebuffer. This option does not configure a serial-only console.
+
+## On-device app development
+
+Launch `designer` to build a window visually and give its controls public names.
+Write app logic in handlers such as `Button1OnPressed()` and access state with
+`Checkbox1.checkboxIsTicked` or `MainWindow.windowLoaded`. The designer keeps
+layout in a separate `.form` file; the C editor shows only application code.
+Compile projects with `ncc source.c output.bin`, or use Build and Run in the
+designer. See [SDK usage, APIs, and limits](documentation/sdk.md).
+
+## Accounts (development setup)
+
+On the first boot of a fresh image, NixelOS creates `root` (password `banana`)
+and `user` (password `user`) through the account database. These temporary
+credentials remain available for development. `system` and `nobody` are locked
+service identities. Existing databases are loaded on subsequent boots; passwords
+are not reset to the development defaults.
+
+Accounts are persisted in `/etc/accounts/database`, inside a root-only directory
+(mode 0700), with database mode 0600. Passwords use PBKDF2-HMAC-SHA256 with
+600,000 iterations and individual 16-byte salts from the kernel entropy source.
+Plaintext passwords are never written to the database. A missing or invalid
+database in an existing account directory stops boot rather than restoring
+known credentials.
+
+Use the terminal to manage accounts; password prompts hide input and require
+confirmation:
+
+```
+sudo useradd alice
+sudo passwd alice
+sudo userlock alice
+sudo userunlock alice
+```
+
+Account administration currently requires root, including password changes.
+New accounts receive a unique UID/GID and a private `/home/<name>` with Desktop,
+Documents, Downloads, Pictures, Music, and `.config` directories. Names contain
+lowercase letters, underscores, and digits after the first character, up to
+31 characters. Passwords contain 1–63 bytes. There are 16 account slots,
+including the four initial identities. Root and service identities cannot be
+locked; service identities cannot receive passwords. Locking prevents future
+logins and does not terminate running sessions. Account deletion is not yet
+provided.
+
+Rebooting preserves accounts in the same image. Rebuilding `os.img` creates a
+fresh filesystem and therefore restores first-boot development credentials.
+The account database shares the filesystem's existing power-loss limitations;
+there is no transactional recovery for interrupted database writes yet.
+Run `make test-accounts` for native lifecycle and persistence tests.
+Run `make test-accounts-qemu` for first-boot provisioning, password-hash checks,
+and reboot persistence on a disposable image (requires QEMU, NASM, and debugfs).

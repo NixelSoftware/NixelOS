@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
@@ -13,10 +14,8 @@ static uint8_t sector_data[512];
 static char status_msg[64] = "FDC Ready. Click 'Read Boot (0)'.";
 static uint32_t current_lba = 0;
 static uint8_t data_valid = 0;
+static uint8_t permission_denied;
 
-#define COLOR_BG        0x00C0C0C0
-#define COLOR_TEXT      0x00000000
-#define COLOR_HEX_BG    0x00FFFFFF
 
 static int user_register_window(Window* window) {
     user_window_desc_t description = {0};
@@ -72,7 +71,7 @@ static void user_draw_string(int32_t x, int32_t y, const char* text,
 static void user_draw_button(int32_t x, int32_t y, int32_t width, int32_t height,
                              const char* text, uint8_t pressed) {
     (void)user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height, text,
-                    COLOR_BG, pressed);
+                    COLOR_SURFACE, pressed);
 }
 
 static void user_present_rect(int32_t x, int32_t y, int32_t width, int32_t height) {
@@ -121,11 +120,11 @@ static void draw_app(Window* w) {
     int y = w->y;
 
     
-    os->graphics.fill_rect(x, y, w->w, w->h, COLOR_BG);
+    os->graphics.fill_rect(x, y, w->w, w->h, COLOR_SURFACE);
 
     
-    os->graphics.draw_string(x + 10, y + 10, "Floppy Disk Diagnostic", 0x00000080);
-    os->graphics.draw_string(x + 10, y + 28, status_msg, COLOR_TEXT);
+    os->graphics.draw_string(x + 10, y + 10, "Floppy Disk Diagnostic", COLOR_ACCENT);
+    os->graphics.draw_string(x + 10, y + 28, status_msg, COLOR_TEXT_PRIMARY);
 
     
     os->graphics.draw_button(x + 10,  y + 50, 105, 24, "Read Boot (0)", 0);
@@ -138,10 +137,10 @@ static void draw_app(Window* w) {
     int box_w = w->w - 20;
     int box_h = 160;
 
-    os->graphics.fill_rect(box_x, box_y, box_w, box_h, COLOR_HEX_BG);
+    os->graphics.fill_rect(box_x, box_y, box_w, box_h, COLOR_MODERN_BG);
 
     if (!data_valid) {
-        os->graphics.draw_string(box_x + 10, box_y + 10, "No sector data loaded.", 0x00808080);
+        os->graphics.draw_string(box_x + 10, box_y + 10, "No sector data loaded.", COLOR_TEXT_MUTED);
         return;
     }
 
@@ -154,21 +153,21 @@ static void draw_app(Window* w) {
 
         
         byte_to_hex((uint8_t)row_offset, hex_out);
-        os->graphics.draw_string(draw_x, draw_y, "0x", 0x00800000);
-        os->graphics.draw_string(draw_x + 16, draw_y, hex_out, 0x00800000);
-        os->graphics.draw_string(draw_x + 32, draw_y, ":", 0x00800000);
+        os->graphics.draw_string(draw_x, draw_y, "0x", COLOR_BTN_CLOSE);
+        os->graphics.draw_string(draw_x + 16, draw_y, hex_out, COLOR_BTN_CLOSE);
+        os->graphics.draw_string(draw_x + 32, draw_y, ":", COLOR_BTN_CLOSE);
 
         draw_x += 45;
 
         
         for (int b = 0; b < 8; b++) {
             byte_to_hex(sector_data[row_offset + b], hex_out);
-            os->graphics.draw_string(draw_x, draw_y, hex_out, 0x00000000);
+            os->graphics.draw_string(draw_x, draw_y, hex_out, COLOR_TEXT_PRIMARY);
             draw_x += 22;
         }
 
         draw_x += 10;
-        os->graphics.draw_string(draw_x, draw_y, "|", 0x00808080);
+        os->graphics.draw_string(draw_x, draw_y, "|", COLOR_TEXT_MUTED);
         draw_x += 10;
 
         
@@ -178,7 +177,7 @@ static void draw_app(Window* w) {
             ascii_str[b] = (c >= 32 && c <= 126) ? (char)c : '.';
         }
         ascii_str[8] = '\0';
-        os->graphics.draw_string(draw_x, draw_y, ascii_str, 0x000000A0);
+        os->graphics.draw_string(draw_x, draw_y, ascii_str, COLOR_ACCENT);
     }
 }
 
@@ -188,14 +187,19 @@ static void refresh_window(Window* w) {
 }
 
 static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t btn) {
-    if (btn != 1) return; 
+    if (btn != 1) return;
+    if (permission_denied) {
+        str_copy(status_msg, "Permission denied. Run sudo floppy_debug.");
+        refresh_window(w);
+        return;
+    }
 
     
     if (local_y >= 50 && local_y <= 74 && local_x >= 10 && local_x <= 115) {
         str_copy(status_msg, "Reading sector 0 (Boot Sector)...");
         refresh_window(w);
 
-        if (sys_floppy_read(0, 1, sector_data)) {
+        if (sys_floppy_read(0, 1, sector_data) == 1) {
             data_valid = 1;
             current_lba = 0;
             if (sector_data[510] == 0x55 && sector_data[511] == 0xAA) {
@@ -218,7 +222,7 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
 
         int ok = 1;
         for (uint32_t sec = 0; sec < 18; sec++) {
-            if (!sys_floppy_read(sec, 1, sector_data)) {
+            if (sys_floppy_read(sec, 1, sector_data) != 1) {
                 ok = 0;
                 char err[48] = "Failed reading track 0, sector: ";
                 char num[8];
@@ -249,9 +253,9 @@ static void handle_mouse(Window* w, int32_t local_x, int32_t local_y, uint8_t bt
             write_pattern[i] = (uint8_t)(i ^ 0xA5);
         }
 
-        if (sys_floppy_write_test_pattern()) {
+        if (sys_floppy_write_test_pattern() == 1) {
             uint8_t read_back[512];
-            if (sys_floppy_read(2879, 1, read_back)) {
+            if (sys_floppy_read(2879, 1, read_back) == 1) {
                 int matched = 1;
                 for (int i = 0; i < 512; i++) {
                     if (read_back[i] != write_pattern[i]) {
@@ -298,9 +302,12 @@ void user_main(const char* arguments) {
     win.handle_mouse = handle_mouse;
     win.handle_key = 0;
 
-    if (!sys_floppy_init()) {
+    int32_t initialized = sys_floppy_init();
+    permission_denied = initialized == SYS_ERR_PERMISSION;
+    if (permission_denied)
+        str_copy(status_msg, "Permission denied. Run sudo floppy_debug.");
+    else if (initialized != 1)
         str_copy(status_msg, "Floppy drive not detected or not ready.");
-    }
 
     if (os->windows.register_window(&win) < 0) {
         static const char error[] = "floppy_debug: unable to create window\n";

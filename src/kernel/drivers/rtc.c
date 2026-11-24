@@ -143,3 +143,10 @@ void rtc_get_time(rtc_time_t* out) {
     int64_t local = (int64_t)(base_epoch + elapsed_seconds(scheduler_clock() - base_tick)) + time_zone_offset() * 60;
     time_from_epoch(local < 0 ? 0 : local, out);
 }
+
+uint64_t rtc_get_epoch(void) {
+    rtc_time_t unused;
+    rtc_get_time(&unused); /* Initialize the common clock if needed. */
+    MUTEX_GUARD(kernel_mutex);
+    return base_epoch + elapsed_seconds(scheduler_clock() - base_tick);
+}

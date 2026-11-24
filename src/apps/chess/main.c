@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../system/user/sys_api.h"
 #include "engine.h"
 #include "piece_assets.h"
@@ -16,7 +17,7 @@ static void draw(int op,int x,int y,int w,int h,const char *text,uint32_t color)
 }
 static void fill(int x,int y,int w,int h,uint32_t c) { draw(USER_WINDOW_DRAW_FILL,x,y,w,h,0,c); }
 static void text(int x,int y,const char *s,uint32_t c) { draw(USER_WINDOW_DRAW_TEXT,x,y,0,0,s,c); }
-static void button(int x,int w,const char *s) { draw(USER_WINDOW_DRAW_BUTTON,x,30,w,26,s,0xC0C0C0); }
+static void button(int x,int w,const char *s) { draw(USER_WINDOW_DRAW_BUTTON,x,30,w,26,s,COLOR_SURFACE); }
 static int same(const Position *a,const Position *b) {
     if(a->side!=b->side || a->castle!=b->castle) return 0;
     /* An en passant square affects repetition only if a legal capture exists. */
@@ -46,7 +47,7 @@ static void play(Move m) {
     history[history_count++]=game; update();
 }
 static void render(void) {
-    fill(0,22,392,440,0xC0C0C0);
+    fill(0,22,392,440,COLOR_SURFACE);
     button(12,94,"New game"); button(114,66,"Undo"); button(188,188,"Promote: Q R B N");
     for(int i=0;i<64;i++) {
         int x=BX+(i%8)*CELL,y=BY+(i/8)*CELL;
@@ -67,8 +68,8 @@ static void render(void) {
             sys_window_draw(window,&sprite);
         }
     }
-    for(int i=0;i<8;i++) { char f[2]={(char)('a'+i),0},r[2]={(char)('8'-i),0}; text(BX+i*CELL+17,410,f,0x202820); text(10,BY+i*CELL+14,r,0x202820); }
-    text(12,432,pending>=0?"Choose promotion: Q R B N":status,0x202820);
+    for(int i=0;i<8;i++) { char f[2]={(char)('a'+i),0},r[2]={(char)('8'-i),0}; text(BX+i*CELL+17,410,f,COLOR_TEXT_PRIMARY); text(10,BY+i*CELL+14,r,COLOR_TEXT_PRIMARY); }
+    text(12,432,pending>=0?"Choose promotion: Q R B N":status,COLOR_TEXT_PRIMARY);
     sys_window_present(window);
 }
 static void undo(void) {

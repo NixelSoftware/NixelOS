@@ -5,6 +5,7 @@
 void b44_set_init_progress(void (*progress)(const char* status));
 uint8_t b44_init(void);
 uint8_t b44_is_ready(void);
+uint8_t b44_link_is_up(void);
 void b44_shutdown(void);
 void b44_poll(void);
 uint8_t b44_send(const uint8_t* data, uint32_t length);

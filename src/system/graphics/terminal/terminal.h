@@ -10,5 +10,6 @@ void terminal_close(Window* window);
 void terminal_release(terminal_t* terminal);
 void terminal_command_done(terminal_t* terminal);
 int terminal_read_password(char* output, uint32_t capacity);
+int terminal_read_reply(char* output, uint32_t capacity);
 void terminal_write(const char* text, uint32_t length);
 #endif

@@ -109,14 +109,16 @@ void user_main(const char* arguments) {
     (void)arguments;
 
     print("[QuarkFTP] Starting FTP daemon on port 21...\n");
-    sys_detach();
 
     int32_t listener = sys_tcp_listen(FTP_CONTROL_PORT);
     if (listener < 0) {
-        print("[QuarkFTP] Failed to bind port 21.\n");
+        print(listener == SYS_ERR_PERMISSION ?
+            "qkftp: permission denied; run sudo qkftp for ports below 1024.\n" :
+            "[QuarkFTP] Failed to bind port 21.\n");
         sys_exit(1);
     }
 
+    sys_detach();
     print("[QuarkFTP] Listening for connections.\n");
 
     for (;;) {

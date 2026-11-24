@@ -1,6 +1,9 @@
 #ifndef KERNEL_DRIVERS_UHCI_H
 #define KERNEL_DRIVERS_UHCI_H
 
+#define UHCI_MAX_CONTROLLERS 8u
+#define UHCI_ROOT_PORT_COUNT (UHCI_MAX_CONTROLLERS * 2u)
+
 #include "../../types.h"
 #include "../../hal/usb.h"
 
@@ -28,6 +31,10 @@ int32_t uhci_control_transfer(uint8_t dev_addr, uint8_t low_speed, usb_device_re
 void    uhci_poll(void);
 void    uhci_shutdown(void);
 void    uhci_handle_mouse_packet(int8_t dx, int8_t dy, uint8_t buttons);
+
+int uhci_storage_info(unsigned port, uint8_t* addr, uint8_t* iface, uint8_t* in, uint8_t* out);
+int uhci_storage_reset(uint8_t addr, uint8_t iface, uint8_t in, uint8_t out);
+int uhci_storage_clear_halt(uint8_t addr, uint8_t ep, int in);
 
 const usb_hci_ops_t* uhci_get_ops(void);
 

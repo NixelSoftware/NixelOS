@@ -5,11 +5,11 @@
 #include "net_types.h"
 #include "../drivers/pci.h"
 
-/* Selected PCI function, stable until the next sys_net_init(). */
+/* PCI function for the primary stack, or the adapter being initialized. */
 const pci_device_t* sys_net_pci_device(void);
 
 // 0 = PCNet32, 1 = Intel E1000, 2 = Tigon3, 3 = BCM4401,
-// 4 = Realtek RTL8169/8168; ~0u = none
+// 4 = Realtek RTL8169/8168, 5 = Intel 3945 Wi-Fi; ~0u = none
 extern uint32_t net_driver_type;
 
 void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const char** name_out);
@@ -23,6 +23,17 @@ uint64_t sys_net_get_mac_address(void);
 void     sys_net_set_ip_address(uint32_t address);
 uint32_t sys_net_get_ip_address(void);
 void     sys_net_get_diagnostics(net_diagnostics_t* d);
+/* Both links can stay up. Existing IPv4 clients use the primary link;
+ * link-specific frame sends do not change the primary stack. */
+typedef enum { SYS_NET_ETHERNET, SYS_NET_WIFI } sys_net_link_t;
+uint8_t sys_net_link_is_ready(sys_net_link_t link);
+uint8_t sys_net_link_send(sys_net_link_t link, const uint8_t* data, uint32_t length);
+/* Optional raw receive callback, independent of the primary stack handler. */
+void sys_net_link_set_receive_handler(sys_net_link_t link, net_receive_handler_t handler);
+uint64_t sys_net_link_mac(sys_net_link_t link);
+uint32_t sys_net_link_ip(sys_net_link_t link);
+uint8_t sys_net_select_wifi(void);
+void sys_net_wifi_down(void);
 void     sys_net_initialize_stack(void);
 void     sys_net_configure_address(void);
 uint8_t sys_net_set_manual_configuration(uint32_t address, uint32_t mask, uint32_t gateway);

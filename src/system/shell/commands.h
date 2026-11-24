@@ -5,7 +5,7 @@
 #include "../graphics/terminal/terminal.h"
 
 void shell_execute_command(const char* command, shell_output_fn output,
-                           shell_clear_fn clear);
+                           shell_clear_fn clear, int (*read_reply)(char*, uint32_t));
 const char* shell_command_args(void);
 void shell_format_prompt(terminal_t* terminal, char* out, unsigned capacity);
 void shell_initialize(os_api_t* api);

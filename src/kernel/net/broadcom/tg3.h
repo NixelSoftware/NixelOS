@@ -6,6 +6,7 @@
 
 uint8_t  tg3_init(void);
 uint8_t  tg3_is_ready(void);
+uint8_t  tg3_link_is_up(void);
 void     tg3_shutdown(void);
 void     tg3_poll(void);
 uint8_t  tg3_send(const uint8_t* data, uint32_t length);

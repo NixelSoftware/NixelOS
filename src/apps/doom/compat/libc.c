@@ -1,18 +1,16 @@
 /* Freestanding Doom runtime. File reads use bounded, offset-based syscalls. */
 #include "libc.h"
 #include "../../../system/user/sys_api.h"
-extern char _end[];
 typedef struct Block {
     size_t size;
     int available;
     struct Block *next;
-} Block;
+} __attribute__((aligned(16))) Block;
 static Block *blocks;
-static uintptr_t heap;
 void *malloc(size_t n) {
     if (!n)
         n = 1;
-    if (n > 0x300000)
+    if (n > 0xffffffffu - 15u - sizeof(Block))
         return 0;
     n = (n + 15) & ~15u;
     for (Block *b = blocks; b; b = b->next)
@@ -28,15 +26,21 @@ void *malloc(size_t n) {
             b->available = 0;
             return b + 1;
         }
-    if (!heap)
-        heap = ((uintptr_t)_end + 15) & ~15u;
-    if (heap + sizeof(Block) + n > 0x00FC0000)
-        return 0;
-    Block *b = (Block *)heap;
-    heap += sizeof(Block) + n;
+    /* Keep small allocations in reusable chunks instead of spending a page each. */
+    size_t chunk = sizeof(Block) + n;
+    if (chunk < 65536u) chunk = 65536u;
+    Block *b = sys_memory_alloc(chunk);
+    if (!b) return 0;
     b->size = n;
     b->available = 0;
     b->next = blocks;
+    if (chunk >= sizeof(Block) + n + sizeof(Block) + 16u) {
+        Block *rest = (Block *)((char *)(b + 1) + n);
+        rest->size = chunk - n - 2u * sizeof(Block);
+        rest->available = 1;
+        rest->next = blocks;
+        b->next = rest;
+    }
     blocks = b;
     return b + 1;
 }

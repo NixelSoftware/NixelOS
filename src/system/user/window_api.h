@@ -56,6 +56,7 @@ typedef enum {
     USER_WINDOW_EVENT_CLOSE = 3,
     USER_WINDOW_EVENT_KEYS_RESET = 6, /* focus lost or input queue overflow */
     USER_WINDOW_EVENT_SCANCODE = 5, /* key=PS/2 byte, including E0 and releases */
+    /* REDRAW: x/y are window position; buttons/key are current width/height. */
     USER_WINDOW_EVENT_REDRAW = 4
 } user_window_event_type_t;
 

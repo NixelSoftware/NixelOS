@@ -23,6 +23,10 @@ int video_init(uint32_t address, uint32_t bpp, uint32_t pitch) {
         debug_print("[VIDEO] No supported framebuffer\n");
         return 0;
     }
+    uint32_t width, height;
+    if (intel_active && intel_gma_native_resolution(&width, &height) &&
+        (width != (uint32_t)screen_width || height != (uint32_t)screen_height))
+        intel_gma_set_resolution(&framebuffer, width, height);
     debug_print("[VIDEO] Driver: ");
     debug_print(framebuffer.driver_name);
     debug_print("\n");

@@ -5,9 +5,11 @@
 #include "syscall.h"
 #include "hal/audio.h"
 #include "arch_i386.h"
+#include "../system/graphics/dialog/crash_dialog.h"
 
 static idt_entry_t idt_entries[256];
 static idt_ptr_t   idt_ptr;
+user_crash_info_t last_user_crash = {0};
 
 extern void idt_flush(uint32_t);
 
@@ -225,6 +227,13 @@ void isr_handler(registers_t* regs) {
     if (regs && regs->int_no < 32 && (regs->cs & 3u) == 3u) {
         debug_print("[USER] exception ");
         debug_hex(regs->int_no);
+
+        last_user_crash.active = 1;
+        last_user_crash.vector = regs->int_no;
+        last_user_crash.eip = regs->eip;
+        last_user_crash.err_code = regs->err_code;
+        last_user_crash.cr2 = 0;
+
         if (regs->int_no == 14) {
             uint32_t fault_address;
             __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_address));

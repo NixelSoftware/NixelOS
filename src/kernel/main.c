@@ -14,7 +14,10 @@
 #include "drivers/power.h"
 #include "drivers/acpi.h"
 #include "drivers/ps2.h"
+#include "drivers/nvme.h"
+#include "drivers/ahci.h"
 #include "drivers/usb/uhci.h"
+#include "drivers/usb/ehci.h"
 //#include "drivers/sb16_driver.h"
 #include "idt.h"
 #include "fs.h" 
@@ -38,6 +41,7 @@
 #include "net/udp.h"
 #include "../system/graphics/dialog/dialog.h"
 #include "../system/init/splash/startscreen.h"
+#include "bootlog.h"
 #include "../system/graphics/screenshot/screenshot.h"
 #include "../system/shell/commands.h"
 #include "../system/init/nixinit.h"
@@ -207,6 +211,18 @@ static void term_print(const char* text) {
 
 void kernel_user_write(const char* text, uint32_t length) {
     MUTEX_GUARD(kernel_mutex);
+    if (!nixinit_has_wm() && current_task && current_task->shell_output) {
+        char chunk[257];
+        while (length) {
+            uint32_t count = length < 256 ? length : 256;
+            for (uint32_t i = 0; i < count; i++) chunk[i] = text[i];
+            chunk[count] = 0;
+            current_task->shell_output(chunk);
+            text += count;
+            length -= count;
+        }
+        return;
+    }
     terminal_write(text, length);
     needs_redraw = 1;
 }
@@ -248,7 +264,13 @@ static uint8_t api_dns_resolve(const char* hostname, uint32_t* address) {
     return resolved;
 }
 
+static int kernel_verbose;
+
 static void nixinit_show_status(const char* text, int percent) {
+    if (kernel_verbose) {
+        if (text) { debug_print("[BOOT] "); debug_print(text); debug_print("\n"); }
+        return;
+    }
     startscreen_show(text, percent);
 }
 
@@ -273,7 +295,7 @@ static void kernel_init_acpi(void) {
 }
 
 static void network_boot_progress(const char* status) {
-    startscreen_show(status, 25);
+    nixinit_show_status(status, 25);
 }
 
 static void kernel_init_network_device(void) {
@@ -294,13 +316,19 @@ static void kernel_init_network_stack(void) {
     debug_print("[INIT] Net stack init returned.\n");
 }
 
-static void kernel_configure_network(void) {
-    sys_net_configure_address();
-}
-
 static void kernel_mount_filesystem(void) {
+    debug_print("[INIT] AHCI init...\n");
+    ahci_init();
+    debug_print("[INIT] NVMe init...\n");
+    nvme_init();
     debug_print("[INIT] FS init...\n");
+    usb_poll(); /* Enumerate boot media before the root filesystem probe. */
     fs_init();
+    if (!users_init()) {
+        debug_print("[ACCOUNTS] Cannot initialize account database; stopping.\n");
+        __builtin_trap();
+    }
+    debug_print("[ACCOUNTS] Persistent account database ready.\n");
     time_init();
 }
 
@@ -321,7 +349,8 @@ static void kernel_initialize_system_apps(void) {
     debug_subsystem_print("\n[INIT] kernel API put_pixel field: ");
     debug_subsystem_hex((uint32_t)kernel_api.graphics.put_pixel);
     debug_subsystem_print("\n");
-    system_graphics_initialize(&kernel_api, kernel_mark_redraw);
+    if (nixinit_has_wm()) system_graphics_initialize(&kernel_api, kernel_mark_redraw);
+    else shell_initialize(&kernel_api);
 }
 
 static void kernel_initialize_input(void) {
@@ -339,13 +368,19 @@ static void kernel_initialize_input(void) {
 
 static void kernel_finish_boot(void) {
     desktop_trace_api("before startscreen_stop");
-    startscreen_stop();
+    if (kernel_verbose) {
+        debug_set_char_sink(0);
+        bootlog_end();
+        display_clear(COLOR_DESKTOP);
+    } else {
+        startscreen_stop();
+    }
     desktop_trace_api("after startscreen_stop");
     debug_subsystem_print("[INIT] Display backbuffer address: ");
     debug_subsystem_hex((uint32_t)display_get_backbuffer());
     debug_subsystem_print("\n");
     debug_print("[INIT] Drawing to display...\n");
-    wm_render_screen();
+    if (nixinit_has_wm()) wm_render_screen();
     debug_subsystem_print("[INIT] Display drawing returned.\n");
     needs_redraw = 0;
     debug_print("[INIT] Enable interrupt...\n");
@@ -356,6 +391,9 @@ static void kernel_finish_boot(void) {
 
 static void network_service(void* arg) {
     (void)arg;
+    /* DHCP polls the adapter and sleeps between replies once scheduled, so
+     * lease acquisition can run alongside login and the other services. */
+    sys_net_configure_address();
     for (;;) { sys_net_poll(); ntp_poll(); task_sleep_ms(2); }
 }
 static void audio_task(void* arg) {
@@ -410,13 +448,21 @@ void desktop_service(void* arg) {
     }
 }
 
-void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
+/* Boot flags handed over by the loader (src/boot/boot_stage2.asm). */
+#define BOOT_FLAG_DEBUG   0x1u
+#define BOOT_FLAG_VERBOSE 0x2u
+
+void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch,
+                 uint32_t boot_flags, uint32_t geometry) {
     __asm__ volatile ("cli");
 
     paging_init();
-    
+
     startup_trace_init();
-    serial_init();
+    /* The serial debug port is enabled only when "-debug" is passed at boot. */
+    if (boot_flags & BOOT_FLAG_DEBUG) {
+        serial_init();
+    }
     debug_print("\n=== SYSTEM BOOTING ===\n");
     debug_print("[VBE] LFB Address: "); debug_hex(lfb_address); debug_print("\n");
     debug_print("[VBE] BPP: ");         debug_hex(bpp);         debug_print("\n");
@@ -424,7 +470,20 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
 
     debug_print("[INIT] Display init...\n");
 
+    uint32_t width = geometry & 0xFFFFu, height = geometry >> 16;
+    if (width >= 640 && width <= SCREEN_MAX_WIDTH &&
+        height >= 480 && height <= SCREEN_MAX_HEIGHT) {
+        screen_width = width;
+        screen_height = height;
+    }
     display_init(lfb_address, bpp, pitch);
+
+    if (boot_flags & BOOT_FLAG_VERBOSE) {
+        kernel_verbose = 1;
+        bootlog_begin();
+        debug_set_char_sink(bootlog_putc);
+        debug_print("[INIT] Verbose boot log enabled.\n");
+    }
 
     nixinit_services_t init_services = {
         .show_status = nixinit_show_status,
@@ -433,7 +492,6 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
         .initialize_acpi = kernel_init_acpi,
         .initialize_network_device = kernel_init_network_device,
         .initialize_network_stack = kernel_init_network_stack,
-        .configure_network = kernel_configure_network,
         .mount_filesystem = kernel_mount_filesystem,
         .initialize_tasking = kernel_initialize_tasking,
         .initialize_system_apps = kernel_initialize_system_apps,
@@ -442,12 +500,13 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     };
     audio_hal_init();
     usb_hal_init();
+    usb_hal_register(ehci_get_ops());
     usb_hal_register(uhci_get_ops());
     nixinit_start(&init_services);
 
     #if defined(ENABLE_OOBE) && ENABLE_OOBE == 1
     char oobe_check[1];
-    if (fs_read_file("/var/lib/nixel/oobe.done", (uint8_t*)oobe_check, 1) < 0) {
+    if (nixinit_has_wm() && fs_read_file("/var/lib/nixel/oobe.done", (uint8_t*)oobe_check, 1) < 0) {
         debug_print("[OOBE] First boot detected. Launching setup wizard...\n");
         api_launch_app("oobe.bin", "");
     }
@@ -471,7 +530,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch) {
     }
     scheduler_start();
     debug_print("[INIT] EEVDF scheduler started: 1000 Hz, independent services\n");
-    int login_pid = task_create(login_screen_task, 0, "login");
+    int login_pid = task_create(nixinit_session_task, 0, "login");
     if (login_pid < 0) __builtin_trap();
     task_wait(login_pid);
     for (;;) task_sleep_ms(1000);

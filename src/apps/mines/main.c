@@ -1,17 +1,9 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
 #include "../../system/user/sys_api.h"
 
-#define COLOR_WIN_BG     0x00C0C0C0
-#define COLOR_DARK_GRAY  0x00808080
-#define COLOR_LIGHT_GRAY 0x00DFDFDF
-#define COLOR_WHITE      0x00FFFFFF
-#define COLOR_BLACK      0x00000000
-#define COLOR_RED        0x00FF0000
-#define COLOR_BLUE       0x000000AA
-#define COLOR_GREEN      0x00008000
-#define COLOR_NAVY       0x00000080
 
 #define GRID_W 9
 #define GRID_H 9
@@ -97,17 +89,17 @@ static uint32_t rand_simple(void) {
 }
 
 static void draw_sunken_panel(int32_t x, int32_t y, int32_t w, int32_t h) {
-    os->graphics.fill_rect(x, y, w, h, COLOR_WIN_BG);
-    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, w, h, COLOR_SURFACE);
+    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
 }
 
 static void draw_tile(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t pressed) {
-    os->graphics.fill_rect(x, y, w, h, COLOR_WIN_BG);
-    uint32_t tl = pressed ? COLOR_DARK_GRAY : COLOR_WHITE;
-    uint32_t br = pressed ? COLOR_WHITE : COLOR_DARK_GRAY;
+    os->graphics.fill_rect(x, y, w, h, COLOR_SURFACE);
+    uint32_t tl = pressed ? COLOR_ACCENT : COLOR_SURFACE_BORDER;
+    uint32_t br = tl;
 
     os->graphics.fill_rect(x, y, w, 1, tl);
     os->graphics.fill_rect(x, y, 1, h, tl);
@@ -202,8 +194,8 @@ void mines_draw_content(Window* win) {
     rem_str[0] = '0' + (remain < 0 ? 0 : (remain / 10));
     rem_str[1] = '0' + (remain < 0 ? 0 : (remain % 10));
     rem_str[2] = '\0';
-    os->graphics.fill_rect(panel_x + 6, panel_y + 4, 30, 20, COLOR_BLACK);
-    os->graphics.draw_string(panel_x + 10, panel_y + 8, rem_str, COLOR_RED);
+    os->graphics.fill_rect(panel_x + 6, panel_y + 4, 30, 20, COLOR_TEXT_PRIMARY);
+    os->graphics.draw_string(panel_x + 10, panel_y + 8, rem_str, COLOR_BTN_CLOSE);
 
     int32_t face_w = 26;
     int32_t face_h = 22;
@@ -213,8 +205,8 @@ void mines_draw_content(Window* win) {
     draw_tile(face_x, face_y, face_w, face_h, 0);
     const char* face = (game_state == STATE_PLAYING) ? ":-)" :
                        (game_state == STATE_WON)     ? "B-)" : "X-(";
-    os->graphics.draw_string(face_x + 2, face_y + 5, face, COLOR_BLACK);
-    //os->graphics.draw_string(face_x + 5, face_y + 4, face, COLOR_BLACK);
+    os->graphics.draw_string(face_x + 2, face_y + 5, face, COLOR_TEXT_PRIMARY);
+    //os->graphics.draw_string(face_x + 5, face_y + 4, face, COLOR_TEXT_PRIMARY);
 
     draw_sunken_panel(board_x, board_y, GRID_W * CELL_SIZE, GRID_H * CELL_SIZE);
 
@@ -225,33 +217,33 @@ void mines_draw_content(Window* win) {
             Cell* cell = &grid[r][c];
 
             if (cell->revealed) {
-                os->graphics.fill_rect(tx, ty, CELL_SIZE, CELL_SIZE, COLOR_LIGHT_GRAY);
-                os->graphics.fill_rect(tx, ty, CELL_SIZE, 1, COLOR_DARK_GRAY);
-                os->graphics.fill_rect(tx, ty, 1, CELL_SIZE, COLOR_DARK_GRAY);
+                os->graphics.fill_rect(tx, ty, CELL_SIZE, CELL_SIZE, COLOR_TASKBAR_ITEM_ACT);
+                os->graphics.fill_rect(tx, ty, CELL_SIZE, 1, COLOR_SURFACE_BORDER);
+                os->graphics.fill_rect(tx, ty, 1, CELL_SIZE, COLOR_SURFACE_BORDER);
 
                 if (cell->has_mine) {
-                    os->graphics.fill_rect(tx + 4, ty + 4, CELL_SIZE - 8, CELL_SIZE - 8, COLOR_BLACK);
-                    os->graphics.draw_string(tx + 6, ty + 3, "*", COLOR_RED);
+                    os->graphics.fill_rect(tx + 4, ty + 4, CELL_SIZE - 8, CELL_SIZE - 8, COLOR_TEXT_PRIMARY);
+                    os->graphics.draw_string(tx + 6, ty + 3, "*", COLOR_BTN_CLOSE);
                 } else if (cell->neighbor_count > 0) {
                     char digit[2] = { (char)('0' + cell->neighbor_count), '\0' };
-                    uint32_t col = (cell->neighbor_count == 1) ? COLOR_BLUE :
-                                   (cell->neighbor_count == 2) ? COLOR_GREEN :
-                                   (cell->neighbor_count == 3) ? COLOR_RED : COLOR_NAVY;
+                    uint32_t col = (cell->neighbor_count == 1) ? COLOR_ACCENT :
+                                   (cell->neighbor_count == 2) ? COLOR_BTN_MAX :
+                                   (cell->neighbor_count == 3) ? COLOR_BTN_CLOSE : COLOR_ACCENT;
                     os->graphics.draw_string(tx + 6, ty + 3, digit, col);
                 }
             } else {
                 draw_tile(tx, ty, CELL_SIZE, CELL_SIZE, 0);
                 if (cell->flagged) {
-                    os->graphics.draw_string(tx + 5, ty + 3, "P", COLOR_RED);
+                    os->graphics.draw_string(tx + 5, ty + 3, "P", COLOR_BTN_CLOSE);
                 }
             }
         }
     }
 
     if (game_state == STATE_LOST) {
-        os->graphics.draw_string(win->x + 66, win->y + 225, "You lost!", COLOR_RED);
+        os->graphics.draw_string(win->x + 66, win->y + 225, "You lost!", COLOR_BTN_CLOSE);
     } else if (game_state == STATE_WON) {
-        os->graphics.draw_string(win->x + 66, win->y + 225, "You won!", COLOR_GREEN);
+        os->graphics.draw_string(win->x + 66, win->y + 225, "You won!", COLOR_BTN_MAX);
     }
 }
 

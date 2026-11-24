@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build the raw BIOS boot area and a journal-free ext4 data partition.
 
-Requires e2fsprogs (mke2fs/debugfs); no root privileges or loop mount needed.
-The deliberately small feature set is shared with src/kernel/fs.c.
+Uses e2fsprogs (mke2fs/debugfs) when available and otherwise falls back to the
+dependency-free writer in tools/ext4_builder.py, so Windows builds need no
+external filesystem tools. The deliberately small feature set is shared with
+src/kernel/fs.c.
 """
 import os
 from pathlib import Path
@@ -13,35 +15,85 @@ import sys
 import tempfile
 
 from tools.disk_layout import (
-    SECTOR_SIZE, FILESYSTEM_LBA, KERNEL_LBA, STAGE2_LBA, STAGE2_SECTORS, validate_kernel,
+    SECTOR_SIZE, FILESYSTEM_LBA, STAGE2_LBA, STAGE2_SECTORS, validate_kernel,
 )
 
 TOTAL_SIZE_MB = 50
 TOTAL_SECTORS = TOTAL_SIZE_MB * 1024 * 1024 // SECTOR_SIZE
 BUNDLED_FILES = [
-    "chess.bin", "calc.bin", "files.bin", "hexview.bin", "mines.bin",
-    "floppy_debug.bin", "ping.bin", "netdiag.bin", "com0.bin", "image.bmp",
+    "ncc.bin", "designer.bin", "chess.bin", "calc.bin", "files.bin", "hexview.bin", "mines.bin",
+    "ping.bin", "netdiag.bin", "image.bmp",
     "http_test.bin", "curl.bin", "browser.bin", "crash_debug.bin",
-    "shutdown.bin", "userhello.bin", "sound.bin", "sysdiag.bin",
-    "fastfetch.bin", "oobe.bin", "reboot.bin", "setwall.bin",
-    "shutdlg.bin", "syndig.bin", "qksrv.bin", "resources/quark.cfg",
-    "qkftp.bin", "irc.bin", "lspci.bin", "demo3d.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
+    "userhello.bin", "sound.bin", "fastfetch.bin", "oobe.bin", "setwall.bin",
+    "syndig.bin", "resources/quark.cfg",
+    "irc.bin", "mail.bin", "lspci.bin", "demo3d.bin", "glcube.bin", "glscene.bin", "doom.bin", "doom1.wad", "doom.wad", "doom2.wad",
+    "resources/default_user.bmp", "resources/chess.bmp", "resources/twoballs.bmp",
+    "resources/purpleaero.bmp", "resources/nixel.bmp",
+    "taskmgr.bin", "tunnel.bin", "nixelcraft.bin"
 ]
+SBIN_FILES = {
+    "shutdown.bin", "reboot.bin", "floppy_debug.bin", "sysdiag.bin",
+    "qksrv.bin", "qkftp.bin", "telnetd.bin",
+}
 
 
-def main(output):
+def inode_metadata(path, name, directories):
+    owner, mode = directories.get(name, (
+        1000 if name.startswith("var/www/") or name == "var/log/quark.log" else 0,
+        0o755 if path.suffix == ".bin" else 0o644))
+    if name == "etc/time.cfg":
+        mode = 0o777
+    kind = 0o40000 if path.is_dir() else 0o100000
+    return owner, kind | mode
+
+
+
+def stage_firmware(root, directories, source=Path("firmware")):
+    """Copy user-supplied firmware into the image, retaining vendor subfolders."""
+    if not source.exists():
+        return
+    destinations = set()
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        if any(part.startswith(".") for part in relative.parts) or relative.name == "README.md":
+            continue
+        if path.is_symlink():
+            raise ValueError(f"Firmware must be a regular file or directory: {path}")
+        for part in relative.parts:
+            if len(part.encode()) >= 32 or any(c in part for c in '\n\r"\\'):
+                raise ValueError(f"Unsupported firmware filename: {path}")
+        destination = root / "lib/firmware" / relative
+        name = destination.relative_to(root).as_posix()
+        if name.lower() in destinations:
+            raise ValueError(f"Duplicate firmware filename: {path}")
+        destinations.add(name.lower())
+        if path.is_dir():
+            destination.mkdir(mode=0o755)
+            directories[name] = (0, 0o755)
+        elif path.is_file():
+            shutil.copyfile(path, destination)
+            destination.chmod(0o644)
+        else:
+            raise ValueError(f"Firmware must be a regular file or directory: {path}")
+
+
+def main(output, nogui=False):
+    missing = [tool for tool in ("mke2fs", "debugfs") if not shutil.which(tool)]
+    if missing:
+        print("[INFO] " + ", ".join(missing) +
+              " not found; using the built-in ext4 writer.")
+    kernel = Path("src/kernel/kernel.bin")
+    if kernel.exists():
+        validate_kernel(kernel.stat().st_size)
     disk = bytearray(TOTAL_SECTORS * SECTOR_SIZE)
     for name, lba, exact in (("src/boot.bin", 0, 512),
-                             ("src/boot_stage2.bin", STAGE2_LBA, STAGE2_SECTORS * 512),
-                             ("src/kernel/kernel.bin", KERNEL_LBA, None)):
+                             ("src/boot_stage2.bin", STAGE2_LBA, STAGE2_SECTORS * 512)):
         path = Path(name)
         if not path.exists():
             continue
         data = path.read_bytes()
         if exact is not None and len(data) != exact:
             raise ValueError(f"{path} must be exactly {exact} bytes")
-        if exact is None:
-            validate_kernel(len(data))
         disk[lba * 512:lba * 512 + len(data)] = data
 
     # Unique MBR identity, also used for BIOS-to-ATA boot-drive discovery.
@@ -62,22 +114,45 @@ def main(output):
             "srv": (0, 0o755), "etc": (0, 0o755), "home": (0, 0o755),
             "home/user": (1000, 0o750), "root": (0, 0o700),
             "usr": (0, 0o755), "usr/bin": (0, 0o755), "usr/sbin": (0, 0o755),
-            "usr/lib": (0, 0o755), "usr/local": (0, 0o755),
+            "usr/lib": (0, 0o755), "usr/lib/nixel": (0, 0o755), "usr/local": (0, 0o755),
             "usr/local/bin": (0, 0o755), "usr/share": (0, 0o755),
             "usr/share/nixel": (0, 0o755), "usr/share/nixel/audio": (0, 0o755),
+            "usr/share/nixel/sdk": (0, 0o755),
             "usr/share/nixel/images": (0, 0o755), "usr/share/games": (0, 0o755),
+            "usr/share/time": (0, 0o755),
             "usr/share/games/doom": (0, 0o755), "var": (0, 0o755),
             "var/log": (0, 0o755), "var/cache": (0, 0o755), "var/lib": (0, 0o755),
-            "var/lib/nixel": (1000, 0o755), "var/www": (1000, 0o755),
+            "var/lib/nixel": (1000, 0o755), "var/www": (1000, 0o755), "sbin": (0, 0o755),
+            "bin": (0, 0o755), "lib": (0, 0o755), "lib/firmware": (0, 0o755)
         }
         for home, owner in (("home/user", 1000), ("root", 0)):
-            for child in ("Desktop", "Documents", "Downloads", "Pictures", "Music",
+            for child in ("Desktop", "Documents", "Downloads", "Pictures", "Pictures/Wallpapers", "Music",
                           ".config", ".config/desktop", ".config/desktop/layout", ".config/doom"):
                 directories[f"{home}/{child}"] = (owner, 0o755 if not child.startswith(".") else 0o700)
         for name, (_, mode) in directories.items():
             (root / name).mkdir(mode=mode)
             (root / name).chmod(mode)
+        if kernel.exists():
+            shutil.copyfile(kernel, root / "boot/kernel.bin")
+            (root / "boot/kernel.bin").chmod(0o644)
+        stage_firmware(root, directories)
+        sdk_runtime = Path("sdkhost.bin")
+        if sdk_runtime.is_file():
+            shutil.copyfile(sdk_runtime, root / "usr/lib/nixel/sdkhost.bin")
+            (root / "usr/lib/nixel/sdkhost.bin").chmod(0o644)
+        shutil.copyfile("src/sdk/nixel.h", root / "usr/share/nixel/sdk/nixel.h")
+        (root / "usr/share/nixel/sdk/nixel.h").chmod(0o644)
+        shutil.copyfile("src/sdk/components.h", root / "usr/share/nixel/sdk/components.h")
+        (root / "usr/share/nixel/sdk/components.h").chmod(0o644)
+        shutil.copyfile("resources/timezones.json", root / "usr/share/time/timezones.json")
+        (root / "usr/share/time/timezones.json").chmod(0o644)
+        for asset in Path("resources/sdk").glob("*"):
+            if asset.is_file():
+                shutil.copyfile(asset, root / "usr/share/nixel/sdk" / asset.name)
+                (root / "usr/share/nixel/sdk" / asset.name).chmod(0o644)
+
         files = [Path(name) for name in BUNDLED_FILES if Path(name).is_file()]
+        files += [Path(name) for name in sorted(SBIN_FILES) if Path(name).is_file()]
         files += sorted(p for p in Path("resources").rglob("*")
                         if p.is_file() and p.suffix.lower() in {".mid", ".midi", ".wav", ".mp3"})
         names = set()
@@ -85,7 +160,8 @@ def main(output):
             if len(path.name.encode()) >= 32 or any(c in path.name for c in '\n\r"\\'):
                 raise ValueError(f"Unsupported filename: {path}")
             suffix = path.suffix.lower()
-            folder = ("usr/bin" if suffix == ".bin" else
+            folder = ("usr/sbin" if path.name in SBIN_FILES else
+                      "usr/bin" if suffix == ".bin" else
                       "usr/share/games/doom" if suffix == ".wad" else
                       "usr/share/nixel/audio" if suffix in {".mid", ".midi", ".wav", ".mp3"} else
                       "etc" if suffix == ".cfg" else "usr/share/nixel/images")
@@ -95,42 +171,57 @@ def main(output):
             names.add(destination.lower())
             shutil.copyfile(path, root / destination)
             (root / destination).chmod(0o755 if suffix == ".bin" else 0o644)
+        if not nogui:
+            (root / "usr/lib/nixel/wm.component").write_bytes(b"nixel-wm-v1\n")
+            (root / "usr/lib/nixel/dm.component").write_bytes(b"nixel-dm-v1\n")
         (root / "etc/time.cfg").write_bytes(
-            struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
+            #struct.pack("<Iii128s", 0x31504e54, 1, 0, b"pool.ntp.org"))
+            struct.pack("<Iii128s", 0x31504e54, 1, 0, b"ntp.nixelos.org"))
         (root / "etc/time.cfg").chmod(0o777)
-        (root / "etc/hostname").write_text("nixel\n")
-        (root / "etc/os-release").write_text('NAME=NixelOS\nID=nixel\nPRETTY_NAME="NixelOS"\n')
+        (root / "etc/hostname").write_bytes(b"nixel\n")
+        (root / "etc/os-release").write_bytes(b'NAME=NixelOS\nID=nixel\nPRETTY_NAME="NixelOS"\n')
         (root / "var/log/quark.log").write_text("")
-        (root / "var/www/index.html").write_text("<!doctype html><title>NixelOS</title><h1>NixelOS</h1>\n")
+        #(root / "var/www/index.html").write_text("<!doctype html><title>NixelOS</title><h1>NixelOS</h1>\n")
+        (root / "var/www/index.html").write_text('<html lang="en"><head><meta charset="utf-8"><title>NixelOS Default Page: It works</title><style>body { background-color: #f2f2f2; color: #333333; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.5; margin: 0; padding: 20px; } .main_page { max-width: 900px; margin: 0 auto; background-color: #ffffff; border: 2px solid #005a9c; padding: 25px 35px; } .header { border-bottom: 2px solid #005a9c; padding-bottom: 15px; margin-bottom: 20px; } h1 { color: #005a9c; font-size: 26px; margin: 0 0 5px 0; } .tagline { font-weight: bold; color: #555555; margin: 0; } .columns { display: flex; gap: 30px; } .col { flex: 1; } .section-box { border: 1px solid #cccccc; background-color: #fafafa; padding: 15px; margin-bottom: 15px; } .section-box h2 { font-size: 15px; margin: 0 0 10px 0; color: #005a9c; border-bottom: 1px solid #dddddd; padding-bottom: 5px; } code, pre { font-family: "DejaVu Sans Mono", "Bitstream Vera Sans Mono", monospace; font-size: 12px; background-color: #eeeeee; padding: 2px 4px; border: 1px solid #dddddd; } pre { padding: 8px; overflow-x: auto; } ul { margin: 8px 0 0 0; padding-left: 20px; } li { margin-bottom: 6px; } .footer { margin-top: 25px; border-top: 1px solid #cccccc; padding-top: 10px; font-size: 11px; color: #777777; text-align: right; }</style></head><body><div class="main_page"><div class="header"><h1>NixelOS Default Page</h1><p class="tagline">It works!</p></div><p>This is the default welcome page used to test the correct operation of the NixelOS HTTP daemon after installation on systems.</p><div class="columns"><div class="col"><div class="section-box"><h2>Configuration Overview</h2><p>NixelOS\'s default web server document root directory layout is structured as follows:</p><ul><li><code>/var/www/index.html</code> - The default landing page.</li><li><code>/etc/quark.cfg</code> - Global daemon configuration.</li><li><code>/var/log/quark.log</code> - request log.</li><li><code>/var/log/httpd/error.log</code> - Server diagnostic log.</li></ul></div></div><div class="col"><div class="section-box"><h2>Replacing This File</h2><p>You should replace this file (located at <code>/var/www/index.html</code>) before continuing to operate your HTTP server.</p><p>If you are a normal user of this website and don\'t know what this page is about, this probably means the site is currently unavailable due to maintenance.</p></div></div></div><div class="footer">QuarkServe</div></div></body></html>')
         fs = work / "ext4.img"
         with fs.open("wb") as stream:
             stream.truncate(sectors * 512)
-        subprocess.run(["mke2fs", "-q", "-t", "ext4", "-F", "-b", "4096", "-I", "256",
-                        "-N", "2048", "-m", "0", "-O", "none,extent,filetype,sparse_super,large_file",
-                        "-E", "lazy_itable_init=0,root_owner=0:0", "-L", "NIXELOS",
-                        "-d", str(root), str(fs)], check=True)
-        commands = work / "metadata"
-        # Normalize every inode's ownership independently of the build host.
-        metadata = ["set_inode_field / mode 040755"]
+        entries = {}
         for path in sorted(root.rglob("*")):
             name = path.relative_to(root).as_posix()
-            owner, mode = directories.get(name, (1000 if name.startswith("var/www/") or
-                                                 name == "var/log/quark.log" else 0,
-                                                 0o755 if path.suffix == ".bin" else 0o644))
-            if name == "etc/time.cfg":
-                mode = 0o777
-            kind = 0o40000 if path.is_dir() else 0o100000
-            metadata += [f'set_inode_field "/{name}" uid {owner}',
-                         f'set_inode_field "/{name}" gid {owner}',
-                         f'set_inode_field "/{name}" mode 0{kind | mode:o}']
-        metadata += ["set_inode_field /lost+found uid 0", "set_inode_field /lost+found gid 0"]
-        commands.write_text("\n".join(metadata) + "\n")
-        subprocess.run(["debugfs", "-w", "-f", str(commands), str(fs)],
-                       check=True, stdout=subprocess.DEVNULL)
+            entries[name] = inode_metadata(path, name, directories)
+        if missing:
+            from tools.ext4_builder import build_ext4
+            build_ext4(root, entries, fs, sectors)
+        else:
+            subprocess.run(["mke2fs", "-q", "-t", "ext4", "-F", "-b", "4096", "-I", "256",
+                            "-N", "2048", "-m", "0", "-O", "none,extent,filetype,sparse_super,large_file",
+                            "-E", "lazy_itable_init=0,root_owner=0:0", "-L", "NIXELOS",
+                            "-d", str(root), str(fs)], check=True)
+            commands = work / "metadata"
+            # Normalize every inode's ownership independently of the build host.
+            metadata = ["set_inode_field / mode 040755"]
+            for name, (owner, mode) in entries.items():
+                metadata += [f'set_inode_field "/{name}" uid {owner}',
+                             f'set_inode_field "/{name}" gid {owner}',
+                             f'set_inode_field "/{name}" mode 0{mode:o}']
+            metadata += ["set_inode_field /lost+found uid 0", "set_inode_field /lost+found gid 0"]
+            commands.write_bytes(("\n".join(metadata) + "\n").encode("utf-8"))
+            subprocess.run(["debugfs", "-w", "-f", str(commands), str(fs)],
+                           check=True, stdout=subprocess.DEVNULL)
         disk[FILESYSTEM_LBA * 512:] = fs.read_bytes()
     Path(output).write_bytes(disk)
     print(f"[SUCCESS] Wrote bootable ext4 disk to {output}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "disk.img")
+    try:
+        import argparse
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("output", nargs="?", default="disk.img")
+        parser.add_argument("-nogui", "--nogui", action="store_true",
+                            help="omit WM and DM component manifests")
+        args = parser.parse_args()
+        main(args.output, nogui=args.nogui)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(f"Image creation failed: {error}")

@@ -5,9 +5,16 @@
  */
 #include "mutex.h"
 #include "fs.h"
+#include "emergency.h"
 #include "users.h"
+#include "crypto/entropy.h"
 #include "drivers/ata.h"
+#include "drivers/nvme.h"
+#include "drivers/ahci.h"
+#include "drivers/usb/mass_storage.h"
 #include "drivers/serial.h"
+#include "drivers/delay.h"
+#include "hal/usb.h"
 
 #define BLOCK_SIZE 4096u
 #define INODE_SIZE 256u
@@ -17,9 +24,32 @@
 #define KIND 0170000u
 #define ROOT_INO 2u
 
-static uint8_t super[1024], group[BLOCK_SIZE], io[BLOCK_SIZE], bitmap[BLOCK_SIZE];
-static uint32_t base, blocks, inodes, inode_table, block_bitmap, inode_bitmap;
-static uint8_t ready, io_failed;
+enum { STORAGE_ATA, STORAGE_NVME, STORAGE_USB, STORAGE_AHCI };
+enum { NVME_DISK = ATA_DRIVE_COUNT + USB_MSC_COUNT, AHCI_FIRST_DISK = NVME_DISK + 1 };
+_Static_assert(FS_DISK_COUNT == AHCI_FIRST_DISK + 32, "block device count");
+typedef struct {
+    uint8_t v_super[1024], v_group[BLOCK_SIZE];
+    uint32_t v_base, v_blocks, v_inodes, v_inode_table, v_block_bitmap, v_inode_bitmap;
+    uint8_t v_ready, v_io_failed, v_storage_kind;
+    unsigned disk, partition, parent_volume;
+    uint32_t media_generation, covered_inode, parent_inode, sector_count;
+    char target[FS_MAX_PATH];
+} volume_t;
+static volume_t volumes[FS_MAX_MOUNTS];
+static volume_t* active_volume=&volumes[0];
+/* Filesystem operations hold filesystem_mutex while using this context. */
+#define super (active_volume->v_super)
+#define group (active_volume->v_group)
+#define base (active_volume->v_base)
+#define blocks (active_volume->v_blocks)
+#define inodes (active_volume->v_inodes)
+#define inode_table (active_volume->v_inode_table)
+#define block_bitmap (active_volume->v_block_bitmap)
+#define inode_bitmap (active_volume->v_inode_bitmap)
+#define ready (active_volume->v_ready)
+#define io_failed (active_volume->v_io_failed)
+#define storage_kind (active_volume->v_storage_kind)
+static uint8_t io[BLOCK_SIZE], bitmap[BLOCK_SIZE];
 static volatile uint32_t change_generation;
 typedef struct { uint8_t raw[INODE_SIZE]; } inode_t;
 typedef struct { uint32_t block, offset, ino; } dir_location_t;
@@ -45,19 +75,86 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
     }
     return 1;
 }
+
+static int select_storage(unsigned disk) {
+    active_volume->disk = disk;
+
+    if (disk >= AHCI_FIRST_DISK && disk < FS_DISK_COUNT) {
+        storage_kind = STORAGE_AHCI;
+        return ahci_get_sector_count(disk - AHCI_FIRST_DISK) != 0;
+    }
+
+    if (disk < ATA_DRIVE_COUNT) {
+        storage_kind = STORAGE_ATA; 
+        return ata_select_drive(disk);
+    }
+    if (disk < ATA_DRIVE_COUNT + USB_MSC_COUNT) {
+        uint32_t capacity;
+        storage_kind = STORAGE_USB;
+        return usb_msc_info(disk - ATA_DRIVE_COUNT, &capacity, &active_volume->media_generation) &&
+               usb_msc_select_media(disk - ATA_DRIVE_COUNT, active_volume->media_generation);
+    }
+    storage_kind = STORAGE_NVME; 
+    return disk == NVME_DISK && nvme_is_ready();
+}
+static uint32_t storage_capacity(void) {
+    if (storage_kind == STORAGE_ATA) return ata_get_sector_count();
+    if (storage_kind == STORAGE_NVME) return nvme_get_sector_count();
+    if (storage_kind == STORAGE_AHCI) {
+        uint64_t sectors = ahci_get_sector_count(active_volume->disk - AHCI_FIRST_DISK);
+        return sectors <= 0xffffffffu ? (uint32_t)sectors : 0xffffffffu;
+    }
+    uint32_t sectors, generation;
+    return usb_msc_info(active_volume->disk - ATA_DRIVE_COUNT, &sectors, &generation) &&
+        generation == active_volume->media_generation ? sectors : 0;
+}
+static int select_volume_media(void) {
+    if (storage_kind == STORAGE_AHCI)
+        return ahci_is_drive_available(active_volume->disk - AHCI_FIRST_DISK);
+    if (storage_kind == STORAGE_ATA) return ata_select_drive(active_volume->disk);
+    if (storage_kind == STORAGE_USB)
+        return usb_msc_select_media(active_volume->disk - ATA_DRIVE_COUNT, active_volume->media_generation);
+    return nvme_is_ready();
+}
+static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
+    if (!select_volume_media()) return 0;
+    if (storage_kind == STORAGE_AHCI) {
+        return ahci_read(active_volume->disk - AHCI_FIRST_DISK, lba, count, buf) == 0;
+    }
+    if (storage_kind == STORAGE_USB) return usb_msc_read(lba, count, buf);
+    if (storage_kind == STORAGE_NVME) {
+        return nvme_read_sectors(lba, count, buf);
+    }
+    return ata_read_sectors(lba, count, buf);
+}
+
+static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf) {
+    if (!select_volume_media()) return 0;
+    if (storage_kind == STORAGE_AHCI) {
+        return ahci_write(active_volume->disk - AHCI_FIRST_DISK, lba, count, buf) == 0;
+    }
+    if (storage_kind == STORAGE_USB) return usb_msc_write(lba, count, buf);
+    if (storage_kind == STORAGE_NVME) {
+        return nvme_write_sectors(lba, count, buf);
+    }
+    return ata_write_sectors(lba, count, buf);
+}
+
 static int read_block(uint32_t n, uint8_t* data) {
-    int ok=n<blocks && ata_read_sectors(base+n*8, 8, data);
-    if (!ok) io_failed=1;
+    int ok = n < blocks && storage_read_sectors(base + n * 8, 8, data);
+    if (!ok) io_failed = 1;
     return ok;
 }
+
 static int write_block(uint32_t n, const uint8_t* data) {
-    int ok=n<blocks && ata_write_sectors(base+n*8, 8, data);
-    if (!ok) io_failed=1;
+    int ok = n < blocks && storage_write_sectors(base + n * 8, 8, data);
+    if (!ok) io_failed = 1;
     return ok;
 }
+
 static int write_super(void) {
-    int ok=ata_write_sectors(base+2, 2, super);
-    if (!ok) io_failed=1;
+    int ok = storage_write_sectors(base + 2, 2, super);
+    if (!ok) io_failed = 1;
     return ok;
 }
 static int sync_counts(void) {
@@ -158,6 +255,7 @@ static int find_entry(const inode_t* dir, const char* name, dir_location_t* loc)
 }
 /* Walk directories under search permissions. Also handles /, . and ... */
 static int resolve(const char* path, uint32_t* result) {
+    active_volume=&volumes[0];
     if (!ready || !path) return 0;
     unsigned pos=0;
     while (path[pos] && pos<FS_MAX_PATH) pos++;
@@ -175,14 +273,26 @@ static int resolve(const char* path, uint32_t* result) {
         part[n]=0;
         inode_t dir; dir_location_t loc;
         if (!read_inode(current, &dir) || !is_dir(&dir) ||
-            !allowed(&dir, FS_ACCESS_EXEC) || find_entry(&dir, part, &loc)!=1) return 0;
+            !allowed(&dir, FS_ACCESS_EXEC)) return 0;
+        if (current==ROOT_INO && active_volume!=&volumes[0] &&
+            n==2 && part[0]=='.' && part[1]=='.') {
+            current=active_volume->parent_inode;
+            active_volume=&volumes[active_volume->parent_volume];
+            continue;
+        }
+        if (find_entry(&dir, part, &loc)!=1) return 0;
         current=loc.ino;
+        for (unsigned m=1; m<FS_MAX_MOUNTS; m++) {
+            volume_t* v=&volumes[m];
+            if (v->v_ready && v->parent_volume==(unsigned)(active_volume-volumes) &&
+                v->covered_inode==current) { active_volume=v; current=ROOT_INO; break; }
+        }
     }
     *result=current;
     return 1;
 }
 static int parent_of(const char* path, uint32_t* parent, char* name) {
-    if (!ready || !path) return 0;
+    if (!path) return 0;
     unsigned n=0; int slash=-1;
     while (path[n]) {
         if (n>=FS_MAX_PATH-1) return 0;
@@ -360,26 +470,10 @@ int fs_chdir(const char* path) {
     copy(current_task->cwd,canonical,end+1); return 1;
 }
 uint32_t fs_generation(void) { return change_generation; }
-static void mount_boot_disk(const volatile uint8_t* boot) {
-    ready=0;
-    if (boot[510]!=0x55 || boot[511]!=0xaa || boot[450]!=0x83) {
-        debug_print("[ext4] Invalid boot disk handoff.\n"); return;
-    }
-    unsigned found=ATA_DRIVE_COUNT;
-    for (unsigned d=0; d<ATA_DRIVE_COUNT; d++) {
-        if (!ata_select_drive(d) || !ata_read_sectors(0,1,io)) continue;
-        unsigned i=0; while (i<512 && io[i]==boot[i]) i++;
-        if (i!=512) continue;
-        if (found!=ATA_DRIVE_COUNT) {
-            ata_select_drive(ATA_DRIVE_COUNT);
-            debug_print("[ext4] Ambiguous boot disk; mount refused.\n"); return;
-        }
-        found=d;
-    }
-    if (found==ATA_DRIVE_COUNT || !ata_select_drive(found) || !ata_read_sectors(0,1,io)) return;
-    base=u32(io+454); uint32_t sectors=u32(io+458);
-    if (!base || sectors<16 || sectors>0x0fffffffu || base>0x0fffffffu-sectors ||
-        !ata_read_sectors(base+2,2,super)) return;
+static void load_volume(uint32_t start, uint32_t sectors) {
+    ready=0; io_failed=0; base=start; active_volume->sector_count=sectors;
+    if (sectors<16 || sectors>0x0fffffffu || base>0x0fffffffu-sectors ||
+        !storage_read_sectors(base+2,2,super)) return;
     blocks=u32(super+4); inodes=u32(super);
     /* Only the feature profile we can safely update is writable. */
     if (u16(super+56)!=0xef53 || u16(super+58)!=1 || u32(super+24)!=2 ||
@@ -388,7 +482,9 @@ static void mount_boot_disk(const volatile uint8_t* boot) {
         !blocks || blocks>32768 || blocks>sectors/8 || blocks>u32(super+32) ||
         !inodes || inodes>32768 || inodes!=u32(super+40) || u32(super+84)<11 ||
         u32(super+84)>inodes || !read_block(1,group)) {
-        debug_print("[ext4] Unsupported or dirty filesystem; use mkext4.py / e2fsck.\n"); return;
+        debug_print("[ext4] Unsupported or dirty filesystem; use mkext4.py / e2fsck.\n"); 
+        emergency_panic("EXT4 DRVIER PANIC", "Unsupported or dirty filesystem");
+        return;
     }
     block_bitmap=u32(group); inode_bitmap=u32(group+4); inode_table=u32(group+8);
     if (block_bitmap<2 || block_bitmap>=blocks || inode_bitmap<2 || inode_bitmap>=blocks ||
@@ -400,13 +496,397 @@ static void mount_boot_disk(const volatile uint8_t* boot) {
     ready=1; change_generation++;
     debug_print("[ext4] Mounted successfully!\n");
 }
+static void mount_boot_disk(const volatile uint8_t* boot) {
+    ready=0;
+    if (boot[510]!=0x55 || boot[511]!=0xaa || boot[450]!=0x83) {
+        debug_print("[ext4] Invalid boot disk handoff.\n"); return;
+    }
+    const unsigned total = FS_DISK_COUNT;
+    unsigned found=total;
+    unsigned retries=0;
+probe_boot_disk:
+    for (unsigned d=0; d<total; d++) {
+        if (!select_storage(d)) continue;
+        if (!storage_read_sectors(0,1,io)) continue;
+        unsigned i=0; while (i<512 && io[i]==boot[i]) i++;
+        if (i!=512) continue;
+        if (found!=total) {
+            debug_print("[ext4] Ambiguous boot disk; mount refused.\n"); return;
+        }
+        found=d;
+    }
+    if (found==total) {
+        /* Enumeration and SCSI readiness can fail transiently after firmware
+         * hands over USB. Retry before giving up on the boot volume; never
+         * substitute an unrelated internal disk for it. */
+        if (retries++<5) {
+            driver_delay_us(100000);
+            usb_poll();
+            goto probe_boot_disk;
+        }
+        debug_print("[ext4] Boot disk unavailable after USB discovery retries.\n");
+        return;
+    }
+    if (!select_storage(found)) return;
+    if (!storage_read_sectors(0,1,io)) return;
+    active_volume->partition=1;
+    copy(active_volume->target,"/",2);
+    load_volume(u32(io+454),u32(io+458));
+}
+
 void fs_init(void) {
     MUTEX_GUARD(filesystem_mutex);
-    ready=0;
-    if (*(const volatile uint32_t*)0x6000!=0x5642584e) {
-        debug_print("[ext4] Boot disk handoff unavailable.\n"); return;
+    zero(volumes,sizeof(volumes));
+    active_volume=&volumes[0];
+    copy(active_volume->target,"/",2);
+
+    debug_print("[FS] Initializing filesystem...\n");
+    /* Stage 2 preserves the BIOS boot disk MBR independently of BIOS drive IDs. */
+    if (*(volatile uint32_t*)0x6000 == 0x5642584e) {
+        mount_boot_disk((const volatile uint8_t*)0x6004);
+        return;
     }
-    mount_boot_disk((const volatile uint8_t*)0x6004);
+    storage_kind=STORAGE_ATA;
+
+    if (select_storage(NVME_DISK)) {
+        debug_print("[FS] Probing NVMe namespace for ext4...\n");
+        static const uint32_t partitions[] = { 0, 500, 2048 };
+
+        for (unsigned p = 0; p < sizeof(partitions)/sizeof(partitions[0]); p++) {
+            uint32_t cand_base = partitions[p];
+
+            /* Read ext4 superblock at offset 1024 bytes (cand_base + 2 sectors) */
+            if (storage_read_sectors(cand_base + 2, 2, super)) {
+                uint16_t magic = u16(super + 56);
+                if (magic == 0xEF53) {
+                    active_volume->partition=cand_base ? 1 : 0;
+                    load_volume(cand_base,nvme_get_sector_count()-cand_base);
+                    if (ready) return;
+                }
+            }
+        }
+        debug_print("[FS] No ext4 found on NVMe, falling back to ATA...\n");
+    }
+
+    storage_kind=STORAGE_ATA;
+    unsigned found = ATA_DRIVE_COUNT;
+    for (unsigned d = 0; d < ATA_DRIVE_COUNT; d++) {
+        if (!select_storage(d) || !storage_read_sectors(0, 1, io)) continue;
+        if (found != ATA_DRIVE_COUNT) {
+            ata_select_drive(ATA_DRIVE_COUNT);
+            return;
+        }
+        found = d;
+    }
+    if (found == ATA_DRIVE_COUNT || !select_storage(found)) return;
+
+    static const uint32_t ata_partitions[] = { 0, 500, 2048 };
+    for (unsigned p = 0; p < sizeof(ata_partitions)/sizeof(ata_partitions[0]); p++) {
+        uint32_t cand_base = ata_partitions[p];
+        if (ata_read_sectors(cand_base + 2, 2, super)) {
+            if (u16(super + 56) == 0xEF53) {
+                active_volume->partition=cand_base ? 1 : 0;
+                load_volume(cand_base,ata_get_sector_count()-cand_base);
+                if (ready) return;
+            }
+        }
+    }
+}
+static void device_name(unsigned disk, unsigned partition, char* out) {
+    const char* prefix = disk >= AHCI_FIRST_DISK ? "sata" :
+        disk == NVME_DISK ? "nvme" : disk < ATA_DRIVE_COUNT ? "ata" : "usb";
+    unsigned index = disk < ATA_DRIVE_COUNT ? disk :
+        disk < NVME_DISK ? disk - ATA_DRIVE_COUNT :
+        disk >= AHCI_FIRST_DISK ? disk - AHCI_FIRST_DISK : 0;
+    unsigned n = length(prefix); copy(out, prefix, n);
+    if (index >= 10) out[n++] = '0' + index / 10;
+    out[n++] = '0' + index % 10;
+    if (partition) { out[n++] = 'p'; out[n++] = '0' + partition; }
+    out[n] = 0;
+}
+static int parse_device(const char* name, unsigned* disk, unsigned* partition) {
+    if (!name) return 0;
+    if (!length(name)) return 0;
+    if (length(name)>5 && name[0]=='/' && name[1]=='d' && name[2]=='e' && name[3]=='v' && name[4]=='/') name+=5;
+    char candidate[20];
+    for (unsigned d=0; d<FS_DISK_COUNT; d++) for (unsigned p=0; p<=4; p++) {
+        device_name(d,p,candidate);
+        if (same_name((const uint8_t*)candidate,name,length(candidate))) {
+            *disk=d; *partition=p; return 1;
+        }
+    }
+    return 0;
+}
+int fs_block_info(unsigned disk, fs_block_info_t* out) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (!out || disk>=FS_DISK_COUNT) return 0;
+    /* Discovery must not change a mounted volume's selected disk or metadata. */
+    volume_t probe; zero(&probe,sizeof(probe));
+    volume_t* saved=active_volume; active_volume=&probe;
+    int ok=select_storage(disk);
+    zero(out,sizeof(*out));
+    if (ok) {
+        device_name(disk,0,out->name);
+        out->sectors = storage_capacity();
+        ok = out->sectors != 0;
+        if (ok && storage_read_sectors(0,1,io) && io[510]==0x55 && io[511]==0xaa) {
+            for (unsigned p=0; p<4; p++) {
+                const uint8_t* entry=io+446+p*16;
+                uint32_t start=u32(entry+8), count=u32(entry+12);
+                if (entry[4] && start && start<out->sectors && count && count<=out->sectors-start)
+                    out->partitions[p]=(fs_partition_t){start,count,entry[4]};
+            }
+        }
+    }
+    active_volume=saved;
+    return ok;
+}
+
+static int disk_is_mounted(unsigned disk) {
+    for (unsigned m = 0; m < FS_MAX_MOUNTS; m++)
+        if (volumes[m].v_ready && volumes[m].disk == disk) return 1;
+    return 0;
+}
+
+const char* fs_install_probe(const char* name, fs_install_target_t* target) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (user_uid() != USER_ROOT) return "root required";
+    unsigned disk, partition;
+    if (!parse_device(name, &disk, &partition) || partition)
+        return "select a whole disk from lsblk";
+    if (disk_is_mounted(disk)) return "the boot disk or a mounted disk cannot be overwritten";
+
+    volume_t probe = {0};
+    volume_t* saved = active_volume;
+    active_volume = &probe;
+    uint32_t sectors = select_storage(disk) ? storage_capacity() : 0;
+    int ok = sectors && storage_read_sectors(0, 1, target->mbr);
+    active_volume = saved;
+    if (!ok) return "disk unavailable or unsupported";
+    target->disk = disk;
+    target->sectors = sectors;
+    target->media_generation = probe.media_generation;
+    device_name(disk, 0, target->name);
+    return 0;
+}
+
+#define INSTALL_CHUNK_SECTORS 64u
+/* AHCI uses these kernel buffers directly for DMA. The filesystem lock also
+ * pins the source filesystem and excludes mounts and writes during the copy. */
+static uint8_t install_data[INSTALL_CHUNK_SECTORS * 512u] __attribute__((aligned(512)));
+static uint8_t install_check[sizeof(install_data)] __attribute__((aligned(512)));
+
+static int bytes_match(const uint8_t* a, const uint8_t* b, unsigned n) {
+    for (unsigned i = 0; i < n; i++) if (a[i] != b[i]) return 0;
+    return 1;
+}
+
+static int install_read(const char* image, uint32_t lba, uint8_t count, uint8_t* data) {
+    active_volume = &volumes[0];
+    return image ? fs_read_file_at(image, data, count * 512u, lba * 512u) == (int)(count * 512u)
+                 : storage_read_sectors(lba, count, data);
+}
+
+static int install_write(uint32_t lba, uint8_t count, const uint8_t* data) {
+    return storage_write_sectors(lba, count, data) &&
+        (storage_kind != STORAGE_AHCI || ahci_flush(active_volume->disk - AHCI_FIRST_DISK) == 0) &&
+        storage_read_sectors(lba, count, install_check) &&
+        bytes_match(data, install_check, count * 512u);
+}
+
+const char* fs_install_nixel(const fs_install_target_t* target, const char* image) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (user_uid() != USER_ROOT) return "root required";
+    if (target->disk >= FS_DISK_COUNT || disk_is_mounted(target->disk))
+        return "the boot disk or a mounted disk cannot be overwritten";
+
+    volume_t probe = {0};
+    volume_t* saved = active_volume;
+    const char* error = "source is not a supported bootable Nixel disk image";
+    uint8_t boot_mbr[512] __attribute__((aligned(512)));
+    uint8_t incomplete_mbr[512] __attribute__((aligned(512)));
+    uint32_t sectors = volumes[0].v_ready ? volumes[0].v_base + volumes[0].sector_count : 0;
+    if (image) {
+        int bytes = fs_read_file(image, 0, 0);
+        sectors = bytes > 0 && bytes % 512 == 0 ? (uint32_t)bytes / 512u : 0;
+    }
+    if (!sectors || !install_read(image, 0, 1, boot_mbr) ||
+        !bytes_match(boot_mbr + 3, (const uint8_t*)"NIXEL   ", 8) ||
+        u16(boot_mbr + 510) != 0xaa55 || boot_mbr[446] != 0x80 || boot_mbr[450] != 0x83)
+        goto done;
+    for (unsigned partition = 1; partition < 4; partition++)
+        if (boot_mbr[450 + partition * 16]) goto done;
+    uint32_t start = u32(boot_mbr + 454), count = u32(boot_mbr + 458);
+    if (start < 9 || start >= sectors || count < 8 || count > sectors - start ||
+        !install_read(image, start + 2, 2, install_data) ||
+        u16(install_data + 56) != 0xef53 || u16(install_data + 58) != 1 ||
+        u32(install_data + 24) != 2 || !u32(install_data + 4) ||
+        u32(install_data + 4) > count / 8)
+        goto done;
+    sectors = start + count;
+    if (sectors > target->sectors) {
+        error = "target is too small for this image";
+        goto done;
+    }
+
+    /* Stage 2 matches the BIOS MBR against every disk, so each copy needs its
+     * own disk identity even when its source will remain attached. */
+    uint32_t original_id = u32(boot_mbr + 440);
+    if (kernel_entropy(0, boot_mbr + 440, 4) != 0) {
+        error = "could not generate a unique disk identity";
+        goto done;
+    }
+    uint32_t id = u32(boot_mbr + 440);
+    if (!id || id == original_id || id == u32(target->mbr + 440)) {
+        error = "disk identity collision; retry the installation";
+        goto done;
+    }
+
+    active_volume = &probe;
+    if (!select_storage(target->disk) || probe.media_generation != target->media_generation ||
+        storage_capacity() != target->sectors || !storage_read_sectors(0, 1, install_check) ||
+        !bytes_match(target->mbr, install_check, 512)) {
+        error = "target changed or was disconnected; select it again";
+        goto done;
+    }
+    if (current_task && current_task->terminate_requested) {
+        error = "installation cancelled";
+        goto done;
+    }
+
+    /* Publish the boot sector last. Interrupted copies cannot masquerade as
+     * valid Nixel boot disks. The marker also detects changed target media. */
+    zero(incomplete_mbr, sizeof(incomplete_mbr));
+    w32(incomplete_mbr + 440, id);
+    error = "target write or read-back failed; disk may be incomplete";
+    if (!install_write(0, 1, incomplete_mbr)) goto done;
+    for (uint32_t lba = 1; lba < sectors;) {
+        if (current_task && current_task->terminate_requested) {
+            error = "installation cancelled; target is incomplete";
+            goto done;
+        }
+        uint32_t remaining = sectors - lba;
+        uint8_t chunk = remaining > INSTALL_CHUNK_SECTORS ? INSTALL_CHUNK_SECTORS : remaining;
+        if (!install_read(image, lba, chunk, install_data)) {
+            error = "source read failed; target is incomplete";
+            goto done;
+        }
+        active_volume = &probe;
+        if (!storage_read_sectors(0, 1, install_check) ||
+            !bytes_match(incomplete_mbr, install_check, 512) ||
+            !install_write(lba, chunk, install_data)) goto done;
+        lba += chunk;
+        task_yield();
+    }
+    if (current_task && current_task->terminate_requested) {
+        error = "installation cancelled; target is incomplete";
+        goto done;
+    }
+    if (!storage_read_sectors(0, 1, install_check) ||
+        !bytes_match(incomplete_mbr, install_check, 512) ||
+        !install_write(0, 1, boot_mbr)) goto done;
+    change_generation++;
+    error = 0;
+done:
+    active_volume = saved;
+    return error;
+}
+
+int fs_mount_snapshot(fs_mount_info_t out[FS_MAX_MOUNTS]) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (!out) return 0;
+    unsigned count=0;
+    for (unsigned m=0; m<FS_MAX_MOUNTS; m++) if (volumes[m].v_ready) {
+        device_name(volumes[m].disk,volumes[m].partition,out[count].device);
+        copy(out[count].target,volumes[m].target,length(volumes[m].target)+1);
+        count++;
+    }
+    return count;
+}
+/* Canonical spelling for mount-table display and cwd busy checks. Resolve the
+ * original path first so dot components cannot bypass directory permissions. */
+static int mount_path(const char* path, char* out) {
+    if (!path || path[0]!='/') return 0;
+    unsigned pos=0, end=1; out[0]='/';
+    while (path[pos]) {
+        if (path[pos]=='/') { pos++; continue; }
+        unsigned start=pos; while (path[pos] && path[pos]!='/') pos++;
+        unsigned n=pos-start;
+        if (n==1 && path[start]=='.') continue;
+        if (n==2 && path[start]=='.' && path[start+1]=='.') {
+            while (end>1 && out[end-1]!='/') end--;
+            if (end>1) end--;
+        } else {
+            if (end>1) out[end++]='/';
+            if (end+n>=FS_MAX_PATH) return 0;
+            copy(out+end,path+start,n); end+=n;
+        }
+    }
+    out[end]=0; return 1;
+}
+const char* fs_mount(const char* device, const char* target) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (user_uid()!=USER_ROOT) return "root required";
+    unsigned disk, partition;
+    if (!parse_device(device,&disk,&partition)) return "unknown device name (see lsblk)";
+    uint32_t covered, parent; inode_t dir; char canonical[FS_MAX_PATH], name[FS_MAX_FILENAME];
+    if (!resolve(target,&covered) || !read_inode(covered,&dir) || !is_dir(&dir) ||
+        !mount_path(target,canonical)) return "mount point must be an existing absolute directory";
+    unsigned parent_volume=active_volume-volumes;
+    if (covered==ROOT_INO) return "mount point is already mounted";
+    if (task_cwd_in_use(canonical)) return "mount point is a task's working directory";
+    unsigned target_length=length(canonical);
+    for (unsigned m=1; m<FS_MAX_MOUNTS; m++) if (volumes[m].v_ready &&
+        (unsigned)length(volumes[m].target)>target_length && volumes[m].target[target_length]=='/') {
+        char prefix[FS_MAX_PATH]; copy(prefix,volumes[m].target,target_length); prefix[target_length]=0;
+        if (same_name((const uint8_t*)prefix,canonical,target_length)) return "mount point contains another mount";
+    }
+    if (!parent_of(canonical,&parent,name) || (unsigned)(active_volume-volumes)!=parent_volume)
+        return "invalid mount point";
+    unsigned slot=1;
+    while (slot<FS_MAX_MOUNTS && volumes[slot].v_ready) slot++;
+    if (slot==FS_MAX_MOUNTS) return "mount table is full";
+    fs_block_info_t info;
+    if (!fs_block_info(disk,&info)) return "device unavailable";
+    uint32_t start=0, count=info.sectors;
+    if (partition) {
+        fs_partition_t* p=&info.partitions[partition-1];
+        if (p->type!=0x83) return "partition is not a Linux ext4 partition";
+        start=p->start; count=p->sectors;
+    }
+    for (unsigned m=0; m<FS_MAX_MOUNTS; m++) if (volumes[m].v_ready &&
+        volumes[m].disk==disk && start<volumes[m].v_base+volumes[m].sector_count &&
+        volumes[m].v_base<start+count)
+        return "device or overlapping volume is already mounted";
+    volume_t* saved=active_volume;
+    active_volume=&volumes[slot]; zero(active_volume,sizeof(*active_volume));
+    if (select_storage(disk)) load_volume(start,count);
+    int ok=ready;
+    if (ok) {
+        active_volume->partition=partition; active_volume->parent_volume=parent_volume;
+        active_volume->covered_inode=covered; active_volume->parent_inode=parent;
+        copy(active_volume->target,canonical,length(canonical)+1);
+    }
+    active_volume=saved;
+    return ok ? 0 : "unsupported, dirty, or unreadable ext4 filesystem";
+}
+const char* fs_unmount(const char* target) {
+    MUTEX_GUARD(filesystem_mutex);
+    if (user_uid()!=USER_ROOT) return "root required";
+    char canonical[FS_MAX_PATH];
+    if (!mount_path(target,canonical)) return "use an absolute mount point";
+    unsigned slot=FS_MAX_MOUNTS;
+    for (unsigned m=0; m<FS_MAX_MOUNTS; m++) if (volumes[m].v_ready &&
+        same_name((const uint8_t*)volumes[m].target,canonical,length(volumes[m].target))) { slot=m; break; }
+    if (slot==FS_MAX_MOUNTS) return "path is not mounted";
+    if (!slot) return "cannot unmount the root filesystem";
+    for (unsigned m=1; m<FS_MAX_MOUNTS; m++)
+        if (volumes[m].v_ready && volumes[m].parent_volume==slot) return "volume has child mounts";
+    if (task_cwd_in_use(volumes[slot].target)) return "volume is a task's working directory; cd out first";
+    /* Every mutation is synchronous; a failed write leaves the dirty flag set.
+     * Do not mark such a filesystem clean when detaching it. */
+    volumes[slot].v_ready=0; change_generation++; active_volume=&volumes[0];
+    return 0;
 }
 int fs_stat(const char* path, fs_stat_t* out) {
     MUTEX_GUARD(filesystem_mutex);

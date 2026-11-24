@@ -6,7 +6,8 @@
 #include "../terminal/terminal.h"
 #include "../../../kernel/drivers/display/font.h"
 #include "../../../kernel/users.h"
-#include "../../../kernel/drivers/power.h"
+#include "../dialog/shutdown.h"
+#include "../../services/audio/system_sound.h"
 
 static os_api_t* s_api = 0;
 static uint8_t s_open = 0;
@@ -190,7 +191,7 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
                 case START_ACTION_NETWORK: settings_open(1); break;
                 case START_ITEM_TERMINAL:
                     if (terminal_launch() < 0 && s_api && s_api->windows.show_info_dialog)
-                        s_api->windows.show_info_dialog("Cannot launch", "No free terminal, window, or process slots.");
+                        system_sound_error(), s_api->windows.show_info_dialog("Cannot launch", "No free terminal, window, or process slots.");
                     break;
                 case START_ITEM_FILES:
                     if (s_api && s_api->shell.launch_app) s_api->shell.launch_app("files.bin", "");
@@ -202,9 +203,9 @@ int start_menu_handle_mouse(int32_t mouse_x, int32_t mouse_y, uint8_t click_down
                     break;
                 case START_ACTION_LOGOFF:
                 case START_ACTION_SHUTDOWN:
-                    if (s_api && s_api->shell.launch_app) {
-                        s_api->shell.launch_app("shutdlg.bin", "");
-                    }
+                    if (s_api && shutdown_dialog_open() < 0 &&
+                        s_api->windows.show_info_dialog)
+                        system_sound_error(), s_api->windows.show_info_dialog("Cannot launch", "Unable to start shutdown dialog.");
                     break;
             }
             return 1;

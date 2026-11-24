@@ -8,12 +8,16 @@
 #include "memory_api.h"
 #include "audio_api.h"
 
+/* Sensitive calls return this value without performing the operation when
+ * the calling task is not root. Other failures retain their existing -1 ABI. */
+#define SYS_ERR_PERMISSION (-2)
+
 /* i386 ABI: call number in EAX, arguments in EBX/ECX/EDX, result in EAX. */
 enum {
     SYS_WRITE = 1,     /* EBX: buffer, ECX: length; returns bytes written or -1 */
     SYS_GET_TICKS = 2, /* returns the timer tick count */
     SYS_EXIT = 3,      /* EBX: process status; does not return */
-    SYS_SHUTDOWN = 4,  /* requests a kernel-managed system shutdown */
+    SYS_SHUTDOWN = 4,  /* UID 0: shutdown; SYS_ERR_PERMISSION otherwise */
     SYS_NET_DIAGNOSTICS = 5, /* EBX: output snapshot; returns ready state */
     SYS_DNS_RESOLVE = 6,     /* EBX: hostname, ECX: writable IPv4 output */
     SYS_PING_START = 7,      /* EBX: destination IPv4, ECX: sequence; returns request handle */
@@ -26,13 +30,13 @@ enum {
     SYS_WINDOW_CLOSE = 14,   /* EBX: handle */
     SYS_FS_READ = 15,        /* EBX: filename, ECX: writable buffer or null, EDX: capacity (max 16 KiB; zero queries size) */
     SYS_FS_LIST = 16,        /* EBX: writable [FS_MAX_FILES][FS_MAX_FILENAME] output */
-    SYS_FLOPPY_INIT = 17,    /* initializes the floppy controller */
-    SYS_FLOPPY_READ = 18,    /* EBX: LBA, ECX: sector count (1..18), EDX: writable data */
-    SYS_FLOPPY_TEST_WRITE = 19, /* writes the built-in test pattern to reserved LBA 2879 */
+    SYS_FLOPPY_INIT = 17,    /* UID 0: initializes the raw floppy controller */
+    SYS_FLOPPY_READ = 18,    /* UID 0: EBX LBA, ECX count (1..18), EDX writable data */
+    SYS_FLOPPY_TEST_WRITE = 19, /* UID 0: writes the test pattern to reserved LBA 2879 */
     SYS_FS_WRITE = 20,       /* EBX: filename, ECX: readable buffer, EDX: length (max 64 KiB) */
     SYS_TCP_CONNECT = 21,    /* EBX: remote IPv4, ECX: remote port; returns owned socket handle */
     SYS_TCP_STATE = 22,      /* EBX: socket handle; returns USER_TCP_* state */
-    SYS_TCP_SEND = 23,       /* EBX: handle, ECX: readable data, EDX: length (max 1448) */
+    SYS_TCP_SEND = 23,       /* EBX: handle, ECX: data, EDX: length <=1448; 1 queued, 0 retry/error */
     SYS_TCP_READ = 24,       /* EBX: handle, ECX: writable output, EDX: capacity */
     SYS_TCP_CLOSE = 25,      /* EBX: socket handle */
     SYS_DNS_START = 26,      /* EBX: hostname; returns resolver handle */
@@ -44,9 +48,9 @@ enum {
     SYS_AUDIO_SHUTDOWN = 32, /* closes only the caller audio stream */
     SYS_FS_READ_AT = 33, /* as FS_READ, with byte offset in ESI */
     SYS_AUDIO_DRAIN = 34, /* finish all queued samples; rejects further writes */
-    SYS_REBOOT = 35, /* requests a kernel managed reboot */
+    SYS_REBOOT = 35, /* UID 0: reboot; SYS_ERR_PERMISSION otherwise */
     SYS_DETACH = 36, /* reparent current process to PID 0; releases terminal wait */
-    SYS_SERIAL_LOG_READ = 44, /* EBX: output, ECX: capacity (1..256), EDX: cursor */
+    SYS_SERIAL_LOG_READ = 44, /* UID 0: EBX output, ECX capacity (1..256), EDX cursor */
     SYS_AUDIO_DEVICE_NAME = 43, /* EBX: output string, ECX: capacity (1..64); selected HAL device */
     SYS_AUDIO_OPL = 42, /* legacy hardware OPL returns -1; synthesize PCM into the shared mixer */
     SYS_GETPID = 37,
@@ -54,7 +58,7 @@ enum {
     SYS_FS_LIST_DIR = 39, /* EBX: path, ECX: names, EDX: FS type bits */
     SYS_FILE_PICK_RESULT = 41, /* EBX: request token, ECX: selected path (empty cancels) */
     SYS_APP_LAUNCH = 40, /* EBX: executable path, ECX: arguments; starts detached */
-    SYS_TCP_LISTEN = 45, /* EBX: local port; returns listener handle or -1 */
+    SYS_TCP_LISTEN = 45, /* EBX: local port; ports below 1024 require UID 0 */
     SYS_TCP_ACCEPT = 46, /* EBX: listener handle; returns new connected socket handle, 0 if pending, -1 on err */
     SYS_TCP_REMOTE_IP = 47, /* EBX: socket handle; returns uint32_t IPv4 address */
     SYS_RTC_TIME = 48, /* EBX: writable user_rtc_time_t* */
@@ -62,8 +66,31 @@ enum {
     SYS_FS_GETCWD = 51, /* EBX: output path, ECX: capacity */
     SYS_FS_HOME = 52, /* EBX: output home path, ECX: capacity */
     SYS_FS_MKDIR = 53, /* EBX: directory path; 0 success, -1 failure */
-    SYS_PCI_DEVICE_INFO = 49 /* EBX: index, ECX: writable user_pci_device_t* */
+    SYS_FS_DELETE = 54, /* EBX: path; filesystem permissions apply */
+    SYS_PCI_DEVICE_INFO = 49, /* EBX: index, ECX: writable user_pci_device_t* */
+    SYS_TASK_LIST = 55,   /* EBX: writable user_task_info_t*, ECX: capacity */
+    SYS_UTC_SECONDS = 57, /* signed UTC Unix seconds; -1 outside the supported range */
+    SYS_MEMORY_ALLOC = 58, /* EBX: bytes; returns zero-filled page-aligned pointer or null */
+    SYS_MEMORY_FREE = 59, /* EBX: original allocation base; returns 0 or -1 */
+    SYS_FS_CHMOD = 60, /* EBX path, ECX mode (0777); owner or root only */
+    SYS_TASK_KILL = 56    /* EBX: PID to kill */
 };
+
+/* Allocations are isolated per app and reclaimed automatically on app teardown.
+ * Sizes round up to 4 KiB. Free requires the returned base, not an interior pointer.
+ * These mappings can be passed to all syscalls that accept user buffers. */
+static inline void* sys_memory_alloc(uint32_t bytes) {
+    uint32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_MEMORY_ALLOC), "b"(bytes) : "memory", "cc");
+    return (void*)result;
+}
+static inline int32_t sys_memory_free(void* allocation) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_MEMORY_FREE), "b"(allocation) : "memory", "cc");
+    return result;
+}
 
 static inline int32_t sys_fs_getcwd(char* out, uint32_t capacity) {
     int32_t result;
@@ -75,6 +102,20 @@ static inline int32_t sys_fs_home(char* out, uint32_t capacity) {
     int32_t result;
     __asm__ volatile ("int $0x80" : "=a"(result)
         : "0"(SYS_FS_HOME), "b"(out), "c"(capacity) : "memory", "cc");
+    return result;
+}
+static inline int32_t sys_fs_chmod(const char* path, uint32_t mode) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+                      : "0"((uint32_t)SYS_FS_CHMOD), "b"(path), "c"(mode)
+                      : "edx", "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_fs_delete(const char* path) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_FS_DELETE), "b"(path) : "memory", "cc");
     return result;
 }
 static inline int32_t sys_fs_mkdir(const char* path) {
@@ -343,20 +384,20 @@ static inline void sys_exit(uint32_t status) {
     for (;;) { }
 }
 
-static inline void sys_shutdown(void) {
-    __asm__ volatile ("int $0x80"
-                      :
-                      : "a"((uint32_t)SYS_SHUTDOWN)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    for (;;) { }
+static inline int32_t sys_shutdown(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"((uint32_t)SYS_SHUTDOWN)
+        : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
 }
 
-static inline void sys_reboot(void) {
-    __asm__ volatile ("int $0x80"
-                      :
-                      : "a"((uint32_t)SYS_REBOOT)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    for (;;) { }
+static inline int32_t sys_reboot(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"((uint32_t)SYS_REBOOT)
+        : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
 }
 
 static inline int32_t sys_net_diagnostics(net_diagnostics_t* diagnostics) {
@@ -504,6 +545,13 @@ typedef struct {
     uint16_t year;
 } user_rtc_time_t;
 
+static inline int32_t sys_utc_seconds(void) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"((uint32_t)SYS_UTC_SECONDS) : "ebx", "ecx", "edx", "memory", "cc");
+    return result;
+}
+
 static inline int32_t sys_rtc_time(user_rtc_time_t* out) {
     int32_t result;
     __asm__ volatile ("int $0x80"
@@ -526,6 +574,27 @@ static inline int32_t sys_pci_device_info(uint32_t index, user_pci_device_t* out
                       : "=a"(result)
                       : "0"((uint32_t)SYS_PCI_DEVICE_INFO), "b"(index), "c"(out)
                       : "edx", "memory", "cc");
+    return result;
+}
+
+typedef struct {
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t state;
+    char name[16];
+} user_task_info_t;
+
+static inline int32_t sys_task_list(user_task_info_t* out, uint32_t capacity) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_TASK_LIST), "b"(out), "c"(capacity) : "memory", "cc");
+    return result;
+}
+
+static inline int32_t sys_task_kill(uint32_t pid) {
+    int32_t result;
+    __asm__ volatile ("int $0x80" : "=a"(result)
+        : "0"(SYS_TASK_KILL), "b"(pid) : "memory", "cc");
     return result;
 }
 

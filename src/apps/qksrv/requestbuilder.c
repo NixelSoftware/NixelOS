@@ -58,9 +58,17 @@ const char* get_mime_type(const char* path) {
 
 void send_all(uint32_t socket, const void* data, uint32_t len) {
     const uint8_t* ptr = (const uint8_t*)data;
+    uint32_t progress = sys_get_ticks();
     while (len > 0) {
         uint32_t chunk = len > 1448u ? 1448u : len;
-        if (!sys_tcp_send(socket, ptr, chunk)) break;
+        if (!sys_tcp_send(socket, ptr, chunk)) {
+            int32_t state = sys_tcp_state(socket);
+            if ((state != USER_TCP_ESTABLISHED && state != USER_TCP_CLOSE_WAIT) ||
+                (uint32_t)(sys_get_ticks() - progress) >= 3000u) return;
+            sys_yield();
+            continue;
+        }
+        progress = sys_get_ticks();
         ptr += chunk;
         len -= chunk;
         sys_yield();

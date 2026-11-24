@@ -1,3 +1,5 @@
+#include "../../../kernel/mutex.h"
+#include "../../../kernel/drivers/display/font.h"
 #include "univers85ebo_16.h"
 #include "../../../kernel/drivers/display.h"
 
@@ -480,6 +482,8 @@ const uint16_t univers85ebo_16[95][16] = {
 };
 
 void font1_draw_char_16(int32_t x, int32_t y, char c, uint32_t color) {
+    MUTEX_GUARD(kernel_mutex);
+    text_rect_t bounds = font_text_bounds();
     if ((uint8_t)c < UNIVERS16_START_CHAR || (uint8_t)c > UNIVERS16_END_CHAR) {
         c = '?';
     }
@@ -487,13 +491,13 @@ void font1_draw_char_16(int32_t x, int32_t y, char c, uint32_t color) {
     uint32_t* buf = display_get_backbuffer();
 
     for (int row = 0; row < 16; row++) {
-        int py = y + row;
-        if (py < 0 || py >= SCREEN_HEIGHT) continue;
+        int64_t py = (int64_t)y + row;
+        if (py < 0 || py >= SCREEN_HEIGHT || py < bounds.top || py >= bounds.bottom) continue;
 
         uint16_t row_bits = univers85ebo_16[index][row];
         for (int col = 0; col < 16; col++) {
-            int px = x + col;
-            if (px < 0 || px >= SCREEN_WIDTH) continue;
+            int64_t px = (int64_t)x + col;
+            if (px < 0 || px >= SCREEN_WIDTH || px < bounds.left || px >= bounds.right) continue;
 
             if (row_bits & (0x8000 >> col)) {
                 buf[py * SCREEN_WIDTH + px] = color;
@@ -502,16 +506,10 @@ void font1_draw_char_16(int32_t x, int32_t y, char c, uint32_t color) {
     }
 }
 
+static void string_glyph_16(void* context, int32_t x, int32_t y, uint8_t ch) {
+    font1_draw_char_16(x, y, (char)ch, *(uint32_t*)context);
+}
 void font1_draw_string_16(int32_t x, int32_t y, const char* str, uint32_t color) {
-    int cur_x = x;
-    while (*str) {
-        if (*str == '\n') {
-            cur_x = x;
-            y += 18;
-        } else {
-            font1_draw_char_16(cur_x, y, *str, color);
-            cur_x += 16;
-        }
-        str++;
-    }
+    MUTEX_GUARD(kernel_mutex);
+    text_layout_draw(str, ~0u, x, y, font_text_bounds(), 16, 16, 18, string_glyph_16, &color);
 }

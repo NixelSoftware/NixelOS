@@ -21,6 +21,22 @@ released under CC0-1.0. The original source and license are retained in
 
 ---
 
+## TLS and Cryptography
+
+The TLS client library uses wolfSSL and wolfCrypt by wolfSSL Inc. and
+contributors. Upstream sources and GPLv3/commercial licensing notices are
+retained in `src/system/libraries/tls/vendor/wolfssl/`.
+
+---
+
+## Browser Trust Roots
+
+Nixplorer embeds Mozilla CA certificates from the `ca-certificates` package.
+The pinned bundle, source manifest, and MPL-2.0/package notices are retained
+in `src/apps/nixplorer/engine/platform/certificates/`.
+
+---
+
 ## Browser Engine
 
 Thanks to **Dajo Frey**, creator of [Netzhaut](https://github.com/dajofrey/Netzhaut),
@@ -28,6 +44,14 @@ for his C browser engine and the work used in developing Nixplorer. Nixplorer
 incorporates HTML character-reference and CSS colour data from the project.
 Original copyright (C) 2022 Dajo Frey and GNU LGPL notices are retained with
 those contributions.
+
+---
+
+## Intel Wi-Fi Driver
+
+The native Intel 3945 bring-up code adapts Intel Corporation's Linux iwlegacy
+driver. Source attribution, GPL-2.0-only licensing, and the original dual-license
+register headers are retained in `src/kernel/net/wireless/intel/iwlegacy/`.
 
 ---
 

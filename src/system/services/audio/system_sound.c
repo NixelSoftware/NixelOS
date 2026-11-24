@@ -16,12 +16,12 @@ static uint32_t offset, remaining, pending, pending_offset, last_progress;
  * Protect publication, resampler position, pending buffers and frame lifetime. */
 static mutex_t startup_mutex;
 static int active, owns_audio;
+static volatile int error_requested;
 static const char* startup_stage = "idle";
 static void startup_log(const char* text) {
     debug_audio_print("[STARTUP AUDIO] "); debug_audio_print(text); debug_audio_print("\n");
 }
 static uint32_t channels, bits, frame_size;
-static uint32_t source_rate, output_rate, source_frames, source_index, fraction;
 
 static uint32_t le32(const uint8_t* p) {
     return p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
@@ -61,12 +61,16 @@ static int startup_read(void* destination, uint32_t length, uint32_t file_offset
     return 1;
 }
 
-void system_sound_start(void) {
+static void system_sound_play(const char* path, int interrupt) {
     MUTEX_GUARD(startup_mutex);
-    if (active) return;
-    startup_log("starting /usr/share/nixel/audio/startup.wav");
+    if (active) {
+        if (!interrupt) return;
+        startup_stage = "interrupted by system sound";
+        stop();
+    }
+    startup_log(path);
     startup_stage = "file lookup/size failed";
-    int size = fs_read_file("/usr/share/nixel/audio/startup.wav", 0, 0);
+    int size = fs_read_file(path, 0, 0);
     debug_audio_print("[STARTUP AUDIO] source bytes="); debug_audio_hex((uint32_t)size); debug_audio_print("\n");
     if (size < 12 || (uint32_t)size > STARTUP_FILE_MAX) { startup_log(startup_stage); return; }
     startup_stage = "RAM allocation or source preload failed";
@@ -80,7 +84,7 @@ void system_sound_start(void) {
         uint32_t file_offset = i * PAGE_SIZE;
         uint32_t amount = startup_size - file_offset;
         if (amount > PAGE_SIZE) amount = PAGE_SIZE;
-        if (fs_read_file_at("/usr/share/nixel/audio/startup.wav", (uint8_t*)startup_frames[i],
+        if (fs_read_file_at(path, (uint8_t*)startup_frames[i],
                             amount, file_offset) != (int)amount) {
             stop();
             return;
@@ -124,34 +128,27 @@ void system_sound_start(void) {
     }
     if (!rate || !remaining || (remaining % frame_size)) { stop(); return; }
     startup_stage = "mixer stream initialization failed";
-    source_rate = output_rate = rate;
-    user_audio_format_t format = {rate, 2, USER_AUDIO_S16_LE};
+    user_audio_format_t format = {rate, channels, bits == 8 ? USER_AUDIO_U8 : USER_AUDIO_S16_LE};
     if (audio_mixer_open(0, &format) < 0) { stop(); return; }
     owns_audio = 1;
-    source_frames = remaining / frame_size;
-    source_index = fraction = pending = pending_offset = 0;
-    debug_audio_print("[STARTUP AUDIO] output rate="); debug_audio_hex(output_rate);
+    debug_audio_print("[STARTUP AUDIO] source rate="); debug_audio_hex(rate);
     debug_audio_print(" device="); debug_audio_print(audio_device_name(audio_device_selected())); debug_audio_print("\n");
     active = 1;
     last_progress = frame_timer;
     /* Only the audio worker pumps the stream, after publication is complete. */
 }
 
-static int startup_sample(uint32_t index, int32_t* left, int32_t* right) {
-    uint8_t raw[4];
-    if (!startup_read(raw, frame_size, offset + index * frame_size)) return 0;
-    *left = bits == 8 ? ((int32_t)raw[0] - 128) * 256 : (int16_t)le16(raw);
-    *right = channels == 1 ? *left :
-        (bits == 8 ? ((int32_t)raw[1] - 128) * 256 : (int16_t)le16(raw + 2));
-    return 1;
+void system_sound_start(void) {
+    system_sound_play("/usr/share/nixel/audio/startup.wav", 0);
 }
-static int32_t startup_interpolate(int32_t a, int32_t b) {
-    int32_t delta = b - a;
-    uint32_t magnitude = delta < 0 ? (uint32_t)-delta : (uint32_t)delta;
-    int32_t step = (int32_t)(magnitude * fraction / output_rate);
-    return a + (delta < 0 ? -step : step);
+
+void system_sound_error(void) {
+    __atomic_store_n(&error_requested, 1, __ATOMIC_RELEASE);
 }
+
 void system_sound_poll(void) {
+    if (__atomic_exchange_n(&error_requested, 0, __ATOMIC_ACQ_REL))
+        system_sound_play("/usr/share/nixel/audio/BOINGEC.WAV", 1);
     MUTEX_GUARD(startup_mutex);
     if (!active) return;
     if (audio_mixer_status(0) < 0) {
@@ -160,37 +157,25 @@ void system_sound_poll(void) {
     if ((uint32_t)(frame_timer - last_progress) > 300u) {
         startup_stage = "audio queue/drain timed out after 3 seconds"; stop(); return;
     }
-    if (source_index >= source_frames && !pending) {
+    if (!remaining && !pending) {
         if (audio_mixer_drain(0) < 0) { startup_stage = "audio drain failed"; stop(); }
         else if (audio_mixer_status(0) == 0) { startup_stage = "playback completed"; stop(); }
         return;
     }
     if (!pending) {
-        /* The complete source WAV is already in RAM. Convert one bounded
-         * block, retaining the rational resampling position between calls. */
-        uint32_t frames = 0;
-        while (frames < 1024u && source_index < source_frames) {
-            int32_t a, b, c, d;
-            uint32_t next = source_index + 1 < source_frames ? source_index + 1 : source_index;
+        uint32_t capacity = sizeof(buffer) - sizeof(buffer) % frame_size;
+        pending = remaining < capacity ? remaining : capacity;
+        if (!startup_read(buffer, pending, offset)) {
             startup_stage = "cached sample read failed";
-            if (!startup_sample(source_index, &a, &b) || !startup_sample(next, &c, &d)) {
-                stop(); return;
-            }
-            uint16_t left = (uint16_t)startup_interpolate(a, c);
-            uint16_t right = (uint16_t)startup_interpolate(b, d);
-            buffer[frames * 4] = left; buffer[frames * 4 + 1] = left >> 8;
-            buffer[frames * 4 + 2] = right; buffer[frames * 4 + 3] = right >> 8;
-            fraction += source_rate;
-            source_index += fraction / output_rate;
-            fraction %= output_rate;
-            ++frames;
+            stop(); return;
         }
-        pending = frames * 4;
+        offset += pending;
+        remaining -= pending;
         pending_offset = 0;
     }
     int32_t written = audio_mixer_write(0, buffer + pending_offset, pending - pending_offset);
     if (written == 0) return;
-    if (written < 0 || (uint32_t)written > pending - pending_offset || (written & 3)) {
+    if (written < 0 || (uint32_t)written > pending - pending_offset || (uint32_t)written % frame_size) {
         startup_stage = "audio device rejected startup PCM";
         stop(); return;
     }

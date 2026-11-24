@@ -48,7 +48,7 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
     for (unsigned interim = 0; ; interim++) {
         if (interim == 5) return BROWSER_HTTP_PROTOCOL;
         unsigned end = line_end(s, n, base);
-        if (end == n) return n >= HTTP_HEADER_MAX ? BROWSER_HTTP_LIMIT : eof ? BROWSER_HTTP_PROTOCOL : 0;
+        if (end == n) return n >= HTTP_HEADER_MAX ? BROWSER_HTTP_HEADER_LIMIT : eof ? BROWSER_HTTP_PROTOCOL : 0;
         if (end - base < 12 || !(equal(s + base, 8, "http/1.1") || equal(s + base, 8, "http/1.0")) ||
             s[base + 8] != ' ' || s[base + 9] < '1' || s[base + 9] > '5' ||
             s[base + 10] < '0' || s[base + 10] > '9' || s[base + 11] < '0' || s[base + 11] > '9' ||
@@ -60,8 +60,8 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
         unsigned p = end + 2;
         for (;;) {
             end = line_end(s, n, p);
-            if (end == n) return n >= HTTP_HEADER_MAX ? BROWSER_HTTP_LIMIT : eof ? BROWSER_HTTP_PROTOCOL : 0;
-            if (end + 2 > HTTP_HEADER_MAX) return BROWSER_HTTP_LIMIT;
+            if (end == n) return n >= HTTP_HEADER_MAX ? BROWSER_HTTP_HEADER_LIMIT : eof ? BROWSER_HTTP_PROTOCOL : 0;
+            if (end + 2 > HTTP_HEADER_MAX) return BROWSER_HTTP_HEADER_LIMIT;
             if (end == p) { body = end + 2; break; }
             unsigned colon, value, limit;
             if (!header(s, p, end, &colon, &value, &limit)) return BROWSER_HTTP_PROTOCOL;
@@ -70,7 +70,7 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
                 for (unsigned i = value; i < limit; i++) {
                     if (s[i] < '0' || s[i] > '9') return BROWSER_HTTP_PROTOCOL;
                     unsigned digit = s[i] - '0';
-                    if (expected > (BROWSER_HTTP_RESPONSE_BODY_MAX - digit) / 10) return BROWSER_HTTP_LIMIT;
+                    if (expected > (BROWSER_HTTP_RESPONSE_BODY_MAX - digit) / 10) return BROWSER_HTTP_BODY_LIMIT;
                     expected = expected * 10 + digit;
                 }
             } else if (equal(s + p, colon - p, "transfer-encoding")) {
@@ -80,9 +80,9 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
                 if (!equal(s + value, limit - value, "identity")) return BROWSER_HTTP_ENCODING;
             } else if (equal(s + p, colon - p, "location")) {
                 if (has_location++) return BROWSER_HTTP_PROTOCOL;
-                if (!value_copy(out->location, sizeof(out->location), s + value, limit - value)) return BROWSER_HTTP_LIMIT;
+                if (!value_copy(out->location, sizeof(out->location), s + value, limit - value)) return BROWSER_HTTP_HEADER_LIMIT;
             } else if (equal(s + p, colon - p, "content-type")) {
-                if (!value_copy(out->content_type, sizeof(out->content_type), s + value, limit - value)) return BROWSER_HTTP_LIMIT;
+                if (!value_copy(out->content_type, sizeof(out->content_type), s + value, limit - value)) return BROWSER_HTTP_HEADER_LIMIT;
             }
             p = end + 2;
         }
@@ -97,7 +97,7 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
         if (has_length && n - body < expected) return eof ? BROWSER_HTTP_PROTOCOL : 0;
         if (!has_length && !eof) return 0;
         unsigned size = has_length ? expected : n - body;
-        if (size > BROWSER_HTTP_RESPONSE_BODY_MAX) return BROWSER_HTTP_LIMIT;
+        if (size > BROWSER_HTTP_RESPONSE_BODY_MAX) return BROWSER_HTTP_BODY_LIMIT;
         out->body_length = size; return 1;
     }
     unsigned p = body, total = 0;
@@ -106,7 +106,7 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
         if (end == n) return eof ? BROWSER_HTTP_PROTOCOL : 0;
         while (p < end && hex(s[p]) >= 0) {
             unsigned digit = (unsigned)hex(s[p++]);
-            if (size > (BROWSER_HTTP_RESPONSE_BODY_MAX - digit) / 16) return BROWSER_HTTP_LIMIT;
+            if (size > (BROWSER_HTTP_RESPONSE_BODY_MAX - digit) / 16) return BROWSER_HTTP_BODY_LIMIT;
             size = size * 16 + digit; digits++;
         }
         if (!digits || (p < end && s[p] != ';')) return BROWSER_HTTP_PROTOCOL;
@@ -117,7 +117,7 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
             for (;;) {
                 end = line_end(s, n, p);
                 if (end == n) return eof ? BROWSER_HTTP_PROTOCOL : 0;
-                if (end - trailers > HTTP_HEADER_MAX) return BROWSER_HTTP_LIMIT;
+                if (end - trailers > HTTP_HEADER_MAX) return BROWSER_HTTP_HEADER_LIMIT;
                 if (end == p) break;
                 unsigned colon, value, limit;
                 if (!header(s, p, end, &colon, &value, &limit)) return BROWSER_HTTP_PROTOCOL;
@@ -125,7 +125,7 @@ int browser_http_parse_response(unsigned char *s, unsigned n, int eof,
             }
             break;
         }
-        if (size > BROWSER_HTTP_RESPONSE_BODY_MAX - total) return BROWSER_HTTP_LIMIT;
+        if (size > BROWSER_HTTP_RESPONSE_BODY_MAX - total) return BROWSER_HTTP_BODY_LIMIT;
         if (size > n - p || n - p - size < 2) return eof ? BROWSER_HTTP_PROTOCOL : 0;
         if (s[p + size] != '\r' || s[p + size + 1] != '\n') return BROWSER_HTTP_PROTOCOL;
         total += size; p += size + 2;

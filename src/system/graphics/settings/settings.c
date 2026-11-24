@@ -2,17 +2,58 @@
 #include "../../services/audio/mixer.h"
 #include "settings.h"
 #include "../wm/wm.h"
+#include "../wm/desktop_wallpaper.h"
+#include "../../../kernel/fs.h"
 #include "../wm/theme.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../../kernel/drivers/display/font.h"
 #include "../../../kernel/hal/video.h"
 #include "../../../kernel/hal/audio.h"
 #include "../../../kernel/hal/net.h"
+#include "../../../kernel/hal/wifi.h"
 #include "../../../kernel/task.h"
 #include "../../../kernel/mutex.h"
 
 static Window window;
 static int tab, mode, busy, network_action;
+static unsigned wifi_scroll, wifi_selected;
+static char wallpaper_files[2 * FS_MAX_FILES][FS_MAX_FILENAME];
+static uint8_t wallpaper_types[FS_MAX_FILES];
+static int wallpaper_count, wallpaper_index;
+static int wallpaper_name_index(const char* name) {
+    for (int i = 0; i < wallpaper_count; i++) {
+        int j = 0;
+        while (wallpaper_files[i][j] && wallpaper_files[i][j] == name[j]) j++;
+        if (!wallpaper_files[i][j] && !name[j]) return i;
+    }
+    return -1;
+}
+static void list_wallpapers(const char* path) {
+    char (*files)[FS_MAX_FILENAME] = wallpaper_files + wallpaper_count;
+    int count = fs_list_dir_types(path, files, wallpaper_types);
+    for (int i = 0; i < count; i++) {
+        char* name = files[i];
+        if ((wallpaper_types[i] & FS_ATTR_DIRECTORY) || !desktop_wallpaper_valid_name(name) ||
+            wallpaper_name_index(name) >= 0) continue;
+        if (wallpaper_files[wallpaper_count] != name) {
+            int j = 0; do { wallpaper_files[wallpaper_count][j] = name[j]; } while (name[j++]);
+        }
+        wallpaper_count++;
+    }
+}
+static void refresh_wallpapers(void) {
+    char path[FS_MAX_PATH];
+    wallpaper_count = 0;
+    if (fs_home_path(WALLPAPER_USER_DIR, path)) list_wallpapers(path);
+    list_wallpapers(WALLPAPER_SHARED_DIR);
+    wallpaper_index = wallpaper_name_index(desktop_wallpaper_name());
+    if (wallpaper_index < 0) wallpaper_index = 0;
+}
+static char wifi_password[64];
+static void clear_password(void) {
+    volatile char* p=wifi_password;
+    for(unsigned i=0;i<sizeof(wifi_password);i++) p[i]=0;
+}
 static char manual[3][16];
 static int field = -1, replace_field;
 static uint32_t saved_volume = 75;
@@ -125,6 +166,14 @@ static void set_manual_time(void) {
 }
 static void key(Window* win, char c) {
     (void)win;
+    if (tab == 5 && !busy) {
+        il_network_t network;
+        if(!sys_wifi_get_network(wifi_selected,&network) || network.security!=IL_SECURITY_WPA2_PSK) return;
+        unsigned n=0; while(wifi_password[n]) n++;
+        if(c=='\b' || c==127) { if(n) wifi_password[n-1]=0; }
+        else if(c>=32 && c<=126 && n<63) { wifi_password[n]=c; wifi_password[n+1]=0; }
+        request_redraw(); return;
+    }
     if (tab == 3) {
         if (c == '\t') { field = (field + 1) % 3; replace_field = 1; }
         else if (c == '\r' || c == '\n') { if (field == 1) set_manual_time(); else apply_time(); }
@@ -156,7 +205,7 @@ static void draw(Window* win) {
     (void)win;
     display_fill_rect(window.x + 2, window.y + 23, window.w - 4, window.h - 25, COLOR_SURFACE);
     button(16, 36, 104, "Display", tab == 0);
-    button(128, 36, 104, "Network", tab == 1);
+    button(128, 36, 104, "Network", tab == 1 || tab == 4 || tab == 5);
     button(240, 36, 104, "Sound", tab == 2);
     button(352, 36, 108, "Time", tab == 3);
     if (tab == 0) {
@@ -172,6 +221,10 @@ static void draw(Window* win) {
              "This display could not apply the mode." : state == 2 ? "Resolution applied." :
              video_can_set_resolution() ? "Choose a mode and click Apply." :
              "Firmware mode: resolution switching unavailable.", COLOR_TEXT_MUTED);
+        text(20, 278, "Wallpaper", COLOR_TEXT_PRIMARY);
+        button(20, 306, 40, "<", 0);
+        button(72, 306, 220, wallpaper_count ? wallpaper_files[wallpaper_index] : "No BMP images", 0);
+        button(304, 306, 40, ">", 0); button(356, 306, 104, "Apply", 0);
     } else if (tab == 1) {
         const char* name = 0; sys_net_get_device_info(0, 0, &name);
         text(20, 88, name ? name : "No network adapter", COLOR_TEXT_PRIMARY);
@@ -191,6 +244,52 @@ static void draw(Window* win) {
         button(20, 276, 140, "Enable", 0); button(172, 276, 140, "Disable", 0);
         button(324, 276, 136, "Renew DHCP", 0);
         button(20, 310, 200, "Apply manual settings", 0);
+        button(232, 310, 228, "Wi-Fi settings", 0);
+    } else if (tab == 5) {
+        il_network_t network;
+        text(20,88,"Connect to Wi-Fi",COLOR_TEXT_PRIMARY);
+        if(sys_wifi_get_network(wifi_selected,&network)) {
+            char name[33];
+            for(unsigned i=0;i<network.ssid_length;i++) name[i]=network.ssid[i]>=32 && network.ssid[i]<127 ? network.ssid[i] : '?';
+            name[network.ssid_length]=0; text(20,124,name,COLOR_TEXT_PRIMARY);
+            if(network.security==IL_SECURITY_WPA2_PSK) {
+                text(20,164,"Password",COLOR_TEXT_MUTED);
+                display_fill_rect(window.x+20,window.y+192,440,28,COLOR_MODERN_BG);
+                char masked[40]; unsigned n=0;
+                while(n<39 && wifi_password[n]) { masked[n]='*'; n++; }
+                masked[n]=0; text(28,199,masked,COLOR_TEXT_PRIMARY);
+            } else text(20,164,"Open network",COLOR_TEXT_MUTED);
+        }
+        button(20,276,212,"Connect",0); button(244,276,216,"Back",0);
+    } else if (tab == 4) {
+        text(20, 88, "Wi-Fi", COLOR_TEXT_PRIMARY);
+        text(20, 120, sys_wifi_status_text(), COLOR_TEXT_MUTED);
+        unsigned count = sys_wifi_network_count();
+        if (wifi_scroll >= count) wifi_scroll = 0;
+        if (!count) text(20, 156, "Scan to find nearby networks.", COLOR_TEXT_MUTED);
+        for (unsigned i = 0; i < 4 && wifi_scroll + i < count; i++) {
+            il_network_t network;
+            if (!sys_wifi_get_network(wifi_scroll + i,&network)) continue;
+            char name[33];
+            unsigned n = network.ssid_length;
+            for (unsigned j = 0; j < n; j++) name[j] = network.ssid[j] >= 32 && network.ssid[j] < 127 ? network.ssid[j] : '?';
+            name[n] = 0;
+            text(20, 156 + (int)i * 24, n ? name : "Hidden network", COLOR_TEXT_PRIMARY);
+            text(300, 156 + (int)i * 24, network.security == IL_SECURITY_OPEN ? "Open" :
+                network.security == IL_SECURITY_WPA2_PSK ? "WPA2" : "Protected", COLOR_TEXT_MUTED);
+        }
+        if (count > 4) {
+            button(20, 244, 104, "Previous", 0);
+            char summary[32], *p = number(summary,count);
+            const char* suffix = " networks";
+            while (*suffix) *p++ = *suffix++;
+            *p = 0; text(172, 252, summary, COLOR_TEXT_MUTED);
+            button(356, 244, 104, "Next", 0);
+        }
+        button(20, 276, 212, "Detect adapter", 0);
+        button(244, 276, 216, "Scan networks", 0);
+        button(20, 310, 212, "Network settings", 0);
+        if(sys_wifi_is_connected()) button(244,310,216,"Disconnect",0);
     } else if (tab == 3) {
         text(20, 82, time_sync_status(), COLOR_TEXT_PRIMARY);
         button(20,104,280,time_sync_enabled() ? "Automatic sync: enabled" : "Automatic sync: disabled",time_sync_enabled());
@@ -223,7 +322,18 @@ static void draw(Window* win) {
 }
 static void network_worker(void* arg) {
     (void)arg;
-    if (network_action == 1) {
+    if (network_action == 6) {
+        unsigned length=0; while(wifi_password[length]) length++;
+        const char* result=sys_wifi_connect(wifi_selected,(const uint8_t*)wifi_password,length);
+        MUTEX_GUARD(kernel_mutex);
+        clear_password(); set_message(result); tab=4;
+    } else if (network_action == 7) sys_wifi_disconnect();
+    else if (network_action == 4) sys_wifi_probe();
+    else if (network_action == 5) {
+        const char* result = sys_wifi_scan();
+        MUTEX_GUARD(kernel_mutex);
+        set_message(result);
+    } else if (network_action == 1) {
         if (!sys_net_is_ready() && sys_net_init(0)) sys_net_initialize_stack();
         if (sys_net_is_ready()) sys_net_configure_address();
     } else if (network_action == 2) sys_net_shutdown();
@@ -242,22 +352,60 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     (void)win;
     if (!(buttons & 1)) return;
     for (int i = 0; i < 4; i++) if (hit(x, y, 16 + i * 112, 36, 104)) {
-        tab = i; field = -1; if (tab == 3) load_time();
+        if(!busy) clear_password();
+        tab = i; field = -1; if (tab == 3) load_time(); if (tab == 0) refresh_wallpapers();
     }
     if (tab == 0) {
         if (hit(x,y,20,188,40)) mode = (mode + mode_count - 1) % mode_count;
         if (hit(x,y,304,188,40)) mode = (mode + 1) % mode_count;
         if (hit(x,y,356,188,104)) video_request_resolution(widths[mode], heights[mode]);
+        if (wallpaper_count && hit(x,y,20,306,40)) wallpaper_index = (wallpaper_index + wallpaper_count - 1) % wallpaper_count;
+        if (wallpaper_count && hit(x,y,304,306,40)) wallpaper_index = (wallpaper_index + 1) % wallpaper_count;
+        if (wallpaper_count && hit(x,y,356,306,104)) {
+            int result = desktop_wallpaper_select(wallpaper_files[wallpaper_index]);
+            set_message(result == 1 ? "Wallpaper applied." : result == 2 ?
+                "Applied, but could not save selection." : "Could not load this BMP image.");
+        }
     } else if (tab == 1 && !busy) {
         for (int i = 0; i < 3; i++) if (hit(x,y,158,144 + i * 36,302)) {
             field = i; replace_field = 1;
         }
+        if (hit(x,y,232,310,228)) { tab = 4; field = -1; }
         if (hit(x,y,20,310,200)) apply_manual();
         int action = hit(x,y,20,276,140) ? 1 : hit(x,y,172,276,140) ? 2 : hit(x,y,324,276,136) ? 3 : 0;
         if (action) {
             network_action = action; busy = 1;
             if (task_create(network_worker, 0, "settings-net") < 0) {
                 busy = 0; set_message("Unable to start network task.");
+            }
+        }
+    } else if (tab == 5 && !busy) {
+        if(hit(x,y,244,276,216)) { clear_password(); tab=4; }
+        else if(hit(x,y,20,276,212)) {
+            network_action=6; busy=1;
+            if(task_create(network_worker,0,"settings-wifi-connect")<0) {
+                busy=0; clear_password(); set_message("Unable to start Wi-Fi task.");
+            }
+        }
+    } else if (tab == 4 && !busy) {
+        unsigned count = sys_wifi_network_count();
+        for(unsigned i=0;i<4 && wifi_scroll+i<count;i++) {
+            if(x>=20 && x<460 && y>=152+(int)i*24 && y<172+(int)i*24) {
+                il_network_t network;
+                if(sys_wifi_get_network(wifi_scroll+i,&network) && network.security!=IL_SECURITY_UNSUPPORTED) {
+                    wifi_selected=wifi_scroll+i; clear_password(); tab=5;
+                }
+            }
+        }
+        if (count > 4 && hit(x,y,20,244,104)) wifi_scroll = wifi_scroll >= 4 ? wifi_scroll - 4 : 0;
+        if (count > 4 && hit(x,y,356,244,104) && wifi_scroll + 4 < count) wifi_scroll += 4;
+        if (hit(x,y,20,310,212)) { tab = 1; load_manual(); }
+        int action = hit(x,y,20,276,212) ? 4 : hit(x,y,244,276,216) ? 5 :
+            hit(x,y,244,310,216) && sys_wifi_is_connected() ? 7 : 0;
+        if (action) {
+            network_action = action; busy = 1;
+            if (task_create(network_worker, 0, "settings-wifi") < 0) {
+                busy = 0; set_message("Unable to start Wi-Fi task.");
             }
         }
     } else if (tab == 3) {
@@ -285,7 +433,7 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
     request_redraw();
 }
 void settings_open(int initial_tab) {
-    tab = initial_tab >= 0 && initial_tab < 4 ? initial_tab : 0;
+    tab = initial_tab >= 0 && initial_tab < 5 ? initial_tab : 0;
     if (!window.title) {
         window = (Window){40, 50, 480, 390, "Settings", 1, 1, draw, key, mouse};
     }
@@ -293,11 +441,13 @@ void settings_open(int initial_tab) {
     if (mode >= mode_count) mode = 0;
     for (int i = 0; i < mode_count; i++) if (widths[i] == (uint32_t)SCREEN_WIDTH && heights[i] == (uint32_t)SCREEN_HEIGHT) mode = i;
     if (!busy) load_manual();
+    refresh_wallpapers();
     if (tab == 3) load_time();
     if (wm_register_window(&window) < 0) return;
     wm_bring_to_front(&window); request_redraw();
 }
 void settings_poll(void) {
+    if(!window.visible && !busy) clear_password();
     static uint64_t time_redraw;
     if (window.visible && tab == 3 && scheduler_clock() >= time_redraw) {
         time_redraw = scheduler_clock() + 1000000000ull; request_redraw();

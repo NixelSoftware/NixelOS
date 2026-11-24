@@ -8,12 +8,16 @@
 #include "../paging.h"
 #define SLOTS 32u
 #define BLOCK PAGE_SIZE
+#define MAX_RESTARTS 2u
+#define PCI_TCSEL 0x44u
+#define PCI_TCSEL_MASK 7u
 static uint32_t base, stream, pci, codec, afg, dac, pin;
 static uint32_t caps[256], seen[256], path[16], choice[16], depth;
 static uint32_t head, tail, queued, vol = 100, pcm_caps;
+static uint32_t ring_origin, restart_attempts;
 static int ready, opened, running, draining, failed;
 static uint16_t format;
-static uint32_t last_poll, poll_limit, prefill_started, underruns;
+static uint32_t last_poll, poll_limit, prefill_started, dma_position, last_move, empty_since, block_ticks;
 static struct { uint32_t lo, hi, length, flags; } bdl[SLOTS] __attribute__((aligned(128)));
 static int16_t* samples[SLOTS];
 static uint8_t r8(uint32_t r) { return *(volatile uint8_t*)(base+r); }
@@ -141,6 +145,13 @@ int32_t hda_probe(void) {
             }
         }
         pci_config_write16(b,s,f,4,(uint16_t)cfg(4)|6);
+        if(identity==0x284b8086u) {
+            /* Match snd-hda-intel: traffic class zero avoids playback static
+             * on some codecs. Preserve the other PCI configuration bits. */
+            uint8_t original = (uint8_t)cfg(PCI_TCSEL);
+            if(original & PCI_TCSEL_MASK)
+                pci_config_write8(b,s,f,PCI_TCSEL,original & ~PCI_TCSEL_MASK);
+        }
         w32(0x20,0); w8(0x4c,0); w8(0x5c,0);
         w32(8,r32(8)&~1u); if(wait(8,1,0)<0) return -1;
         delay(100); w32(8,r32(8)|1); if(wait(8,1,1)<0) return -1;
@@ -151,7 +162,11 @@ int32_t hda_probe(void) {
         w32(0x70,0); w32(0x74,0);
         for(codec=0;codec<15;codec++) if(present&(1u<<codec)) {
             failed=0;
-            if(find_output()==0) { ready=1; debug_audio_print("[AUDIO] Intel HD Audio (ICH6/ICH8) analog output ready\n"); return 0; }
+            if(find_output()==0) {
+                ready=1;
+                debug_audio_print("[AUDIO] Intel HD Audio (ICH6/ICH8) analog output ready\n");
+                return 0;
+            }
         }
         return -1;
     }
@@ -159,6 +174,27 @@ int32_t hda_probe(void) {
 }
 static void stop(void) { w8(stream,r8(stream)&~2u); if(wait(stream,2,0)<0) failed=1; running=0; }
 static void shutdown(void) { if(!ready) return; stop(); opened=0; queued=0; }
+static int reset_position(void) {
+    w8(stream,1); if(wait(stream,1,1)<0) return -1;
+    w8(stream,0); if(wait(stream,1,0)<0) return -1;
+    return 0;
+}
+static void program_ring(uint32_t first) {
+    ring_origin=first;
+    for(uint32_t i=0;i<SLOTS;i++) {
+        bdl[i].lo=(uint32_t)samples[(first+i)%SLOTS];
+        bdl[i].hi=0; bdl[i].length=BLOCK; bdl[i].flags=1;
+    }
+    w32(stream+0x18,(uint32_t)bdl); w32(stream+0x1c,0);
+    w32(stream+8,SLOTS*BLOCK); w16(stream+0xc,SLOTS-1); w16(stream+0x12,format);
+    w8(stream+2,0x10); w8(stream+3,0x1c);
+}
+static int reset_stream(uint32_t first) {
+    if(reset_position()<0) return -1;
+    program_ring(first);
+    return 0;
+}
+
 static int32_t init(uint32_t rate) {
     static const uint32_t rates[]={8000,11025,16000,22050,32000,44100,48000};
     static const uint16_t formats[]={0x0500,0x4300,0x0200,0x4100,0x0a00,0x4000,0};
@@ -178,50 +214,42 @@ static int32_t init(uint32_t rate) {
         }
     }
     failed=0; stop(); if(failed) return -1;
-    w8(stream,1); if(wait(stream,1,1)<0) return -1;
-    w8(stream,0); if(wait(stream,1,0)<0) return -1;
+    if(reset_position()<0) return -1;
     /* A delayed worker can still account for completions until a complete
      * cyclic ring has elapsed. One block (23 ms at 44.1 kHz) is not a fault. */
-    poll_limit=((BLOCK/4)*24000u/rate)*1000u*SLOTS;
+    block_ticks=((BLOCK/4)*24000u/rate)*1000u;
+    poll_limit=block_ticks*SLOTS;
     format=formats[i]|0x11; /* signed 16-bit, two channels */
     if(set(dac,0x200,format)<0 || set(dac,0x706,0x10)<0) return -1;
     for(i=0;i<SLOTS;i++) {
-        bdl[i].lo=(uint32_t)samples[i]; bdl[i].hi=0; bdl[i].length=BLOCK; bdl[i].flags=1;
         for(uint32_t j=0;j<BLOCK/2;j++) samples[i][j]=0;
     }
-    w32(stream+0x18,(uint32_t)bdl); w32(stream+0x1c,0);
-    w32(stream+8,SLOTS*BLOCK); w16(stream+0xc,SLOTS-1); w16(stream+0x12,format);
-    w8(stream+2,0x10); w8(stream+3,0x1c);
-    head=tail=queued=underruns=0; draining=0; opened=1; return 0;
+    program_ring(0);
+    head=tail=queued=restart_attempts=0; draining=0; opened=1; return 0;
 }
 static void start_stream(void) {
-    /* SSYNC holds link transmission while DMA fills the output FIFO. Real
-     * ICH8 needs this startup sequence even when emulators start immediately. */
-    uint32_t bit=1u<<((stream-0x80u)/0x20u);
-    uint32_t sync=r32(0x34);
-    w32(0x34,sync|bit);
+    /* SSYNC and FIFORDY coordinate simultaneous startup across streams.
+     * This driver uses a single output stream, so start it directly. */
     w8(stream+3,0x1c);
     __asm__ volatile("" ::: "memory");
     w8(stream,2);
-    uint32_t attempt;
-    for(attempt=0;attempt<1000;attempt++) {
-        uint8_t state=r8(stream+3);
-        if(state&0x18) break;
-        if(state&0x20) break; /* FIFORDY */
-        delay(10);
-    }
-    uint8_t state=r8(stream+3);
-    if(attempt==1000 || !(state&0x20) || (state&0x18)) {
+    last_poll=last_move=r32(0x30);
+    dma_position=0;
+    running=1;
+}
+static void recover_stream(void) {
+    stop();
+    if(failed || !queued) return;
+    /* The mixer has already handed off these samples. Restart from the oldest
+     * unretired block, which may replay the partial block at the stall. */
+    if(restart_attempts>=MAX_RESTARTS || reset_stream(head)<0) {
+        debug_audio_print("[HDA] DMA restart failed\n");
         failed=1;
-        stop();
-        w32(0x34,sync);
-        debug_audio_print("[HDA] Output FIFO failed to prime: status=");
-        debug_audio_hex(state);debug_audio_print("\n");
         return;
     }
-    last_poll=r32(0x30);
-    w32(0x34,sync); /* release the primed stream onto the link */
-    running=1;
+    restart_attempts++;
+    debug_audio_print("[HDA] Restarting queued DMA\n");
+    start_stream();
 }
 static void service(void) {
     if(!opened || failed) return;
@@ -233,29 +261,47 @@ static void service(void) {
         return;
     }
     uint32_t now=r32(0x30); /* WALLCLK: 24 MHz, wraps naturally. */
-    if(now-last_poll>=poll_limit) { debug_audio_print("[HDA] DMA service timeout: gap=");debug_audio_hex(now-last_poll);debug_audio_print(" limit=");debug_audio_hex(poll_limit);debug_audio_print("\n"); failed=1; stop(); return; }
+    if(now-last_poll>=poll_limit) {
+        debug_audio_print("[HDA] DMA service timeout: gap=");
+        debug_audio_hex(now-last_poll); debug_audio_print("\n");
+        recover_stream();
+        return;
+    }
     last_poll=now;
     uint8_t status=r8(stream+3);
-    if(status&0x18) { debug_audio_print("[HDA] DMA FIFO/descriptor error: status=");debug_audio_hex(status);debug_audio_print("\n"); failed=1; stop(); return; }
+    if(status&0x18) {
+        debug_audio_print("[HDA] DMA FIFO/descriptor error: status=");
+        debug_audio_hex(status); debug_audio_print("\n");
+        recover_stream();
+        return;
+    }
     uint32_t position=r32(stream+4);
     /* ICH8 can expose CBL at the end of a cyclic transfer before LPIB
      * becomes zero. This is the wrap boundary, not an out-of-range DMA. */
     if(position==SLOTS*BLOCK) position=0;
     if(position>SLOTS*BLOCK) { debug_audio_print("[HDA] Invalid DMA position: ");debug_audio_hex(position);debug_audio_print("\n"); failed=1; stop(); return; }
-    uint32_t current=position/BLOCK;
-    while(queued && head!=current) {
-        for(uint32_t j=0;j<BLOCK/2;j++) samples[head][j]=0;
-        head=(head+1)%SLOTS; queued--;
+    if(position!=dma_position) last_move=now;
+    if(queued && now-last_move>=poll_limit) {
+        debug_audio_print("[HDA] DMA position stalled\n");
+        recover_stream();
+        return;
+    }
+    uint32_t current=(ring_origin+position/BLOCK)%SLOTS;
+    uint32_t completed=(ring_origin+dma_position/BLOCK)%SLOTS;
+    dma_position=position;
+    while(queued && completed!=current) {
+        if(completed==head) {
+            for(uint32_t j=0;j<BLOCK/2;j++) samples[head][j]=0;
+            head=(head+1)%SLOTS;
+            restart_attempts=0;
+            if(!--queued) empty_since=now;
+        }
+        completed=(completed+1)%SLOTS;
     }
     w8(stream+3,4);
-    if(!queued) {
-        if(!draining) {
-            ++underruns;
-            debug_audio_print("[HDA] PCM queue underrun, count=");
-            debug_audio_hex(underruns);debug_audio_print("\n");
-        }
-        stop();
-    }
+    /* LPIB measures DMA consumption. Leave silence behind the last block
+     * while the controller/codec plays its buffered samples. */
+    if(!queued && now-empty_since>=3u*block_ticks) stop();
 }
 static int32_t write_pcm(const void* data,uint32_t length) {
     if(!opened || failed || draining || (!data && length) || (length&3)) return -1;
@@ -266,11 +312,12 @@ static int32_t write_pcm(const void* data,uint32_t length) {
     if(!running && !queued) {
         prefill_started=r32(0x30);
         /* Reset the DMA position before reusing a stopped ring. */
-        w8(stream,1); if(wait(stream,1,1)<0) { failed=1; return -1; }
-        w8(stream,0); if(wait(stream,1,0)<0) { failed=1; return -1; }
-        w32(stream+0x18,(uint32_t)bdl); w32(stream+0x1c,0);
-        w32(stream+8,SLOTS*BLOCK); w16(stream+0xc,SLOTS-1);
-        w16(stream+0x12,format); w8(stream+2,0x10); head=tail=0;
+        if(reset_stream(0)<0) { failed=1; return -1; }
+        head=tail=restart_attempts=0;
+    }
+    if(running && !queued) {
+        /* DMA owns the current block, even while playing silence. */
+        head=tail=(ring_origin+dma_position/BLOCK+1)%SLOTS;
     }
     if(length>BLOCK) length=BLOCK;
     const uint8_t* input=data;
@@ -283,10 +330,12 @@ static int32_t write_pcm(const void* data,uint32_t length) {
     if(!running && queued>=3) start_stream();
     return failed?-1:(int32_t)length;
 }
-static int32_t status(void) { service(); return !opened || failed ? -1 : queued!=0; }
+static int32_t status(void) { service(); return !opened || failed ? -1 : (queued!=0 || running); }
 static int32_t pending_frames(void) {
     service();
-    return !opened || failed ? -1 : (int32_t)(queued * (BLOCK / 4u));
+    if(!opened || failed) return -1;
+    /* Keep the last submitted frame pending until the codec drains. */
+    return queued ? (int32_t)(queued * (BLOCK / 4u)) : running;
 }
 static int32_t drain(void) { if(!opened || failed) return -1; draining=1; service(); return failed?-1:0; }
 static void volume(uint32_t v) { vol=v>100?100:v; }

@@ -13,6 +13,7 @@ void r8169_set_init_progress(void (*progress)(const char* status));
 
 uint8_t  r8169_init(void);
 uint8_t  r8169_is_ready(void);
+uint8_t  r8169_link_is_up(void);
 void     r8169_shutdown(void);
 void     r8169_poll(void);
 uint8_t  r8169_send(const uint8_t* data, uint32_t length);

@@ -20,8 +20,11 @@ void graphics_draw_button(int32_t x, int32_t y, int32_t w, int32_t h,
     if (label && *label) {
         int str_len = 0;
         while (label[str_len]) str_len++;
-        int tx = x + (w - (str_len * 8)) / 2;
-        int ty = y + (h - 8) / 2;
-        draw_string(tx, ty, label, text_col);
+        int columns = w > 12 ? (w - 12) / 8 : 0;
+        int multiline = str_len > columns;
+        for (int i = 0; i < str_len; i++) if (label[i] == '\n') multiline = 1;
+        int tx = multiline ? x + 6 : x + (w - str_len * 8) / 2;
+        int ty = multiline ? y + 4 : y + (h - 8) / 2;
+        draw_string_box(tx, ty, label, text_col, (text_rect_t){x+6, y+2, x+w-6, y+h-2});
     }
 }

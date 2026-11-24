@@ -1,3 +1,4 @@
+#include "../../../system/graphics/wm/theme.h"
 #include "../engine/platform/nixel.h"
 #include "../engine/parser/html.h"
 #include "../engine/font/font.h"
@@ -7,6 +8,7 @@
 #include "../engine/layout/flex.h"
 #include "../engine/layout/grid.h"
 #include "../engine/net/http.h"
+#include "../engine/net/url.h"
 
 #define COLOR_WIN_BG      0x00C0C0C0
 #define COLOR_DARK_GRAY   0x00808080
@@ -18,7 +20,6 @@
 #define COLOR_H2          0x00000080
 
 #define MAX_URL_LEN       512
-#define MAX_HTML_BUF      65536
 #define MAX_RENDER_LINES  128
 #define LINE_MAX_CHARS    64
 #define MAX_PAGE_IMAGES   4
@@ -42,7 +43,7 @@ typedef struct {
 typedef struct { char url[MAX_URL_LEN]; int line, start, length, anchor; } link_t;
 typedef struct {
     char name[32], value[CONTROL_VALUE_LEN], label[CONTROL_VALUE_LEN];
-    int line, start, width, form;
+    int line, start, width, form, node;
     uint8_t type, checked, disabled, visibility_hidden;
     unsigned foreground, background;
     int text_transform, bold;
@@ -96,7 +97,7 @@ static void browser_user_draw_button(int32_t x, int32_t y, int32_t width,
                                      int32_t height, const char* label,
                                      uint8_t pressed) {
     (void)browser_user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height,
-                            label, COLOR_WIN_BG, pressed, 0, 0);
+                            label, COLOR_SURFACE, pressed, 0, 0);
 }
 
 static int browser_user_png_render(const uint8_t* data, uint32_t length,
@@ -129,7 +130,7 @@ static char status_text[64] = "Ready";
 static int  scroll_y = 0;
 
 
-static uint8_t  document_body_buf[MAX_HTML_BUF];
+static void *document_body_buf;
 static uint32_t document_body_len = 0;
 
 static uint8_t  resource_body_buf[65536];
@@ -141,6 +142,8 @@ static int num_lines = 0;
 static uint8_t image_pool[MAX_PAGE_IMAGES][MAX_PNG_SIZE];
 static uint32_t image_sizes[MAX_PAGE_IMAGES];
 static int num_images = 0;
+static int image_nodes[MAX_PAGE_IMAGES];
+static int reflowing, document_valid;
 static link_t links[MAX_LINKS];
 static int num_links = 0;
 static control_t controls[MAX_CONTROLS];
@@ -164,24 +167,43 @@ static int request_append(char* output, uint32_t capacity, uint32_t* length,
     return 1;
 }
 
-static int parse_url(const char*, char*, int, char*, int);
-static int resolve_redirect(const char*, const char*, const char*, char*, int);
+
+/* Retry transport failures once over HTTP. Keep the effective URL in sync
+ * so redirects and relative resources resolve against the fallback scheme. */
+static int fallback_to_http(char *url, unsigned capacity, int result) {
+    if (!browser_url_secure(url) ||
+        (result != BROWSER_HTTP_CONNECT && result != BROWSER_HTTP_TIMEOUT &&
+         result != BROWSER_HTTP_TLS && result != BROWSER_HTTP_TLS_PLATFORM)) return 0;
+    char host[BROWSER_HTTP_HOST_MAX], path[BROWSER_HTTP_PATH_MAX];
+    char fallback[MAX_URL_LEN];
+    uint32_t used = 0;
+    if (!browser_url_parse(url, host, sizeof(host), path, sizeof(path)) ||
+        !request_append(fallback, sizeof(fallback), &used, "http://") ||
+        !request_append(fallback, sizeof(fallback), &used, host) ||
+        !request_append(fallback, sizeof(fallback), &used, path) || used >= capacity) return 0;
+    fallback[used] = 0;
+    return copy_string(url, capacity, fallback);
+}
 
 static int fetch_resource(const char* base_url, const char* resource, const char* accept,
                            uint8_t* out_buf, uint32_t max_len, uint32_t* out_len) {
     char host[MAX_URL_LEN], path[MAX_URL_LEN], target[MAX_URL_LEN];
-    if (!parse_url(base_url, host, sizeof(host), path, sizeof(path)) ||
-        !resolve_redirect(resource, host, path, target, sizeof(target))) return 0;
+    if (!browser_url_parse(base_url, host, sizeof(host), path, sizeof(path)) ||
+        !browser_url_resolve(resource, base_url, target, sizeof(target))) return 0;
     for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
-        if (!parse_url(target, host, sizeof(host), path, sizeof(path))) return 0;
+        if (!browser_url_parse(target, host, sizeof(host), path, sizeof(path))) return 0;
         resource_body_len = 0;
         browser_http_response_t response;
-        if (browser_http_request(host, path, accept, 0, 0, 0,
-                resource_body_buf, sizeof(resource_body_buf), &resource_body_len, &response) != 1) return 0;
+        int result = browser_http_request_scheme(browser_url_secure(target), host, path, accept, 0, 0, 0,
+                resource_body_buf, sizeof(resource_body_buf), &resource_body_len, &response);
+        if (fallback_to_http(target, sizeof(target), result))
+            result = browser_http_request_scheme(0, host, path, accept, 0, 0, 0,
+                resource_body_buf, sizeof(resource_body_buf), &resource_body_len, &response);
+        if (result != 1) return 0;
         int status = (int)response.status;
         if (status >= 300 && status < 400) {
             if (redirect == MAX_REDIRECTS || !response.location[0] ||
-                !resolve_redirect(response.location, host, path, target, sizeof(target))) return 0;
+                !browser_url_resolve(response.location, target, target, sizeof(target))) return 0;
             continue;
         }
         if (status < 200 || status >= 300 || resource_body_len > max_len) return 0;
@@ -220,6 +242,16 @@ static void set_status(const char* msg) {
 
 static browser_document page_document;
 static browser_stylesheet page_stylesheet;
+static int grow_page_rules(browser_stylesheet *sheet) {
+    if ((unsigned)sheet->capacity > 0x7fffffffu / (2u * sizeof(browser_css_rule))) return 0;
+    unsigned capacity = (unsigned)sheet->capacity * 2u;
+    browser_css_rule *rules = sys_memory_alloc(capacity * sizeof(*rules));
+    if (!rules) return 0;
+    for (int i = 0; i < sheet->count; i++) rules[i] = sheet->rules[i];
+    if (sheet->rules != sheet->inline_rules) sys_memory_free(sheet->rules);
+    sheet->rules = rules; sheet->capacity = (int)capacity;
+    return 1;
+}
 static browser_style node_styles[BROWSER_DOM_NODES];
 static browser_box page_boxes[BROWSER_DOM_NODES];
 static int num_boxes, layout_y, layout_right, layout_height;
@@ -272,7 +304,14 @@ static void layout_char(char ch, const browser_style* style, int indent, int anc
     if (font_size / 2 > layout_right - indent) font_size = (layout_right - indent) * 2;
     if (font_size < 8) font_size = 8;
     int advance = font_size / 2;
-    if (layout_length && (layout_length == LINE_MAX_CHARS - 1 || layout_pixels + advance > layout_right - indent)) layout_flush(0);
+    if (style->nowrap && layout_length == LINE_MAX_CHARS - 1) {
+        /* Continue long no-wrap text in another storage segment on the same row. */
+        int top = layout_y, height = layout_height;
+        indent = layout_indent + layout_pixels;
+        layout_flush(0);
+        layout_y = top; layout_height = height;
+    } else if (layout_length && (layout_length == LINE_MAX_CHARS - 1 ||
+               (!style->nowrap && layout_pixels + advance > layout_right - indent))) layout_flush(0);
     if (num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     if (!layout_length) { layout_indent = indent; layout_align = style->align; }
     if (style->line_height > layout_height) layout_height = style->line_height;
@@ -336,7 +375,7 @@ static void layout_text(const char* p, const char* end, const browser_style* sty
             const char* word = p;
             int word_length = 1;
             while (word < end && *word != ' ' && *word != '\n' && *word != '\r' && *word != '\t' && word_length < LINE_MAX_CHARS) { word_length++; word++; }
-            if (layout_pixels + (1 + word_length) * (style->font_size / 2) > layout_right - indent) layout_flush(0);
+            if (!style->nowrap && layout_pixels + (1 + word_length) * (style->font_size / 2) > layout_right - indent) layout_flush(0);
             else layout_char(' ', style, indent, anchor);
         }
         layout_char(ch, style, indent, anchor);
@@ -350,6 +389,7 @@ static void layout_control(int index, int form, const browser_style* style, int 
     if (num_controls == MAX_CONTROLS) return;
     const browser_node* node = &page_document.nodes[index];
     control_t* c = &controls[num_controls];
+    c->node = index;
     char type[24], flag[1];
     browser_node_attr(node, "type", type, sizeof(type));
     c->type = CONTROL_TEXT;
@@ -639,6 +679,17 @@ static void layout_grid_children(int index, int form, int indent, int anchor, un
     layout_y = cursor; layout_right = right;
 }
 
+static int page_image(int node, const char *src) {
+    for (int i = 0; i < num_images; i++)
+        if (image_nodes[i] == node) return i;
+    /* Resizing uses cached resources and never performs network requests. */
+    if (reflowing || num_images == MAX_PAGE_IMAGES) return -1;
+    uint32_t size;
+    if (!fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) return -1;
+    image_sizes[num_images] = size; image_nodes[num_images] = node;
+    return num_images++;
+}
+
 static void layout_node(int index, int form, int indent, int anchor, unsigned depth, int item_flags) {
     if (depth >= BROWSER_DOM_DEPTH || num_lines >= MAX_RENDER_LINES) { layout_truncated = 1; return; }
     const browser_node* node = &page_document.nodes[index];
@@ -683,12 +734,13 @@ static void layout_node(int index, int form, int indent, int anchor, unsigned de
         char src[MAX_URL_LEN], alt[LINE_MAX_CHARS];
         browser_node_attr(node, "src", src, sizeof(src));
         browser_node_attr(node, "alt", alt, sizeof(alt));
-        uint32_t size = 0;
-        if (src[0] && num_images < MAX_PAGE_IMAGES && layout_right - indent >= 8 &&
-            num_lines < MAX_RENDER_LINES && fetch_image_resource(page_base_url, src, image_pool[num_images], MAX_PNG_SIZE, &size)) {
+        int image = -1;
+        if (src[0] && layout_right - indent >= 8 && num_lines < MAX_RENDER_LINES)
+            image = page_image(index, src);
+        if (image >= 0) {
+            uint32_t size = image_sizes[image];
             render_line_t* line = &lines[num_lines++];
-            image_sizes[num_images] = size;
-            line->image_index = num_images++; line->offset = indent; line->indent = indent; line->text[0] = 0;
+            line->image_index = image; line->offset = indent; line->indent = indent; line->text[0] = 0;
             int width = 64, height = 64;
             const uint8_t* png = image_pool[line->image_index];
             if (size >= 24 && png[0] == 137 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G') {
@@ -729,27 +781,11 @@ finish:
     }
 }
 
-static void parse_and_layout_html(const char* doc, uint32_t len) {
-    num_lines = num_images = num_links = num_controls = num_forms = 0;
-    scroll_y = 0; active_control = -1; control_editing = 0;
+static void layout_document(void) {
+    num_lines = num_links = num_controls = num_forms = 0;
     layout_length = layout_pixels = layout_indent = layout_pending_space = layout_truncated = 0;
     layout_align = BROWSER_ALIGN_LEFT; page_background = COLOR_WHITE;
     num_boxes = layout_y = 0; layout_height = 12; layout_right = browser_win.w - 36;
-    copy_string(page_url, sizeof(page_url), url_input);
-    copy_string(page_base_url, sizeof(page_base_url), page_url);
-    num_stylesheets = 0; resource_unavailable = 0;
-    browser_document_parse(&page_document, doc, len);
-    for (int i = 1; i < page_document.count; i++) {
-        if (!browser_node_is(&page_document.nodes[i], "base")) continue;
-        char href[MAX_URL_LEN], host[MAX_URL_LEN], path[MAX_URL_LEN], resolved[MAX_URL_LEN];
-        if (browser_node_attr(&page_document.nodes[i], "href", href, sizeof(href))) {
-            if (parse_url(page_url, host, sizeof(host), path, sizeof(path)) &&
-                resolve_redirect(href, host, path, resolved, sizeof(resolved)) &&
-                parse_url(resolved, host, sizeof(host), path, sizeof(path))) copy_string(page_base_url, sizeof(page_base_url), resolved);
-            break;
-        }
-    }
-    browser_stylesheet_collect(&page_stylesheet, &page_document, load_stylesheet, 0);
     browser_style root = {.color = COLOR_BLACK, .background = COLOR_WHITE, .display = BROWSER_BLOCK,
                           .line_height = 12, .width = -1, .max_width = -1, .height = -1,
                           .text_alpha = 255, .background_rgb = COLOR_WHITE, .background_alpha = 255, .painted_background = COLOR_WHITE,
@@ -759,15 +795,39 @@ static void parse_and_layout_html(const char* doc, uint32_t len) {
         browser_style_compute(&page_document, i, &page_stylesheet, &node_styles[page_document.nodes[i].parent], &node_styles[i]);
     for (int node = page_document.nodes[0].first_child; node >= 0; node = page_document.nodes[node].next) layout_node(node, -1, 0, -1, 0, 0);
     layout_flush(0);
-    if (page_document.truncated || page_stylesheet.truncated) layout_truncated = 1;
+    if (page_document.truncated) layout_truncated = 1;
+}
+
+static void parse_and_layout_html(const char* doc, uint32_t len) {
+    num_images = 0;
+    scroll_y = 0; active_control = -1; control_editing = 0;
+    copy_string(page_url, sizeof(page_url), url_input);
+    copy_string(page_base_url, sizeof(page_base_url), page_url);
+    num_stylesheets = 0; resource_unavailable = 0;
+    browser_document_parse(&page_document, doc, len);
+    for (int i = 1; i < page_document.count; i++) {
+        if (!browser_node_is(&page_document.nodes[i], "base")) continue;
+        char href[MAX_URL_LEN], host[MAX_URL_LEN], path[MAX_URL_LEN], resolved[MAX_URL_LEN];
+        if (browser_node_attr(&page_document.nodes[i], "href", href, sizeof(href))) {
+            if (browser_url_parse(page_url, host, sizeof(host), path, sizeof(path)) &&
+                browser_url_resolve(href, page_url, resolved, sizeof(resolved)) &&
+                browser_url_parse(resolved, host, sizeof(host), path, sizeof(path))) copy_string(page_base_url, sizeof(page_base_url), resolved);
+            break;
+        }
+    }
+    if (page_stylesheet.rules && page_stylesheet.rules != page_stylesheet.inline_rules)
+        sys_memory_free(page_stylesheet.rules);
+    browser_stylesheet_collect_growing(&page_stylesheet, &page_document, load_stylesheet, 0, grow_page_rules);
+    document_valid = 1;
+    layout_document();
 }
 
 static void draw_sunken_box(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t bg_col) {
     browser_user_fill_rect(x, y, w, h, bg_col);
-    browser_user_fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    browser_user_fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    browser_user_fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    browser_user_fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    browser_user_fill_rect(x - 1, y - 1, w + 2, 1, COLOR_SURFACE_BORDER);
+    browser_user_fill_rect(x - 1, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
+    browser_user_fill_rect(x - 1, y + h, w + 2, 1, COLOR_SURFACE_BORDER);
+    browser_user_fill_rect(x + w, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
 }
 
 static int render_char_offset(int line, int count) {
@@ -812,6 +872,30 @@ static int browser_max_scroll(int canvas_height) {
     int maximum = layout_y - (canvas_height - 10);
     return maximum > 0 ? maximum : 0;
 }
+static void browser_resize(int width, int height) {
+    if (width == browser_win.w && height == browser_win.h) return;
+    browser_win.w = width; browser_win.h = height;
+    if (!document_valid) return;
+    control_t saved[MAX_CONTROLS];
+    int count = num_controls, selected = active_control >= 0 ? controls[active_control].node : -1;
+    for (int i = 0; i < count; i++) saved[i] = controls[i];
+    reflowing = 1;
+    layout_document();
+    reflowing = 0;
+    active_control = -1;
+    for (int i = 0; i < num_controls; i++) {
+        for (int j = 0; j < count; j++) if (controls[i].node == saved[j].node) {
+            copy_string(controls[i].value, sizeof(controls[i].value), saved[j].value);
+            controls[i].checked = saved[j].checked;
+            break;
+        }
+        if (controls[i].node == selected) active_control = i;
+    }
+    if (active_control < 0) control_editing = 0;
+    int maximum = browser_max_scroll(height - 76);
+    if (scroll_y > maximum) scroll_y = maximum;
+}
+
 static void paint_clipped(int x, int y, int width, int height, unsigned color,
                            int left, int top, int right, int bottom) {
     int end_x = x + width, end_y = y + height;
@@ -839,19 +923,19 @@ static void draw_page_boxes(int left, int top, int right, int bottom) {
 
 static void browser_draw(browser_window_t* win) {
     int32_t x = win->x;
-    int32_t y = win->y + 20; 
+    int32_t y = win->y + 22;
     int32_t w = win->w;
-    int32_t h = win->h - 20;
+    int32_t h = win->h - 22;
 
-    browser_user_fill_rect(x + 2, y, w - 4, h - 2, COLOR_WIN_BG);
+    browser_user_fill_rect(x + 2, y, w - 4, h - 2, COLOR_SURFACE);
 
     
-    browser_user_draw_string(x + 10, y + 8, "URL:", COLOR_BLACK);
+    browser_user_draw_string(x + 10, y + 8, "URL:", COLOR_TEXT_PRIMARY);
     int32_t url_x = x + 44;
     int32_t url_y = y + 4;
     int32_t url_w = w - 110;
     int32_t url_h = 20;
-    draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_WHITE);
+    draw_sunken_box(url_x, url_y, url_w, url_h, COLOR_MODERN_BG);
     char visible_url[64];
     int visible_chars = (url_w - 12) / 8;
     if (visible_chars > 62) visible_chars = 62;
@@ -859,10 +943,10 @@ static void browser_draw(browser_window_t* win) {
     int displayed = 0;
     while (url_input[url_start + displayed] && displayed < visible_chars) { visible_url[displayed] = url_input[url_start + displayed]; displayed++; }
     visible_url[displayed] = 0;
-    browser_user_draw_string(url_x + 4, url_y + 4, visible_url, COLOR_BLACK);
+    browser_user_draw_string(url_x + 4, url_y + 4, visible_url, COLOR_TEXT_PRIMARY);
 
     if (win->focused) {
-        browser_user_draw_string(url_x + 4 + ((url_cursor - url_start) * 8), url_y + 4, "_", COLOR_BLACK);
+        browser_user_draw_string(url_x + 4 + ((url_cursor - url_start) * 8), url_y + 4, "_", COLOR_TEXT_PRIMARY);
     }
 
     browser_user_draw_button(x + w - 60, y + 3, 50, 22, "Go", 0);
@@ -886,7 +970,7 @@ static void browser_draw(browser_window_t* win) {
             int img_x = canvas_x + 8 + lines[i].offset;
             int idx = lines[i].image_index;
             if (browser_user_png_render(image_pool[idx], image_sizes[idx], img_x, row_top, lines[i].image_width, lines[i].image_height) < 0)
-                browser_user_draw_string(img_x, row_top, "[Image decode failed]", COLOR_DARK_GRAY);
+                browser_user_draw_string(img_x, row_top, "[Image decode failed]", COLOR_TEXT_MUTED);
             continue;
         }
         int row_x = canvas_x + 8 + lines[i].offset;
@@ -901,6 +985,9 @@ static void browser_draw(browser_window_t* win) {
             run[stop - start] = 0;
             int size = lines[i].font_sizes[start];
             int run_x = row_x + render_char_offset(i, start), width = (stop - start) * (size / 2);
+            int visible = (canvas_x + canvas_w - 8 - run_x) / (size / 2);
+            if (visible <= 0) { start = stop; continue; }
+            if (visible < stop - start) { run[visible] = 0; width = visible * (size / 2); }
             int glyph_y = row_top + (height - size) / 2;
             paint_clipped(run_x, row_top, width, height, lines[i].backgrounds[start], canvas_x + 8, page_top, canvas_x + canvas_w - 8, page_bottom);
             if (glyph_y >= page_top && glyph_y + size <= page_bottom) {
@@ -917,8 +1004,8 @@ static void browser_draw(browser_window_t* win) {
                 if (controls[control].line == i) draw_control(&controls[control], row_x, text_y);
     }
 
-    draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_WIN_BG);
-    browser_user_draw_string(x + 14, y + h - 17, status_text, COLOR_BLACK);
+    draw_sunken_box(x + 10, y + h - 22, w - 20, 18, COLOR_SURFACE);
+    browser_user_draw_string(x + 14, y + h - 17, status_text, COLOR_TEXT_PRIMARY);
 }
 
 static int copy_string(char* dst, int max_len, const char* src) {
@@ -931,106 +1018,18 @@ static int copy_string(char* dst, int max_len, const char* src) {
     return src[len] == '\0';
 }
 
-static int starts_with(const char* text, const char* prefix) {
-    int i = 0;
-    while (prefix[i]) {
-        if (text[i] != prefix[i]) return 0;
-        i++;
-    }
-    return 1;
-}
-
-static int parse_url(const char* url, char* host, int host_max, char* path, int path_max) {
-    const char* p = url;
-    if (starts_with(p, "http://")) p += 7;
-    if (!*p || *p == '/' || host_max < 2 || path_max < 2) return 0;
-    int host_len = 0;
-    while (p[host_len] && p[host_len] != '/' && p[host_len] != '?' && p[host_len] != '#') {
-        unsigned char ch = (unsigned char)p[host_len];
-        /* The native transport currently supports DNS/IPv4 on port 80 only. */
-        if (host_len >= host_max - 1 || !((ch >= 'a' && ch <= 'z') ||
-            (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.')) return 0;
-        host[host_len] = ch >= 'A' && ch <= 'Z' ? ch + 32 : ch;
-        host_len++;
-    }
-    if (!host_len) return 0;
-    host[host_len] = 0;
-    p += host_len;
-    int used = 0;
-    if (*p != '/') path[used++] = '/';
-    while (*p && *p != '#') {
-        unsigned char ch = (unsigned char)*p++;
-        if (ch <= 32 || ch >= 127 || ch == '\\' || used >= path_max - 1) return 0;
-        path[used++] = (char)ch;
-    }
-    path[used] = 0;
-    return used > 0;
-}
-
-static int resolve_redirect(const char* location, const char* current_host,
-                            const char* current_path, char* next_url, int max_len) {
-    char combined[MAX_URL_LEN], normalized[MAX_URL_LEN];
-    const char* relative = location;
-    if (starts_with(location, "http://")) return copy_string(next_url, max_len, location);
-    if (starts_with(location, "//")) {
-        if (max_len <= 7) return 0;
-        if (!copy_string(next_url, max_len, "http://")) return 0;
-        return copy_string(next_url + 7, max_len - 7, location + 2);
-    }
-    /* Reject schemes such as https:, javascript:, data:, and mailto:. */
-    for (int i = 0; location[i] && location[i] != '/' && location[i] != '?' && location[i] != '#'; i++)
-        if (location[i] == ':') return 0;
-    int used = 0;
-    if (*relative != '/') {
-        while (current_path[used] && current_path[used] != '#' && used < MAX_URL_LEN - 1) {
-            combined[used] = current_path[used]; used++;
-        }
-        if (*relative && *relative != '#') {
-            int query = 0; while (query < used && combined[query] != '?') query++;
-            used = query;
-            if (*relative != '?') while (used > 0 && combined[used - 1] != '/') used--;
-        }
-    }
-    while (*relative && *relative != '#') {
-        if (used == MAX_URL_LEN - 1) return 0;
-        combined[used++] = *relative++;
-    }
-    combined[used] = 0;
-    if (!used) { combined[0] = '/'; combined[1] = 0; }
-    /* Normalize dot segments in the path, leaving query strings intact. */
-    int src = 0, dst = 0;
-    while (combined[src] && combined[src] != '?') {
-        if (combined[src] == '/' && combined[src + 1] == '.' &&
-            (combined[src + 2] == '/' || combined[src + 2] == '?' || !combined[src + 2])) {
-            src += 2;
-            if (!combined[src] || combined[src] == '?') normalized[dst++] = '/';
-        } else if (combined[src] == '/' && combined[src + 1] == '.' && combined[src + 2] == '.' &&
-                   (combined[src + 3] == '/' || combined[src + 3] == '?' || !combined[src + 3])) {
-            src += 3;
-            while (dst > 0 && normalized[dst - 1] != '/') dst--;
-            if (dst > 0) dst--;
-            if (!combined[src] || combined[src] == '?') normalized[dst++] = '/';
-        } else normalized[dst++] = combined[src++];
-    }
-    while (combined[src]) normalized[dst++] = combined[src++];
-    normalized[dst] = 0;
-    uint32_t url_length = 0;
-    if (!request_append(next_url, (unsigned)max_len, &url_length, "http://") ||
-        !request_append(next_url, (unsigned)max_len, &url_length, current_host) ||
-        !request_append(next_url, (unsigned)max_len, &url_length, normalized)) return 0;
-    next_url[url_length] = 0;
-    return 1;
-}
-
 static browser_http_response_t document_response;
-static int fetch_http_document(const char* host, const char* path) {
+static int fetch_http_document(const char* url, const char* host, const char* path) {
+    document_valid = 0;
+    browser_http_free(document_body_buf);
+    document_body_buf = 0;
     document_body_len = 0;
     set_status("Requesting document...");
     browser_draw(&browser_win);
     browser_user_present();
-    int result = browser_http_request(host, path, "text/html, text/plain;q=0.9, */*;q=0.1",
+    int result = browser_http_request_alloc_scheme(browser_url_secure(url), host, path, "text/html, text/plain;q=0.9, */*;q=0.1",
                           request_post, request_body, (uint32_t)request_body_len,
-                          document_body_buf, sizeof(document_body_buf), &document_body_len, &document_response);
+                          &document_body_buf, &document_body_len, &document_response);
     return result == 1 ? (int)document_response.status : result;
 }
 
@@ -1040,7 +1039,7 @@ static void browser_fetch(void) {
     char path[MAX_URL_LEN];
 
     if (!copy_string(current_url, sizeof(current_url), url_input) ||
-        !parse_url(current_url, host, sizeof(host), path, sizeof(path))) {
+        !browser_url_parse(current_url, host, sizeof(host), path, sizeof(path))) {
         set_status("Invalid URL");
         browser_draw(&browser_win);
         browser_user_present();
@@ -1053,14 +1052,41 @@ static void browser_fetch(void) {
         browser_user_present();
 
         uint8_t was_post = request_post;
-        int status = fetch_http_document(host, path);
+        int status = fetch_http_document(current_url, host, path);
+        if (fallback_to_http(current_url, sizeof(current_url), status)) {
+            copy_string(url_input, sizeof(url_input), current_url);
+            url_cursor = 0;
+            while (url_input[url_cursor]) url_cursor++;
+            status = fetch_http_document(current_url, host, path);
+        }
         request_post = 0;
         if (status < 0) {
-            set_status(status == BROWSER_HTTP_DNS ? "DNS lookup failed" :
+            set_status(status == BROWSER_HTTP_TLS_PLATFORM ? "HTTPS unavailable: hardware RNG or UTC clock required" :
+                       status == BROWSER_HTTP_TLS ? "HTTPS certificate or secure connection failed" :
+                       status == BROWSER_HTTP_DNS ? "DNS lookup failed" :
+                       status == BROWSER_HTTP_HEADER_LIMIT ? "Response headers exceed addressable size" :
+                       status == BROWSER_HTTP_BODY_LIMIT ? "Page exceeds addressable size" :
+                       status == BROWSER_HTTP_MEMORY ? "Not enough memory to load page" :
                        status == BROWSER_HTTP_LIMIT ? "HTTP response exceeds browser limit" :
                        status == BROWSER_HTTP_ENCODING ? "Unsupported HTTP encoding" :
                        status == BROWSER_HTTP_PROTOCOL ? "Invalid or incomplete HTTP response" :
                        status == BROWSER_HTTP_TIMEOUT ? "HTTP request timed out" : "HTTP request failed");
+            if (status == BROWSER_HTTP_TLS) {
+                int error = browser_http_tls_error();
+                if (error == -150 || error == -151)
+                    set_status("HTTPS certificate date invalid; check system date");
+                else {
+                    char message[80] = "HTTPS failed (TLS error ";
+                    unsigned used = 0, value = error < 0 ? (unsigned)-error : (unsigned)error;
+                    char digits[12]; unsigned count = 0;
+                    while (message[used]) used++;
+                    if (error < 0) message[used++] = '-';
+                    do { digits[count++] = '0' + value % 10; value /= 10; } while (value);
+                    while (count) message[used++] = digits[--count];
+                    message[used++] = ')'; message[used] = 0;
+                    set_status(message);
+                }
+            }
             browser_draw(&browser_win);
             browser_user_present();
             return;
@@ -1074,8 +1100,8 @@ static void browser_fetch(void) {
         if (status >= 300 && status < 400) {
             if (redirect == MAX_REDIRECTS ||
                 !document_response.location[0] ||
-                !resolve_redirect(document_response.location, host, path, current_url, sizeof(current_url)) ||
-                !parse_url(current_url, host, sizeof(host), path, sizeof(path))) {
+                !browser_url_resolve(document_response.location, current_url, current_url, sizeof(current_url)) ||
+                !browser_url_parse(current_url, host, sizeof(host), path, sizeof(path))) {
                 set_status("Redirect failed");
                 browser_draw(&browser_win);
                 browser_user_present();
@@ -1094,7 +1120,9 @@ static void browser_fetch(void) {
             return;
         }
         parse_and_layout_html((const char*)document_body_buf, document_body_len);
-        set_status(layout_truncated ? "Document loaded (page limit reached)" : resource_unavailable ? "Document loaded (some styles unavailable)" : "Document Loaded");
+        set_status(page_document.truncated ? "Document loaded (HTML structure limit reached)" :
+                   layout_truncated ? "Document loaded (layout limit reached)" :
+                   page_stylesheet.truncated ? "Document loaded (not enough memory for styles)" : resource_unavailable ? "Document loaded (some styles unavailable)" : "Document Loaded");
         browser_draw(&browser_win);
         browser_user_present();
         return;
@@ -1141,8 +1169,8 @@ static void submit_form(int control) {
         if (!form_encode(field->value)) goto too_large;
     }
     char host[MAX_URL_LEN], path[MAX_URL_LEN], target[MAX_URL_LEN];
-    if (!parse_url(forms[form].action[0] ? page_base_url : page_url, host, sizeof(host), path, sizeof(path)) ||
-        !resolve_redirect(forms[form].action, host, path, target, sizeof(target))) {
+    if (!browser_url_parse(forms[form].action[0] ? page_base_url : page_url, host, sizeof(host), path, sizeof(path)) ||
+        !browser_url_resolve(forms[form].action, forms[form].action[0] ? page_base_url : page_url, target, sizeof(target))) {
         set_status("Unsupported form URL"); return;
     }
     if (!forms[form].post) {
@@ -1210,8 +1238,8 @@ static void browser_handle_mouse(browser_window_t* win, int32_t lx, int32_t ly, 
     for (int i = 0; i < num_links; i++) {
         if (links[i].line != row || col < links[i].start || col >= links[i].start + links[i].length) continue;
         char host[MAX_URL_LEN], path[MAX_URL_LEN], next[MAX_URL_LEN];
-        if (parse_url(page_base_url, host, sizeof(host), path, sizeof(path)) &&
-            resolve_redirect(links[i].url, host, path, next, sizeof(next))) {
+        if (browser_url_parse(page_base_url, host, sizeof(host), path, sizeof(path)) &&
+            browser_url_resolve(links[i].url, page_base_url, next, sizeof(next))) {
             copy_string(url_input, sizeof(url_input), next);
             url_cursor = text_length(url_input); control_editing = 0;
             browser_fetch();
@@ -1318,6 +1346,10 @@ void user_main(const char* arguments) {
     if (created < 0) return;
     user_window_handle = (uint32_t)created;
     user_window_closed = 0;
+    user_window_draw_t resize = {0};
+    resize.operation = USER_WINDOW_RESIZABLE;
+    resize.pressed = 1;
+    (void)sys_window_draw(user_window_handle, &resize);
 
     const char* default_page = "<html><body><h1>Nixel Browser</h1><p>Enter an HTTP address above.</p></body></html>";
 
@@ -1339,6 +1371,9 @@ void user_main(const char* arguments) {
         if (available < 0 || event.type == USER_WINDOW_EVENT_CLOSE) break;
         if (!available) continue;
         if (event.type == USER_WINDOW_EVENT_REDRAW) {
+            browser_win.x = event.x; browser_win.y = event.y;
+            if (event.buttons >= 160 && event.key >= 118)
+                browser_resize((int)event.buttons, (int)event.key);
             browser_draw(&browser_win);
             browser_user_present();
         } else if (event.type == USER_WINDOW_EVENT_KEY) {

@@ -20,6 +20,10 @@ void power_shutdown(void) {
     outw(0x4004, 0x3400);
     outb(0x501, 0x00);
 
+    /* The fallback replaces the whole display even when invoked by a WM
+     * callback whose normal text scope is confined to a dialog. */
+    font_text_scope_t text_scope = font_text_scope_begin(
+        (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
     const char* shutdown_msg = "It is now safe to turn off your PC";
     int text_len = 0;
     while (shutdown_msg[text_len]) {
@@ -34,6 +38,7 @@ void power_shutdown(void) {
     font1_draw_string_16(x, y, shutdown_msg, COLOR_RED);
     font1_draw_string_16(16, y + 32, acpi_power_error(), COLOR_WHITE);
     display_blit();
+    font_text_scope_end(text_scope);
 
     __asm__ volatile (
         "cli\n\t"

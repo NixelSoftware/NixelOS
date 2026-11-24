@@ -16,7 +16,9 @@ typedef enum {
     TCP_FIN_WAIT1,
     TCP_FIN_WAIT2,
     TCP_CLOSE_WAIT,
-    TCP_TIME_WAIT
+    TCP_TIME_WAIT,
+    TCP_CLOSING,
+    TCP_LAST_ACK
 } tcp_socket_state_t;
 
 #define TCP_FLAG_FIN 0x01
@@ -34,11 +36,19 @@ typedef uint8_t (*tcp_data_handler_t)(tcp_socket_t* socket,
                                       uint16_t length);
 
 void tcp_init(void);
+/* Network worker timer, also retries delivery after application backpressure. */
+void tcp_poll(void);
 tcp_socket_t* tcp_connect(uint32_t remote_ip, uint16_t remote_port);
 tcp_socket_t* tcp_listen(uint16_t local_port);
 void tcp_bind(tcp_socket_t* socket, tcp_data_handler_t handler);
+/* Consumer freed receive capacity; retry buffered delivery and reopen window. */
+void tcp_resume(tcp_socket_t* socket);
+/* 1: copied into the bounded send queue; 0: retry after yielding, or closed.
+ * The peer may acknowledge later. Release drains accepted data before FIN. */
 uint8_t tcp_send(tcp_socket_t* socket, const uint8_t* data, uint16_t length);
 void tcp_disconnect(tcp_socket_t* socket);
+/* Drops the owner's reference; queued data and teardown remain in the kernel.
+ * The caller must stop using this pointer after release. */
 void tcp_release(tcp_socket_t* socket);
 tcp_socket_state_t tcp_get_state(const tcp_socket_t* socket);
 uint32_t tcp_get_remote_ip(const tcp_socket_t* socket);

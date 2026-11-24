@@ -10,10 +10,26 @@ static int str_equal_nocase(const char* a, const char* b, int n) {
     return 1;
 }
 
+static int send_bytes(uint32_t socket, const uint8_t* data, uint32_t length) {
+    uint32_t progress = sys_get_ticks();
+    while (length) {
+        uint32_t count = length > 1448u ? 1448u : length;
+        if (sys_tcp_send(socket, data, count) == 1) {
+            data += count; length -= count; progress = sys_get_ticks();
+        } else {
+            int32_t state = sys_tcp_state(socket);
+            if ((state != USER_TCP_ESTABLISHED && state != USER_TCP_CLOSE_WAIT) ||
+                (uint32_t)(sys_get_ticks() - progress) >= 3000u) return 0;
+        }
+        sys_yield();
+    }
+    return 1;
+}
+
 static void send_raw(uint32_t socket, const char* str) {
     uint32_t len = 0;
     while (str[len]) len++;
-    sys_tcp_send(socket, (const uint8_t*)str, len);
+    (void)send_bytes(socket, (const uint8_t*)str, len);
 }
 
 void ftp_send_response(uint32_t socket, int code, const char* msg) {
@@ -152,7 +168,11 @@ void ftp_handle_command(ftp_session_t* session, const char* line) {
                 entry[ep++] = '\n';
                 entry[ep] = '\0';
 
-                sys_tcp_send(data_sock, (const uint8_t*)entry, ep);
+                if (!send_bytes(data_sock, (const uint8_t*)entry, (uint32_t)ep)) {
+                    sys_tcp_close(data_sock);
+                    ftp_send_response(session->control_socket, 426, "Transfer interrupted.");
+                    return;
+                }
             }
         }
 
@@ -186,13 +206,14 @@ void ftp_handle_command(ftp_session_t* session, const char* line) {
             if (to_read > sizeof(chunk)) to_read = sizeof(chunk);
             int32_t bytes = sys_fs_read_at(full_file, chunk, to_read, offset);
             if (bytes <= 0) break;
-            sys_tcp_send(data_sock, chunk, (uint32_t)bytes);
+            if (!send_bytes(data_sock, chunk, (uint32_t)bytes)) break;
             offset += (uint32_t)bytes;
             sys_yield();
         }
 
         sys_tcp_close(data_sock);
-        ftp_send_response(session->control_socket, 226, "Transfer complete.");
+        ftp_send_response(session->control_socket, offset == (uint32_t)sz ? 226 : 426,
+                          offset == (uint32_t)sz ? "Transfer complete." : "Transfer interrupted.");
     } else if (str_equal_nocase(line, "STOR", 4)) {
         const char* param = line + 4;
         while (*param == ' ') param++;
@@ -221,7 +242,9 @@ void ftp_handle_command(ftp_session_t* session, const char* line) {
         uint32_t last_activity = sys_get_ticks();
 
         for (;;) {
-            int32_t r = sys_tcp_read(data_sock, upload_buffer + total, sizeof(upload_buffer) - total);
+            uint32_t room = sizeof(upload_buffer) - total;
+            uint32_t capacity = room > 4096u ? 4096u : room;
+            int32_t r = sys_tcp_read(data_sock, upload_buffer + total, capacity);
             if (r > 0) {
                 total += (uint32_t)r;
                 last_activity = sys_get_ticks();
@@ -231,7 +254,7 @@ void ftp_handle_command(ftp_session_t* session, const char* line) {
             } else {
                 int32_t st = sys_tcp_state(data_sock);
                 if (st == USER_TCP_CLOSE_WAIT || st == USER_TCP_CLOSED) {
-                    int32_t final_r = sys_tcp_read(data_sock, upload_buffer + total, sizeof(upload_buffer) - total);
+                    int32_t final_r = sys_tcp_read(data_sock, upload_buffer + total, capacity);
                     if (final_r > 0) {
                         total += (uint32_t)final_r;
                     }

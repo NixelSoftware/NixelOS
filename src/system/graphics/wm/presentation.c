@@ -1,5 +1,6 @@
 #include "../../../kernel/mutex.h"
 #include "../../../kernel/drivers/display.h"
+#include "../../../kernel/drivers/display/font.h"
 #include "cursor.h"
 #include "desktop.h"
 #include "desktop_wallpaper.h"
@@ -14,6 +15,10 @@ void wm_render_screen(void) {
     uint64_t requested = scheduler_clock();
     task_irq_restore(flags);
     mutex_lock(&kernel_mutex);
+    /* A callback can request a nested full-scene repaint. Each window will
+     * install its own content bounds; desktop and taskbar use the full screen. */
+    font_text_scope_t text_scope = font_text_scope_begin(
+        (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
     flags = task_irq_save();
     uint64_t started = scheduler_clock();
     task_irq_restore(flags);
@@ -35,6 +40,7 @@ void wm_render_screen(void) {
     if (elapsed > wm_render_stats.max_ns) wm_render_stats.max_ns = elapsed;
     if (elapsed > 16666667u) wm_render_stats.over_budget++;
     wm_render_stats.frames++;
+    font_text_scope_end(text_scope);
     mutex_unlock(&kernel_mutex);
     debug_frame_timing("render", requested, started, finished, &last_render_log);
 }

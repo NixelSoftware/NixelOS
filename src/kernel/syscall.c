@@ -3,6 +3,7 @@
 #include "hal/audio.h"
 #include "syscall.h"
 #include "users.h"
+#include "syscall_policy.h"
 #include "task.h"
 #include "mutex.h"
 #include "idt.h"
@@ -28,7 +29,7 @@
 #define SYS_FS_READ_MAX 2097152u
 #define FLOPPY_SECTOR_COUNT 2880u
 #define FLOPPY_SECTOR_SIZE 512u
-#define USER_TCP_SOCKET_MAX 8u
+#define USER_TCP_SOCKET_MAX 16u
 #define USER_TCP_QUEUE_SIZE 131072u
 #define USER_TCP_BACKLOG    8u
 //#define SYS_FS_WRITE_MAX 65536u
@@ -82,6 +83,7 @@ static uint8_t user_dns_active;
 static uint32_t user_dns_owner;
 static uint32_t user_dns_handle;
 static uint32_t next_dns_handle = 1;
+static void user_tcp_discard_pending(user_tcp_socket_t* listener);
 
 static void user_tcp_reap_closed(uint32_t owner_dir) {
     for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
@@ -90,7 +92,9 @@ static void user_tcp_reap_closed(uint32_t owner_dir) {
             user_tcp_sockets[i].socket) {
             
             tcp_socket_state_t st = tcp_get_state(user_tcp_sockets[i].socket);
-            if (st == TCP_CLOSED) {
+            if (st == TCP_CLOSED && !user_tcp_sockets[i].read_count) {
+                if (user_tcp_sockets[i].is_listener)
+                    user_tcp_discard_pending(&user_tcp_sockets[i]);
                 tcp_release(user_tcp_sockets[i].socket);
                 user_tcp_sockets[i].socket = 0;
                 user_tcp_sockets[i].active = 0;
@@ -128,6 +132,22 @@ static uint8_t user_tcp_receive(tcp_socket_t* socket, const uint8_t* data,
         slot->read_count++;
     }
     return 1;
+}
+
+/* Closing a listener must release completed connections that were never
+ * returned by accept. Already accepted sockets have independent handles. */
+static void user_tcp_discard_pending(user_tcp_socket_t* listener) {
+    while (listener->accept_count) {
+        uint32_t handle = listener->accepted_handles[listener->accept_head];
+        listener->accept_head = (listener->accept_head + 1u) % USER_TCP_BACKLOG;
+        listener->accept_count--;
+        user_tcp_socket_t* child = user_tcp_by_handle(handle, listener->owner_directory);
+        if (!child || child == listener) continue;
+        tcp_release(child->socket);
+        child->socket = 0;
+        child->active = 0;
+        child->read_head = child->read_count = 0;
+    }
 }
 
 static void syscall_ping_reply(uint32_t source_ip, uint16_t identifier,
@@ -184,8 +204,10 @@ void syscall_forget_address_space(uint32_t directory_address) {
 }
 
 static int user_readable(uint32_t address, uint32_t length) {
-    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
-        length > APP_VIRTUAL_LIMIT - address) return 0;
+    if (!length || !((address >= APP_VIRTUAL_BASE && address < APP_VIRTUAL_LIMIT &&
+        length <= APP_VIRTUAL_LIMIT - address) ||
+        (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT &&
+        length <= APP_HEAP_LIMIT - address))) return 0;
 
     uint32_t* directory = (uint32_t*)paging_current_directory();
     uint32_t end = address + length - 1u;
@@ -202,8 +224,10 @@ static int user_readable(uint32_t address, uint32_t length) {
 }
 
 static int user_writable(uint32_t address, uint32_t length) {
-    if (!length || address < APP_VIRTUAL_BASE || address >= APP_VIRTUAL_LIMIT ||
-        length > APP_VIRTUAL_LIMIT - address) return 0;
+    if (!length || !((address >= APP_VIRTUAL_BASE && address < APP_VIRTUAL_LIMIT &&
+        length <= APP_VIRTUAL_LIMIT - address) ||
+        (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT &&
+        length <= APP_HEAP_LIMIT - address))) return 0;
 
     uint32_t* directory = (uint32_t*)paging_current_directory();
     uint32_t end = address + length - 1u;
@@ -284,6 +308,12 @@ static void syscall_dispatch_impl(registers_t* regs) {
             regs->eax = 0;
             return;
         }
+        case SYS_MEMORY_ALLOC:
+            regs->eax = paging_user_alloc(regs->ebx);
+            return;
+        case SYS_MEMORY_FREE:
+            regs->eax = (uint32_t)paging_user_free(regs->ebx);
+            return;
         case SYS_MEMORY_INFO: {
             if (!user_writable(regs->ebx, sizeof(user_memory_info_t))) {
                 regs->eax = (uint32_t)-1;
@@ -343,6 +373,25 @@ static void syscall_dispatch_impl(registers_t* regs) {
             if (result != 0) user_dns_active = 0;
             regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
             return;
+        }
+        case SYS_TASK_LIST: {
+            task_info_t* buf = (task_info_t*)regs->ebx;
+            uint32_t cap = regs->ecx;
+            if (!buf || cap > 64 || !user_writable((uint32_t)buf, cap * sizeof(task_info_t))) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
+            regs->eax = (uint32_t)task_snapshot(buf, (int)cap);
+            break;
+        }
+        case SYS_TASK_KILL: {
+            uint32_t pid = regs->ebx;
+            if (pid == 0) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
+            regs->eax = (uint32_t)task_kill(pid);
+            break;
         }
         case SYS_SERIAL_LOG_READ: {
             if (!regs->ecx || regs->ecx > 256 || !user_writable(regs->ebx, regs->ecx) ||
@@ -409,6 +458,18 @@ static void syscall_dispatch_impl(registers_t* regs) {
             }
             for (uint32_t i = 0; i <= length; i++) ((char*)regs->ebx)[i] = path[i];
             regs->eax = length; return;
+        }
+        case SYS_FS_CHMOD: {
+            char path[FS_MAX_PATH];
+            regs->eax = regs->ecx <= 0777 && copy_user_text(regs->ebx, path, sizeof(path)) &&
+                fs_chmod(path, (uint16_t)regs->ecx) ? 0u : (uint32_t)-1;
+            return;
+        }
+        case SYS_FS_DELETE: {
+            char path[FS_MAX_PATH];
+            regs->eax = copy_user_text(regs->ebx, path, sizeof(path)) ?
+                (fs_delete_file(path) ? 0u : (uint32_t)-1) : (uint32_t)-1;
+            return;
         }
         case SYS_FS_MKDIR: {
             char path[FS_MAX_PATH];
@@ -585,6 +646,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 return;
             }
+            tcp_resume(slot->socket);
             uint32_t count = slot->read_count < capacity
                            ? slot->read_count : capacity;
             uint8_t* output = (uint8_t*)regs->ecx;
@@ -593,6 +655,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 slot->read_head = (slot->read_head + 1u) % USER_TCP_QUEUE_SIZE;
             }
             slot->read_count -= count;
+            tcp_resume(slot->socket);
             regs->eax = count;
             return;
         }
@@ -600,6 +663,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
             user_tcp_socket_t* slot = user_tcp_by_handle(
                 regs->ebx, paging_current_directory());
             if (slot) {
+                if (slot->is_listener) user_tcp_discard_pending(slot);
                 if (slot->socket) {
                     tcp_disconnect(slot->socket);
                     tcp_release(slot->socket);
@@ -658,14 +722,16 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 return;
             }
-            if (slot->accept_count == 0) {
-                regs->eax = 0; // No incoming client yet
-                return;
+            while (slot->accept_count) {
+                uint32_t client_handle = slot->accepted_handles[slot->accept_head];
+                slot->accept_head = (slot->accept_head + 1u) % USER_TCP_BACKLOG;
+                slot->accept_count--;
+                if (user_tcp_by_handle(client_handle, owner)) {
+                    regs->eax = client_handle;
+                    return;
+                }
             }
-            uint32_t client_handle = slot->accepted_handles[slot->accept_head];
-            slot->accept_head = (slot->accept_head + 1u) % USER_TCP_BACKLOG;
-            slot->accept_count--;
-            regs->eax = client_handle;
+            regs->eax = 0;
             return;
         }
         case SYS_FLOPPY_INIT:
@@ -824,6 +890,11 @@ static void syscall_dispatch_impl(registers_t* regs) {
             power_reboot();
             regs->eax = (uint32_t)-1;
             return;
+        case SYS_UTC_SECONDS: {
+            uint64_t now = rtc_get_epoch();
+            regs->eax = now <= 2147483647u ? (uint32_t)now : (uint32_t)-1;
+            return;
+        }
         case SYS_RTC_TIME: {
             if (!user_writable(regs->ebx, sizeof(rtc_time_t))) {
                 regs->eax = (uint32_t)-1;
@@ -999,9 +1070,20 @@ static void syscall_dispatch_impl(registers_t* regs) {
  * the compositor or network worker from progressing while a device is busy. */
 void syscall_dispatch(registers_t* regs) {
     if (!regs) return;
+    /* Authorize before taking locks, touching user pointers or hardware.
+     * Credentials belong to this task, inherited at task_create (including
+     * sudo launches), and are never supplied by an executable or ABI argument. */
+    if (!current_task || (regs->cs & 3u) != 3u) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    if (!syscall_allowed(current_task->uid, regs->eax, regs->ebx)) {
+        regs->eax = (uint32_t)SYS_ERR_PERMISSION;
+        return;
+    }
     switch (regs->eax) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
-        case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
+        case SYS_FS_CHMOD: case SYS_FS_DELETE: case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
             syscall_dispatch_impl(regs);
             return;
@@ -1061,4 +1143,5 @@ void syscall_tcp_on_accept(tcp_socket_t* listener, tcp_socket_t* child) {
             return;
         }
     }
+    tcp_release(child);
 }

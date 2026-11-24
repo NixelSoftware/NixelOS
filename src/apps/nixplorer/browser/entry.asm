@@ -1,5 +1,5 @@
 [bits 32]
-[section .text]
+[section .text.entry]
 global _start
 extern user_main
 

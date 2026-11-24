@@ -26,6 +26,9 @@ void browser_box_begin(browser_box *b, const browser_style *s,
         if (s->border_box) maximum -= edges;
         if (content > maximum) content = maximum;
     }
+    int min_width = width_value(s->min_width, width);
+    if (s->border_box) min_width -= edges;
+    if (content < min_width) content = min_width;
     if (content < minimum) content = minimum;
     if (content > available - edges) content = available - edges;
     b->width = content + edges;

@@ -20,6 +20,7 @@
 #define DHCP_OPTION_LEASE_TIME 51
 #define DHCP_OPTION_MESSAGE_TYPE 53
 #define DHCP_OPTION_SERVER_ID 54
+#define DHCP_OPTION_PARAMETER_REQUEST_LIST 55
 #define DHCP_OPTION_END 255
 #define DHCP_MAGIC 0x63825363
 
@@ -31,10 +32,12 @@ static uint8_t response_type;
 static uint8_t expected_response;
 static uint32_t server_identifier;
 static uint8_t request_packet[548];
+static uint8_t request_active;
+static uint32_t request_generation;
 
 /* Boot has no scheduler yet. Runtime requests sleep without kernel_mutex so
  * the desktop and other network clients can make progress between polls. */
-static uint8_t wait_for_response(uint32_t timeout_seconds) {
+static uint8_t wait_for_response(uint32_t timeout_seconds, uint32_t generation) {
     uint64_t deadline = 0;
     rtc_time_t now;
     uint8_t previous = 0;
@@ -46,6 +49,7 @@ static uint8_t wait_for_response(uint32_t timeout_seconds) {
         {
             MUTEX_GUARD(kernel_mutex);
             sys_net_poll();
+            if (generation != request_generation) return 0;
             if (response_received) return 1;
         }
         if (scheduled) {
@@ -144,6 +148,13 @@ static uint8_t send_message(uint8_t message_type, uint32_t requested_ip) {
     }
     write_be32(request_packet + 236, DHCP_MAGIC);
     add_option(&offset, DHCP_OPTION_MESSAGE_TYPE, &type, 1);
+    /* Routers may omit DNS/gateway options unless the client requests them. */
+    static const uint8_t requested_options[] = {
+        DHCP_OPTION_SUBNET_MASK, DHCP_OPTION_ROUTER,
+        DHCP_OPTION_DNS, DHCP_OPTION_LEASE_TIME
+    };
+    add_option(&offset,DHCP_OPTION_PARAMETER_REQUEST_LIST,
+               requested_options,sizeof(requested_options));
     if (message_type == DHCP_REQUEST) {
         write_be32(server, server_identifier);
         write_be32(requested, requested_ip);
@@ -154,31 +165,34 @@ static uint8_t send_message(uint8_t message_type, uint32_t requested_ip) {
     return udp_send(dhcp_socket, request_packet, offset);
 }
 
-static uint8_t exchange(uint8_t type, uint32_t address, uint8_t expected,
-                        uint32_t timeout_seconds) {
+static uint8_t exchange(uint8_t type, uint8_t expected,
+                        uint32_t timeout_seconds, uint32_t generation) {
     for (uint8_t attempt = 0; attempt < 3; attempt++) {
         uint8_t sent;
         {
             MUTEX_GUARD(kernel_mutex);
+            if (generation != request_generation) return 0;
+            uint32_t address = type == DHCP_REQUEST ? current_lease.address : 0;
             response_received = 0;
             response_type = 0;
             expected_response = expected;
             sent = send_message(type, address);
         }
-        if (sent && wait_for_response(timeout_seconds)) {
+        if (sent && wait_for_response(timeout_seconds, generation)) {
             MUTEX_GUARD(kernel_mutex);
-            if (response_type == expected) return 1;
+            if (generation == request_generation && response_type == expected) return 1;
         }
     }
     return 0;
 }
 
-static uint8_t request_active;
 uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t timeout_seconds) {
+    uint32_t generation;
     {
         MUTEX_GUARD(kernel_mutex);
         if (request_active || !sys_net_is_ready()) return 0;
         request_active = 1;
+        generation = ++request_generation;
         /* DISCOVER starts unconfigured. A wildcard UDP binding accepts broadcast
          * replies even when this request follows a previously configured lease. */
         ipv4_set_configuration(0, 0, 0);
@@ -193,10 +207,10 @@ uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t timeout_seconds) {
         transaction_id++;
     }
 
-    if (!exchange(DHCP_DISCOVER, 0, DHCP_OFFER, timeout_seconds)
-        || !exchange(DHCP_REQUEST, current_lease.address, DHCP_ACK,
-                     timeout_seconds)) {
+    if (!exchange(DHCP_DISCOVER, DHCP_OFFER, timeout_seconds, generation)
+        || !exchange(DHCP_REQUEST, DHCP_ACK, timeout_seconds, generation)) {
         MUTEX_GUARD(kernel_mutex);
+        if (generation != request_generation) return 0;
         current_lease = (dhcp_lease_t){0};
         request_active = 0;
         udp_disconnect(dhcp_socket);
@@ -204,6 +218,7 @@ uint8_t dhcp_request(dhcp_lease_t* lease, uint32_t timeout_seconds) {
         return 0;
     }
     MUTEX_GUARD(kernel_mutex);
+    if (generation != request_generation) return 0;
     request_active = 0;
     udp_disconnect(dhcp_socket);
     dhcp_socket = 0;
@@ -219,7 +234,18 @@ const dhcp_lease_t* dhcp_get_lease(void) {
     return &current_lease;
 }
 
+void dhcp_restore_lease(const dhcp_lease_t* lease) {
+    MUTEX_GUARD(kernel_mutex);
+    current_lease = *lease;
+}
+
 void dhcp_clear_lease(void) {
     MUTEX_GUARD(kernel_mutex);
+    if (request_active) {
+        request_generation++;
+        request_active = 0;
+        udp_disconnect(dhcp_socket);
+        dhcp_socket = 0;
+    }
     current_lease = (dhcp_lease_t){0};
 }

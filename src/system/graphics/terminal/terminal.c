@@ -2,6 +2,7 @@
 #include "terminal.h"
 #include "../../shell/commands.h"
 #include "../wm/wm.h"
+#include "../wm/theme.h"
 #include "../../../kernel/paging.h"
 
 #define TERM_MAX_LINES 128
@@ -21,17 +22,19 @@ struct terminal {
     uint8_t term_bg[TERM_MAX_LINES][TERM_MAX_COLS];
     char password[64];
     unsigned password_length;
-    int password_pending, password_done;
+    int password_pending, password_done, reply_echo;
     unsigned ansi_fg, ansi_bg, ansi_bold, ansi_inverse;
     unsigned ansi_state, ansi_count, ansi_params[16], ansi_invalid;
 };
 static terminal_t terminals[TERMINAL_MAX_INSTANCES];
 
+/* ANSI slots retain their standard meanings with the shared dark UI palette.
+ * Slot zero also paints default cell backgrounds, so it matches the viewport. */
 static const uint32_t ansi_palette[16] = {
-    0x000000, 0xAA0000, 0x00AA00, 0xAA5500,
-    0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
-    0x555555, 0xFF5555, 0x55FF55, 0xFFFF55,
-    0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF
+    COLOR_MODERN_BG, COLOR_BTN_CLOSE, COLOR_BTN_MAX, COLOR_BTN_MIN,
+    COLOR_ACCENT, 0x00C6A0F6, 0x008BD5CA, COLOR_TEXT_PRIMARY,
+    COLOR_TEXT_MUTED, 0x00F5A9B8, 0x00B6EAA5, 0x00F8E4AF,
+    0x00A4C3FF, 0x00D6B0FF, 0x00A1E7DC, 0x00EEF1FF
 };
 
 static void terminal_reset_style(terminal_t* t) {
@@ -209,18 +212,18 @@ static void terminal_draw(Window* win) {
     terminal_t* t = terminal_for_window(win);
     if (!t) return;
     int32_t box_x = win->x + 6;
-    int32_t box_y = win->y + 20;
+    int32_t box_y = win->y + 26;
     int32_t box_w = win->w - 12;
-    int32_t box_h = win->h - 26;
+    int32_t box_h = win->h - 32;
 
-    terminal_api->graphics.fill_rect(box_x, box_y, box_w, box_h, COLOR_BLACK);
-    terminal_api->graphics.fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
-    terminal_api->graphics.fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
-    terminal_api->graphics.fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
-    terminal_api->graphics.fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
+    terminal_api->graphics.fill_rect(box_x, box_y, box_w, box_h, COLOR_MODERN_BG);
+    terminal_api->graphics.fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_SURFACE_BORDER);
+    terminal_api->graphics.fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_SURFACE_BORDER);
+    terminal_api->graphics.fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_SURFACE_BORDER);
+    terminal_api->graphics.fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_SURFACE_BORDER);
 
-    int cols = (win->w - 24) / 8;
-    int rows = (win->h - 38) / 12;
+    int cols = (box_w - 12) / 8;
+    int rows = (box_h - 12) / 12;
     if (cols < 1 || rows < 1) return;
     int total = 0;
     for (int r = 0; r <= t->term_cursor_row; ++r) {
@@ -248,7 +251,7 @@ static void terminal_draw(Window* win) {
             if (line >= 0 && line < rows)
                 terminal_api->graphics.draw_string(
                     box_x + 6 + t->term_cursor_col % cols * 8,
-                    box_y + 6 + line * 12, "_", COLOR_WHITE);
+                    box_y + 6 + line * 12, "_", COLOR_ACCENT);
         }
         int used = r == t->term_cursor_row ? t->term_cursor_col + 1 : len;
         visual += used ? (used + cols - 1) / cols : 1;
@@ -256,7 +259,7 @@ static void terminal_draw(Window* win) {
     /* Bottom-right resize grip. */
     for (int i = 0; i < 3; ++i)
         terminal_api->graphics.fill_rect(win->x + win->w - 5 - i * 3,
-                                        win->y + win->h - 4, 2, 2, COLOR_DARK_GRAY);
+                                        win->y + win->h - 4, 2, 2, COLOR_SURFACE_BORDER);
 }
 
 static void terminal_prompt(terminal_t* t) {
@@ -309,10 +312,18 @@ static void terminal_handle_key(Window* win, char c) {
             t->password_pending = 0;
             terminal_append_output(t, (uint8_t)c == 3 ? "^C\n" : "\n");
         } else if (c == '\b') {
-            if (t->password_length) t->password[--t->password_length] = 0;
+            if (t->password_length) {
+                t->password[--t->password_length] = 0;
+                if (t->reply_echo && t->term_cursor_col)
+                    t->term_lines[t->term_cursor_row][--t->term_cursor_col] = 0;
+            }
         } else if (c >= ' ' && c <= '~' && t->password_length < sizeof(t->password) - 1) {
             t->password[t->password_length++] = c;
             t->password[t->password_length] = 0;
+            if (t->reply_echo) {
+                char text[] = {c, 0};
+                terminal_append_output(t, text);
+            }
         }
         wm_invalidate();
         return;
@@ -413,8 +424,8 @@ void terminal_command_done(terminal_t* t) {
     wm_invalidate();
 }
 
-/* The shell sleeps while the window task collects input without echo. */
-int terminal_read_password(char* output, uint32_t capacity) {
+/* The shell sleeps while the window task collects the reply. */
+static int terminal_read_input(char* output, uint32_t capacity, int echo) {
     mutex_lock(&kernel_mutex);
     terminal_t* t = current_task ? current_task->terminal : 0;
     if (!t || !t->active || !output || capacity < sizeof(t->password)) {
@@ -424,6 +435,7 @@ int terminal_read_password(char* output, uint32_t capacity) {
     t->password_length = 0;
     t->password[0] = 0;
     t->password_done = 0;
+    t->reply_echo = echo;
     t->password_pending = 1;
     while (!t->password_done && t->active && !current_task->terminate_requested) {
         mutex_unlock(&kernel_mutex);
@@ -435,8 +447,16 @@ int terminal_read_password(char* output, uint32_t capacity) {
         output[i] = ok ? t->password[i] : 0;
         ((volatile char*)t->password)[i] = 0;
     }
-    t->password_pending = t->password_done = 0;
+    t->password_pending = t->password_done = t->reply_echo = 0;
     t->password_length = 0;
     mutex_unlock(&kernel_mutex);
     return ok;
+}
+
+int terminal_read_password(char* output, uint32_t capacity) {
+    return terminal_read_input(output, capacity, 0);
+}
+
+int terminal_read_reply(char* output, uint32_t capacity) {
+    return terminal_read_input(output, capacity, 1);
 }

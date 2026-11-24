@@ -1,4 +1,5 @@
 #include "desktop.h"
+#include "theme.h"
 #include "desktop_wallpaper.h"
 #include "../../../kernel/drivers/serial.h"
 #include "wm.h"
@@ -276,7 +277,7 @@ static void save_icon(int i) {
     record.x = icons[i].x; record.y = icons[i].y;
     char path[FS_MAX_PATH]; layout_path(i, path);
     if (fs_mkdir(layout_dir) < 0 || fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
-        show_info_dialog("Desktop", "Could not save icon position.");
+        show_error_dialog("Desktop", "Could not save icon position.");
 }
 static void refresh_desktop(void) {
     char files[FS_MAX_FILES][FS_MAX_FILENAME], old_names[NUM_ICONS][FS_MAX_FILENAME];
@@ -339,18 +340,18 @@ void desktop_poll(void) {
 static void open_path(const char* path) {
     if (fs_is_directory(path)) {
         if (app_loader_launch_detached(desktop_api, "/usr/bin/files.bin", path) < 0)
-            show_info_dialog("Desktop", "Cannot open File Explorer.");
+            show_error_dialog("Desktop", "Cannot open File Explorer.");
     } else if (suffix(path, ".MID") || suffix(path, ".MIDI")) {
         if (app_loader_launch_detached(desktop_api, "/usr/bin/syndig.bin", path) < 0)
-            show_info_dialog("Desktop", "Cannot launch Syndig.");
+            show_error_dialog("Desktop", "Cannot launch Syndig.");
     } else if (suffix(path, ".BIN")) {
         if (app_loader_launch_detached(desktop_api, path, "") < 0)
-            show_info_dialog("Desktop", "Cannot launch application.");
+            show_error_dialog("Desktop", "Cannot launch application.");
     } else if (suffix(path, ".BMP") && desktop_api->shell.shell_open_viewer) {
         desktop_api->shell.shell_open_viewer(path);
     } else {
         int bytes = fs_read_file(path, (uint8_t*)preview, sizeof(preview)-1);
-        if (bytes < 0) { show_info_dialog("Desktop", "Cannot read file."); return; }
+        if (bytes < 0) { show_error_dialog("Desktop", "Cannot read file."); return; }
         preview[bytes] = 0;
         for (int i = 0; i < bytes; i++)
             if ((unsigned char)preview[i] < 32 && preview[i] != '\n' && preview[i] != '\t') preview[i] = '.';
@@ -361,11 +362,11 @@ static void open_item(int i) {
     open_path(targets[i]);
 }
 static void text(int x, int y, const char* value) {
-    desktop_api->graphics.draw_string(x, y, value, COLOR_BLACK);
+    desktop_api->graphics.draw_string(x, y, value, COLOR_TEXT_PRIMARY);
 }
 static void box(int x, int y, int w, int h) {
-    desktop_api->graphics.fill_rect(x, y, w, h, COLOR_BLACK);
-    desktop_api->graphics.fill_rect(x+1, y+1, w-2, h-2, COLOR_WIN_BG);
+    desktop_api->graphics.fill_rect(x, y, w, h, COLOR_SURFACE_BORDER);
+    desktop_api->graphics.fill_rect(x+1, y+1, w-2, h-2, COLOR_SURFACE);
 }
 void desktop_draw_overlay(void) {
     if (!overlay) return;
@@ -396,7 +397,7 @@ static void create_shortcut(void) {
         fs_stat_t st;
         if (!fs_stat(name, &st)) { copy_text(path, name, FS_MAX_PATH); break; }
     }
-    if (slot == 1000 || icon_count >= NUM_ICONS) { show_info_dialog("Desktop", "Desktop is full."); return; }
+    if (slot == 1000 || icon_count >= NUM_ICONS) { show_error_dialog("Desktop", "Desktop is full."); return; }
     const char* program_name = pending;
     for (int i = 0; pending[i]; i++) if (pending[i] == '/') program_name = pending+i+1;
     char named_path[FS_MAX_PATH];
@@ -415,7 +416,7 @@ static void create_shortcut(void) {
     if (suffix(name, ".BIN")) name[length-4] = 0;
     copy_text(record.label, name, sizeof(record.label));
     if (fs_write_file(path, (uint8_t*)&record, sizeof(record)) != sizeof(record))
-        show_info_dialog("Desktop", "Could not save shortcut.");
+        show_error_dialog("Desktop", "Could not save shortcut.");
 }
 /* Called before normal window dispatch only for an active overlay/drag, or
  * a right-button press on uncovered desktop. */
@@ -474,7 +475,7 @@ static void shortcut_draw(Window* win) {
     int x = win->x, y = win->y;
     text(x+16, y+38, "Program:");
     box(x+16, y+60, 366, 26);
-    desktop_api->graphics.fill_rect(x+18, y+62, 362, 22, COLOR_WHITE);
+    desktop_api->graphics.fill_rect(x+18, y+62, 362, 22, COLOR_MODERN_BG);
     int n = 0; while (pending[n]) n++;
     text(x+22, y+69, pending+(n > 43 ? n-43 : 0));
     graphics_draw_button(x+392, y+60, 72, 26, "Open", 0);

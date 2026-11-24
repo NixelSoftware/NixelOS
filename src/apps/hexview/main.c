@@ -1,17 +1,9 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/types.h"
 #include "../../kernel/os_api.h"
 #include "../../kernel/window.h"
 #include "../../system/user/sys_api.h"
 
-#define COLOR_WIN_BG      0x00C0C0C0
-#define COLOR_DARK_GRAY   0x00808080
-#define COLOR_LIGHT_GRAY  0x00DFDFDF
-#define COLOR_WHITE       0x00FFFFFF
-#define COLOR_BLACK       0x00000000
-#define COLOR_HEADER_BG   0x00000080
-#define COLOR_ADDR_TEXT   0x00808000
-#define COLOR_HEX_TEXT    0x00FFFFFF
-#define COLOR_ASCII_TEXT  0x0000FF00
 
 #define MAX_FILE_SIZE     16384
 #define BYTES_PER_ROW     16
@@ -84,7 +76,7 @@ static void user_draw_string(int32_t x, int32_t y, const char* text,
 static void user_draw_button(int32_t x, int32_t y, int32_t width, int32_t height,
                              const char* text, uint8_t pressed) {
     (void)user_draw(USER_WINDOW_DRAW_BUTTON, x, y, width, height, text,
-                    COLOR_WIN_BG, pressed);
+                    COLOR_SURFACE, pressed);
 }
 
 static void user_blit_all(void) {
@@ -113,16 +105,16 @@ static void load_current_file(void) {
 }
 
 static void draw_sunken_panel(int32_t x, int32_t y, int32_t w, int32_t h) {
-    os->graphics.fill_rect(x, y, w, h, COLOR_BLACK);
-    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_DARK_GRAY);
-    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_WHITE);
-    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_WHITE);
+    os->graphics.fill_rect(x, y, w, h, COLOR_MODERN_BG);
+    os->graphics.fill_rect(x - 1, y - 1, w + 2, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x - 1, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x - 1, y + h, w + 2, 1, COLOR_SURFACE_BORDER);
+    os->graphics.fill_rect(x + w, y - 1, 1, h + 2, COLOR_SURFACE_BORDER);
 }
 
 void hex_draw_content(Window* win) {
-    os->graphics.draw_string(win->x + 10, win->y + 24, "File: ", COLOR_BLACK);
-    os->graphics.draw_string(win->x + 50, win->y + 24, target_file, COLOR_BLACK);
+    os->graphics.draw_string(win->x + 10, win->y + 24, "File: ", COLOR_TEXT_PRIMARY);
+    os->graphics.draw_string(win->x + 50, win->y + 24, target_file, COLOR_TEXT_PRIMARY);
 
     os->graphics.draw_button(win->x + win->w - 130, win->y + 22, 55, 18, "Prev", 0);
     os->graphics.draw_button(win->x + win->w - 70, win->y + 22, 55, 18, "Next", 0);
@@ -133,7 +125,7 @@ void hex_draw_content(Window* win) {
     int32_t panel_h = win->h - 52;
     draw_sunken_panel(panel_x, panel_y, panel_w, panel_h);
 
-    os->graphics.draw_string(panel_x + 6, panel_y + 4, "OFFSET  00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII", 0x00A0A0A0);
+    os->graphics.draw_string(panel_x + 6, panel_y + 4, "OFFSET  00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII", COLOR_TEXT_MUTED);
 
     char offset_str[6] = "0000:";
     char hex_str[4] = "00 ";
@@ -146,7 +138,7 @@ void hex_draw_content(Window* win) {
         int row_y = panel_y + 18 + (r * 11);
 
         u16_to_hex((uint16_t)row_offset, offset_str);
-        os->graphics.draw_string(panel_x + 6, row_y, offset_str, COLOR_ADDR_TEXT);
+        os->graphics.draw_string(panel_x + 6, row_y, offset_str, COLOR_ACCENT);
 
         for (int c = 0; c < BYTES_PER_ROW; c++) {
             int byte_idx = row_offset + c;
@@ -154,7 +146,7 @@ void hex_draw_content(Window* win) {
 
             if (byte_idx < total_bytes) {
                 byte_to_hex(file_buffer[byte_idx], hex_str);
-                os->graphics.draw_string(hx, row_y, hex_str, COLOR_HEX_TEXT);
+                os->graphics.draw_string(hx, row_y, hex_str, COLOR_TEXT_PRIMARY);
             }
         }
 
@@ -164,7 +156,7 @@ void hex_draw_content(Window* win) {
             if (byte_idx < total_bytes) {
                 uint8_t ch = file_buffer[byte_idx];
                 ascii_str[0] = (ch >= 32 && ch <= 126) ? (char)ch : '.';
-                os->graphics.draw_string(ascii_x_start + (c * 8), row_y, ascii_str, COLOR_ASCII_TEXT);
+                os->graphics.draw_string(ascii_x_start + (c * 8), row_y, ascii_str, COLOR_BTN_MAX);
             }
         }
     }

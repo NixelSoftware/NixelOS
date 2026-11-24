@@ -10,8 +10,15 @@ struct
 .audio-debug-config
 
 /src/include/os_version.h
-/documentation/linux-for-ref/i915/
+/documentation/linux-for-ref/*
 
 # Local Doom game data
 /*.wad
 /*.WAD
+
+/src/kernel/net/wireless/security/*.d
+
+.gui-config
+.boot-config
+
+/src/apps/nixelcraft/*

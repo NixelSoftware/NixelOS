@@ -1,3 +1,4 @@
+#include "../../system/graphics/wm/theme.h"
 #include "../../kernel/mutex.h"
 #include "viewer.h"
 #include "../../kernel/drivers/display/font.h"
@@ -109,11 +110,11 @@ void viewer_draw(Window* win) {
     int32_t box_h = win->h - 26;
 
     
-    display_fill_rect(box_x, box_y, box_w, box_h, COLOR_DARK_GRAY);
-    display_fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_DARK_GRAY);
-    display_fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_DARK_GRAY);
-    display_fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_WHITE);
-    display_fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_WHITE);
+    display_fill_rect(box_x, box_y, box_w, box_h, COLOR_MODERN_BG);
+    display_fill_rect(box_x - 1, box_y - 1, box_w + 2, 1, COLOR_SURFACE_BORDER);
+    display_fill_rect(box_x - 1, box_y - 1, 1, box_h + 2, COLOR_SURFACE_BORDER);
+    display_fill_rect(box_x - 1, box_y + box_h, box_w + 2, 1, COLOR_SURFACE_BORDER);
+    display_fill_rect(box_x + box_w, box_y - 1, 1, box_h + 2, COLOR_SURFACE_BORDER);
 
     if (image_w > 0 && image_h > 0) {
         
@@ -133,8 +134,8 @@ void viewer_draw(Window* win) {
             }
         }
     } else {
-        draw_string(box_x + 12, box_y + (box_h / 2) - 4, "No image loaded", COLOR_WHITE);
-        draw_string(box_x + 12, box_y + (box_h / 2) + 8, "Use terminal: view <file>", COLOR_DARK_GRAY);
+        draw_string(box_x + 12, box_y + (box_h / 2) - 4, "No image loaded", COLOR_TEXT_PRIMARY);
+        draw_string(box_x + 12, box_y + (box_h / 2) + 8, "Use terminal: view <file>", COLOR_TEXT_MUTED);
     }
 }
 

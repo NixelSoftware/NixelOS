@@ -3,7 +3,11 @@
 #include "commands.h"
 #include "../../kernel/users.h"
 #include "../../kernel/fs.h"
+#include "../../kernel/drivers/serial.h"
+#include "../../kernel/hal/usb.h"
+#include "../../kernel/hal/wifi.h"
 #include "network_commands.h"
+#include "wifi_commands.h"
 #include "../loader/app_loader.h"
 #include "../graphics/terminal/terminal.h"
 
@@ -89,6 +93,32 @@ static int resolve_path(const char* input, char out[FS_MAX_PATH], int create) {
     }
     return 1;
 }
+
+static int resolve_command(const char* name, char path[FS_MAX_PATH]) {
+    const char* directories[] = {"", "/usr/bin/", "/usr/sbin/"};
+    const char* extensions[] = {"", ".bin", ".BIN"};
+    char candidate[FS_MAX_PATH];
+    unsigned length = 0;
+    unsigned directory_count = user_uid() == USER_ROOT ? 3 : 2;
+    while (name[length]) {
+        if (name[length] == '/') directory_count = 1;
+        length++;
+    }
+    for (unsigned dir = 0; dir < directory_count; dir++) {
+        unsigned prefix = 0;
+        while (directories[dir][prefix]) prefix++;
+        for (unsigned ext = 0; ext < 3; ext++) {
+            if (prefix + length + (ext ? 4 : 0) >= sizeof(candidate)) continue;
+            copy_text(candidate, directories[dir], sizeof(candidate));
+            copy_text(candidate + prefix, name, sizeof(candidate) - prefix);
+            copy_text(candidate + prefix + length, extensions[ext],
+                      sizeof(candidate) - prefix - length);
+            if (resolve_path(candidate, path, 0)) return 1;
+        }
+    }
+    return 0;
+}
+
 void shell_format_prompt(terminal_t* terminal, char* out, unsigned capacity) {
     shell_session_t* session = session_for(terminal);
     uint16_t uid = session ? session->uid : USER_REGULAR;
@@ -142,8 +172,239 @@ static void print_u32(uint32_t value) {
     }
 }
 
+/* PCI class discovery is independent of driver support. Class 02/80 is
+ * commonly Wi-Fi, but is formally "other network controller"; keep that
+ * distinction visible when no driver can identify the radio. */
+static void print_wifi_device(void) {
+    wifi_status_t wifi;
+    sys_wifi_get_status(&wifi);
+    const b43_info_t* adapter = &wifi.adapter;
+    const iwlegacy_info_t* intel = &wifi.intel;
+    unsigned found = 0;
+    for (uint32_t i = 0; i < pci_device_count(); i++) {
+        const pci_device_t* dev = pci_device_at(i);
+        if (!dev || !((dev->class_code == 0x02 && dev->subclass == 0x80) ||
+                      (dev->class_code == 0x0D && dev->subclass == 0x20))) continue;
+        found++;
+        int matched = adapter->vendor && adapter->vendor == dev->vendor_id &&
+            adapter->device == dev->device_id && adapter->pci_bus == dev->bus &&
+            adapter->pci_slot == dev->slot && adapter->pci_function == dev->function;
+        int intel_matched = intel->vendor && intel->vendor == dev->vendor_id &&
+            intel->device == dev->device_id && intel->pci_bus == dev->bus &&
+            intel->pci_slot == dev->slot && intel->pci_function == dev->function;
+        print(matched || intel_matched || dev->class_code == 0x0D ? "PCI Wi-Fi Device:" :
+              "PCI Wireless / Other Network Controller:");
+        print("\n  Vendor: "); print_hex_u16(dev->vendor_id);
+        print("\n  Device: "); print_hex_u16(dev->device_id);
+        print("\n  PCI bus/slot/function: "); print_u32(dev->bus);
+        print("/"); print_u32(dev->slot); print("/"); print_u32(dev->function);
+        print("\n  Revision: "); print_hex_u16(dev->revision);
+        print("\n  Class: "); print_hex_u16((uint16_t)dev->class_code << 8 | dev->subclass);
+        print("\n  Driver: ");
+        if (intel_matched) {
+            print("iwl3945 / iwlegacy (incomplete)");
+            print("\n  Name: Intel PRO/Wireless "); print(intel->bg_only ? "3945BG" : "3945ABG");
+            print("\n  Subsystem device: "); print_hex_u16(intel->subsystem_device);
+            print("\n");
+            continue;
+        }
+        if (!matched) {
+            print("No matching Wi-Fi driver\n");
+            continue;
+        }
+        print(adapter->state == B43_LEGACY ? "b43legacy (not ported)" : "b43 (incomplete)");
+        if (adapter->chip) {
+            print("\n  Chip:   "); print_hex_u16(adapter->chip);
+        }
+        if (adapter->state == B43_CORE_FOUND || adapter->state == B43_LEGACY) {
+            print("\n  Core index:    "); print_u32(adapter->core_index);
+            print("\n  Core revision: "); print_u32(adapter->core_revision);
+        }
+        print("\n");
+    }
+    if (!found) print("No PCI Wi-Fi or other network controller found.\n");
+}
+
 const char* shell_command_args(void) {
     return shell_args;
+}
+
+static int serial_output_command(const char* command) {
+    if (!has_prefix(command,"srout") || (command[5] && command[5]!=' ')) return 0;
+    const char* arg=command+5;
+    while (*arg==' ') arg++;
+    unsigned port=0, digits=0;
+    while (*arg>='0' && *arg<='9') {
+        /* Bound the value before multiplying, including arbitrarily long input. */
+        if (port>6553 || (port==6553 && *arg>'5')) {
+            print("srout: invalid port number.\n"); return 1;
+        }
+        port=port*10+(*arg++-'0'); digits++;
+    }
+    if (*arg && *arg!=' ') { print("Usage: srout <port> [text-filter]\n"); return 1; }
+    while (*arg==' ') arg++;
+    if (!digits) { print("Usage: srout <port> [text-filter] (0 = first UART)\n"); return 1; }
+    const char* filter=arg;
+    if (user_uid()!=USER_ROOT) { print("srout: permission denied; use sudo srout <port>.\n"); return 1; }
+    if (port!=0) { print("srout: output capture is available only for port 0 (COM1/0x3F8).\n"); return 1; }
+    print("Following port 0 output (COM1/0x3F8). Press Ctrl+C to stop.\n");
+    uint32_t cursor=0, lost=0;
+    char line[512]; unsigned line_length=0; int discard_line=0;
+    while (!current_task->terminate_requested) {
+        uint32_t previous_lost=lost;
+        char bytes[256], text[257];
+        int32_t count=serial_log_read(bytes,sizeof(bytes),&cursor,&lost);
+        if (count<0) { print("srout: serial output unavailable.\n"); break; }
+        if (lost!=previous_lost) {
+            print("\n[srout] Older output lost (capture overrun).\n");
+            line_length=0; discard_line=0;
+        }
+        unsigned n=0;
+        for (int32_t i=0; i<count; i++) if (bytes[i]!='\r') {
+            /* Shell output is a string; render embedded NULs visibly. */
+            text[n++]=bytes[i] ? bytes[i] : '.';
+        }
+        text[n]=0;
+        if (!*filter) { if (n) print(text); }
+        else for (unsigned i=0; i<n; i++) {
+            if (text[i]=='\n') {
+                line[line_length]=0;
+                int matched=0;
+                for (unsigned at=0; at<line_length && !matched; at++)
+                    matched=has_prefix(line+at,filter);
+                if (matched) { print(line); if (discard_line) print(" [truncated]"); print("\n"); }
+                line_length=0; discard_line=0;
+            } else if (line_length+1<sizeof(line)) line[line_length++]=text[i];
+            else discard_line=1;
+        }
+        if (count<(int32_t)sizeof(bytes)) task_sleep_ms(20);
+        else task_yield();
+    }
+    print("\n");
+    return 1;
+}
+
+static const char* storage_argument(const char* arg, char* out, unsigned capacity) {
+    while (*arg==' ') arg++;
+    unsigned n=0;
+    while (*arg && *arg!=' ') {
+        if (n+1>=capacity) return 0;
+        out[n++]=*arg++;
+    }
+    out[n]=0;
+    while (*arg==' ') arg++;
+    return arg;
+}
+static void print_mount_point(const char* device, fs_mount_info_t* mounts, int count) {
+    for (int m=0; m<count; m++) if (equal(device,mounts[m].device)) print(mounts[m].target);
+}
+static int storage_command(const char* command) {
+    if (has_prefix(command,"lsblk") && (!command[5] || command[5]==' ')) {
+        const char* arg=command+5; while (*arg==' ') arg++;
+        if (*arg) { print("Usage: lsblk\n"); return 1; }
+        usb_poll();
+        fs_mount_info_t mounts[FS_MAX_MOUNTS]; int count=fs_mount_snapshot(mounts);
+        print("NAME  TYPE  SIZE(MiB)  MOUNTPOINT\n");
+        for (unsigned d=0; d<FS_DISK_COUNT; d++) {
+            fs_block_info_t info;
+            if (!fs_block_info(d,&info)) continue;
+            print(info.name); print("  disk  "); print_u32(info.sectors/2048); print("  ");
+            print_mount_point(info.name,mounts,count); print("\n");
+            for (unsigned p=0; p<4; p++) if (info.partitions[p].sectors) {
+                char name[20]; copy_text(name,info.name,sizeof(name));
+                unsigned n=0; while (name[n]) n++;
+                name[n++]='p'; name[n++]='1'+p; name[n]=0;
+                print("  "); print(name); print("  part  "); print_u32(info.partitions[p].sectors/2048); print("  ");
+                print_mount_point(name,mounts,count); print("\n");
+            }
+        }
+    } else if (has_prefix(command,"mount") && (!command[5] || command[5]==' ')) {
+        char device[32], target[FS_MAX_PATH];
+        const char* rest=storage_argument(command+5,device,sizeof(device));
+        if (rest && !device[0]) {
+            fs_mount_info_t mounts[FS_MAX_MOUNTS]; int count=fs_mount_snapshot(mounts);
+            for (int m=0; m<count; m++) {
+                print(mounts[m].device); print(" on "); print(mounts[m].target); print(" type ext4\n");
+            }
+            if (!count) print("No mounted filesystems.\n");
+            return 1;
+        }
+        rest=rest ? storage_argument(rest,target,sizeof(target)) : 0;
+        if (!rest || *rest || !target[0]) print("Usage: mount <device> <absolute-directory>\n");
+        else {
+            usb_poll();
+            const char* error=fs_mount(device,target);
+            if (error) { print("mount: "); print(error); print("\n"); }
+            else { print("Mounted "); print(device); print(" on "); print(target); print("\n"); }
+        }
+    } else if ((has_prefix(command,"unmount") && (!command[7] || command[7]==' ')) ||
+               (has_prefix(command,"umount") && (!command[6] || command[6]==' '))) {
+        char target[FS_MAX_PATH];
+        const char* rest=storage_argument(command+(command[1]=='n' ? 7 : 6),target,sizeof(target));
+        if (!rest || *rest || !target[0]) print("Usage: unmount <absolute-directory>\n");
+        else {
+            const char* error=fs_unmount(target);
+            if (error) { print("unmount: "); print(error); print("\n"); }
+            else { print("Unmounted "); print(target); print("\n"); }
+        }
+    } else return 0;
+    return 1;
+}
+
+static void install_usage(void) {
+    print("Usage: sudo install <disk> <path-to-os.img>\n"
+          "       sudo install <disk> --clone\n"
+          "Use lsblk to find the whole target disk.\n");
+}
+
+static int install_command(const char* command, int (*read_reply)(char*, uint32_t)) {
+    if (!has_prefix(command, "install") || (command[7] && command[7] != ' ')) return 0;
+    char device[20], image[FS_MAX_PATH];
+    const char* source = storage_argument(command + 7, device, sizeof(device));
+    if (!source || !device[0] || !*source) {
+        install_usage();
+        if (source && !device[0]) storage_command("lsblk");
+        return 1;
+    }
+    if (user_uid() != USER_ROOT) {
+        print("install: root required; use sudo.\n");
+        return 1;
+    }
+    int clone = equal(source, "--clone");
+    if (!clone && !resolve_path(source, image, 0)) {
+        print("install: source image not found.\n");
+        return 1;
+    }
+    usb_poll();
+    fs_install_target_t target;
+    const char* error = fs_install_probe(device, &target);
+    if (!error) {
+        print("Target: "); print(target.name); print(" (");
+        print_u32(target.sectors / 2048); print(" MiB)\n");
+        if (clone)
+            print("Source: running boot disk, including its accounts and files.\n");
+        else {
+            print("Source image: "); print(image); print("\n");
+        }
+        print("This overwrites the target disk's partition table and data.\nType ERASE ");
+        print(target.name); print(" to continue, or Ctrl+C to cancel.\n> ");
+        char expected[64], reply[64];
+        copy_text(expected, "ERASE ", sizeof(expected));
+        copy_text(expected + 6, target.name, sizeof(expected) - 6);
+        if (!read_reply || !read_reply(reply, sizeof(reply)) || !equal(expected, reply)) {
+            print("Installation cancelled.\n");
+            return 1;
+        }
+        print("Writing and verifying Nixel.\n");
+        if (current_task->terminal) print("Ctrl+C cancels the copy.\n");
+        error = fs_install_nixel(&target, clone ? 0 : image);
+    }
+    if (error) {
+        print("install: "); print(error); print(".\n");
+    } else {
+        print("Installation complete. Boot the target\nusing the legacy BIOS boot menu.\n");
+    }
+    return 1;
 }
 
 static int account_command(const char* command) {
@@ -154,10 +415,28 @@ static int account_command(const char* command) {
         print("uid="); print_u32(user_uid()); print(" gid="); print_u32(user_gid()); print("\n");
     } else if (has_prefix(command, "users") && !command[5]) {
         for (unsigned i = 0; i < USER_COUNT; i++) {
+            if (!users[i].name[0]) continue;
             print(users[i].name);
             if (i + 1 < USER_COUNT) print(" ");
         }
         print("\n");
+    } else if (has_prefix(command, "useradd ") || has_prefix(command, "passwd ")) {
+        int create=has_prefix(command,"useradd ");
+        const char* name=command+(create ? 8 : 7);
+        if(user_uid()!=USER_ROOT) { print("Root required; use sudo.\n"); return 1; }
+        char password[64]={0}, confirm[64]={0};
+        print("New password: "); int ok=terminal_read_password(password,sizeof(password));
+        if(ok) { print("Confirm password: "); ok=terminal_read_password(confirm,sizeof(confirm)); }
+        if(ok && equal(password,confirm)) {
+            ok=create ? user_create(name,password) : user_set_password(name,password);
+            print(ok ? "Account saved.\n" : "Account update failed.\n");
+        } else print("Passwords did not match or input cancelled.\n");
+        for(unsigned i=0;i<sizeof(password);i++) {
+            ((volatile char*)password)[i]=0; ((volatile char*)confirm)[i]=0;
+        }
+    } else if (has_prefix(command,"userlock ") || has_prefix(command,"userunlock ")) {
+        int locked=has_prefix(command,"userlock ");
+        print(user_set_locked(command+(locked ? 9 : 11),locked) ? "Account saved.\n" : "Account update failed (root required; root/service accounts are protected).\n");
     } else if (equal(command, "su")) {
         print("Usage: su <account>\n");
     } else if (has_prefix(command, "su ")) {
@@ -203,7 +482,7 @@ static int account_command(const char* command) {
 }
 
 void shell_execute_command(const char* command, shell_output_fn output,
-                           shell_clear_fn clear) {
+                           shell_clear_fn clear, int (*read_reply)(char*, uint32_t)) {
     shell_output = output;
     shell_clear = clear;
     if (!shell_api) return;
@@ -241,27 +520,36 @@ void shell_execute_command(const char* command, shell_output_fn output,
             if (session) copy_text(session->cwd, fs_getcwd(), sizeof(session->cwd));
             print("Started root login shell.\n");
         } else {
-            shell_execute_command(elevated, output, clear);
+            shell_execute_command(elevated, output, clear, read_reply);
             current_task->uid = uid;
             current_task->gid = gid;
         }
         return;
     }
     if (account_command(command)) return;
+    if (serial_output_command(command)) return;
+    if (storage_command(command)) return;
+    if (install_command(command, read_reply)) return;
     if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
         print("Commands:\n"
                     " ver             Show OS version and build ID\n"
                     " users / whoami / id   Show accounts or identity\n"
                     " sudo <command>  Run as root (password required)\n"
+                    " useradd <name> / passwd <name>  Create account / set password (root)\n"
+                    " userlock <name> / userunlock <name>  Disable / enable login (root)\n"
                     " su <account>    Switch identity (root only)\n"
                     " stat <path>     Show ownership and mode\n"
                     " chmod <octal> <path>  Set permissions\n"
                     " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
-                    " com0            Follow kernel serial/audio logs\n"
+                    " srout <port> [filter]  Follow serial output (0 = first UART)\n"
                     " ls [path]       List directory or file (exact case)\n"
                     " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"
+                    " lsblk           List disks, partitions and mount points\n"
+                    " install         Show Nixel disk installation options\n"
+                    " mount [dev dir] List mounts or mount ext4 (root)\n"
+                    " unmount <dir>   Unmount a volume (root; also umount)\n"
                     " pwd             Show current directory\n"
                     " rm              Remove files\n"
                     " cat <file>      Read file\n"
@@ -270,6 +558,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " ping <host>     Ping an IPv4 address or DNS hostname\n"
                     " ifconfig        Show network configuration\n"
                     " netdev          Show detected network hardware\n"
+                    " wifid-status    Show Wi-Fi state and diagnostics\n"
                     " clear           Clear screen\n");
     } else if (has_prefix(command, "ver") && (!command[3] || command[3] == ' ')) {
         print(OS_VERSION_DESCRIPTION "\n");
@@ -342,9 +631,12 @@ void shell_execute_command(const char* command, shell_output_fn output,
         } else print("Failed to load BMP!\n");
     } else if ((has_prefix(command, "ifconfig") && (!command[8] || command[8] == ' '))) {
         shell_network_ifconfig(shell_output);
+    } else if (has_prefix(command, "wifid-status") && (!command[12] || command[12] == ' ')) {
+        shell_wifi_status(shell_output);
     } else if ((has_prefix(command, "netdev") && (!command[6] || command[6] == ' '))) {
         if (!shell_api || !shell_api->network.get_device_info) {
             print("Network API unavailable.\n");
+            print_wifi_device();
             return;
         }
 
@@ -364,6 +656,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
             print_hex_u16(device);
             print("\n");
         }
+        print_wifi_device();
     } else if (has_prefix(command, "echo ")) {
         const char* text = command + 5;
         const char* redirect = 0;
@@ -396,22 +689,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
         while (command[length] && out < SHELL_ARGUMENT_MAX - 1)
             shell_args[out++] = command[length++];
         shell_args[out] = '\0';
-        int found = resolve_path(name, path, 0);
-        char candidate[FS_MAX_PATH];
-        unsigned n = 0; while (name[n]) n++;
-        const char* extensions[] = {"", ".bin", ".BIN"};
-        for (int root = 0; root < 2 && !found; root++) {
-            if (root && name[0] == '/') break;
-            for (int ext = 0; ext < 3 && !found; ext++) {
-                unsigned prefix = root ? 9 : 0;
-                if (n + prefix + (ext ? 4 : 0) >= sizeof(candidate)) continue;
-                if (root) copy_text(candidate, "/usr/bin/", sizeof(candidate));
-                copy_text(candidate+prefix, name, sizeof(candidate)-prefix);
-                copy_text(candidate+prefix+n, extensions[ext], sizeof(candidate)-prefix-n);
-                found = resolve_path(candidate, path, 0);
-            }
-        }
-        int result = found ? app_loader_launch_wait(shell_api, path, shell_args) : -1;
+        int result = resolve_command(name, path) ? app_loader_launch_wait(shell_api, path, shell_args) : -1;
         if (result == 0) return;
         if (result == -2) print("Invalid executable format.\n");
         else print("Unknown cmd. Type 'help'\n");
@@ -500,7 +778,7 @@ void shell_service(void* argument) {
         s->pending = 0; s->active = 1;
         current_task->terminate_requested = 0;
         mutex_unlock(&kernel_mutex);
-        shell_execute_command(command, s->output, s->clear);
+        shell_execute_command(command, s->output, s->clear, terminal_read_reply);
         mutex_lock(&kernel_mutex);
         current_task->terminate_requested = 0;
         s->active = 0;

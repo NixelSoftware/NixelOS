@@ -10,6 +10,9 @@ void paging_memory_info(user_memory_info_t* out);
 #define PAGE_SIZE 4096u
 #define APP_VIRTUAL_BASE 0x00C00000u
 #define APP_VIRTUAL_LIMIT 0x01000000u
+/* Private heap window; keep the upper PCI/MMIO identity mappings intact. */
+#define APP_HEAP_BASE  0x40000000u
+#define APP_HEAP_LIMIT 0x80000000u
 
 typedef struct {
     uint32_t* directory;
@@ -19,6 +22,9 @@ typedef struct {
 /* Enable the kernel's supervisor-only identity map. */
 void paging_init(void);
 uint8_t paging_is_enabled(void);
+/* Map one aligned PCI register page uncached in every address space.
+ * Only non-RAM above the private app heap is accepted. Returns 0 on failure. */
+int paging_map_mmio_page(uint32_t physical);
 
 /* Allocate and release 4 KiB physical frames from the reserved app pool. */
 uint32_t paging_frame_alloc(void);
@@ -31,6 +37,10 @@ int paging_address_space_create(address_space_t* space);
 int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_address,
                                    uint8_t writable, uint32_t* physical_out);
 void paging_address_space_destroy(address_space_t* space);
+/* Page-granular, zero-filled allocations owned by the active app.
+ * Free accepts only the original allocation base. Zero/-1 indicate failure. */
+uint32_t paging_user_alloc(uint32_t bytes);
+int paging_user_free(uint32_t address);
 
 /* CR3 helpers; callers must restore the kernel directory before returning. */
 void paging_activate(address_space_t* space);

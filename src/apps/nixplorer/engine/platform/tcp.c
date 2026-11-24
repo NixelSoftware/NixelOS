@@ -21,3 +21,6 @@ int nix_tcp_read(unsigned handle, void *out, unsigned cap) { return sys_tcp_read
 void nix_tcp_close(unsigned handle) { (void)sys_tcp_close(handle); }
 void nix_tcp_yield(void) { sys_yield(); }
 unsigned nix_tcp_ticks(void) { return sys_get_ticks(); }
+
+void *nix_http_alloc(unsigned bytes) { return sys_memory_alloc(bytes); }
+void nix_http_free(void *allocation) { if (allocation) (void)sys_memory_free(allocation); }

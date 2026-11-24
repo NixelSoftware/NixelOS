@@ -1,5 +1,7 @@
 #include "../mutex.h"
 #include "net.h"
+#include "wifi.h"
+#include "../net/wireless/intel/iwlegacy/station.h"
 #include "../net/amd/pcnet.h"
 #include "../net/intel/e1000.h"
 #include "../net/broadcom/tg3.h"
@@ -79,6 +81,22 @@ uint16_t net_detected_vendor = 0;
 uint16_t net_detected_device = 0;
 const char* net_detected_name = "None";
 static const pci_device_t* selected_pci_device;
+static uint32_t wifi_ip;
+static uint32_t ethernet_driver = ~0u;
+static const pci_device_t* ethernet_device;
+static const char* ethernet_name;
+static dhcp_lease_t ethernet_lease;
+static uint32_t ethernet_mask, ethernet_gateway;
+
+static void set_receiver(uint32_t driver, net_receive_handler_t handler);
+static uint8_t ethernet_receive(const uint8_t* data, uint32_t length);
+static uint8_t wifi_receive(const uint8_t* data, uint32_t length);
+static net_receive_handler_t primary_receiver;
+static net_receive_handler_t link_receivers[2];
+static uint32_t link_driver(sys_net_link_t link) {
+    if (link == SYS_NET_ETHERNET) return ethernet_driver;
+    return link == SYS_NET_WIFI ? 5 : ~0u;
+}
 
 const pci_device_t* sys_net_pci_device(void) { return selected_pci_device; }
 
@@ -92,6 +110,9 @@ void sys_net_get_device_info(uint16_t* vendor_out, uint16_t* device_out, const c
 uint8_t sys_net_init(uint16_t io) {
     MUTEX_GUARD(kernel_mutex);
     (void)io;
+    if (net_driver_type != ~0u) sys_net_shutdown();
+    ethernet_driver = ~0u;
+    ethernet_device = 0;
     selected_pci_device = 0;
     net_driver_type     = 0xFFFFFFFF;
     net_detected_vendor = 0;
@@ -101,6 +122,7 @@ uint8_t sys_net_init(uint16_t io) {
     debug_print("[NET] Probing PCI bus for network adapters...\n");
 
     if (!pci_init()) debug_print("[PCI] Device inventory exceeds capacity\n");
+    sys_wifi_probe();
     for (uint32_t index = 0; index < pci_device_count(); index++) {
         const pci_device_t* dev = pci_device_at(index);
         if (dev->class_code != 0x02) continue;
@@ -120,21 +142,23 @@ uint8_t sys_net_init(uint16_t io) {
             debug_print("[NET] Detected: ");
             debug_print(net_detected_name);
             debug_print("\n");
+            ethernet_driver = net_driver_type;
+            ethernet_device = dev;
+            ethernet_name = net_detected_name;
             goto adapter_matched;
         }
     }
 
 adapter_matched:
-    if (net_driver_type == 4) {
-        return r8169_init();
-    } else if (net_driver_type == 3) {
-        return b44_init();
-    } else if (net_driver_type == 2) {
-        return tg3_init();
-    } else if (net_driver_type == 1) {
-        return e1000_init();
-    } else if (net_driver_type == 0) {
-        return net_init(0);
+    if (ethernet_device) {
+        uint8_t initialized = 0;
+        if (ethernet_driver == 4) initialized = r8169_init();
+        else if (ethernet_driver == 3) initialized = b44_init();
+        else if (ethernet_driver == 2) initialized = tg3_init();
+        else if (ethernet_driver == 1) initialized = e1000_init();
+        else if (ethernet_driver == 0) initialized = net_init(0);
+        if (initialized) set_receiver(ethernet_driver, ethernet_receive);
+        return initialized;
     }
 
     if (net_detected_vendor != 0) {
@@ -149,90 +173,181 @@ adapter_matched:
     return 0;
 }
 
+static uint8_t driver_ready(uint32_t driver) {
+    if (driver == 5) return sys_wifi_is_connected();
+    if (driver == 4) return r8169_is_ready();
+    if (driver == 3) return b44_is_ready();
+    if (driver == 2) return tg3_is_ready();
+    if (driver == 1) return e1000_is_ready();
+    if (driver == 0) return net_is_ready();
+    return 0;
+}
+
 uint8_t sys_net_is_ready(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) return r8169_is_ready();
-    if (net_driver_type == 3) return b44_is_ready();
-    if (net_driver_type == 2) return tg3_is_ready();
-    if (net_driver_type == 1) return e1000_is_ready();
-    if (net_driver_type == 0) return net_is_ready();
-    return 0;
+    return driver_ready(net_driver_type);
+}
+
+/* Reports usable carrier for display: a driver that initialized without a
+ * cable is not "connected". Drivers lacking a carrier query report ready. */
+uint8_t sys_net_link_is_ready(sys_net_link_t link) {
+    MUTEX_GUARD(kernel_mutex);
+    uint32_t driver = link_driver(link);
+    if (driver == 4) return r8169_link_is_up();
+    if (driver == 3) return b44_link_is_up();
+    if (driver == 2) return tg3_link_is_up();
+    return driver_ready(driver);
+}
+
+static void reset_stack(void) {
+    dhcp_clear_lease();
+    tcp_init();
+    ipv4_set_configuration(0, 0, 0);
 }
 
 void sys_net_shutdown(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_shutdown();
-    else if (net_driver_type == 3) b44_shutdown();
-    else if (net_driver_type == 2) tg3_shutdown();
-    else if (net_driver_type == 1) e1000_shutdown();
-    else if (net_driver_type == 0) net_shutdown();
-    dhcp_clear_lease();
-    ipv4_set_configuration(0, 0, 0);
+    if (net_driver_type == 5) sys_wifi_disconnect();
+    reset_stack();
+    if (ethernet_driver == 4) r8169_shutdown();
+    else if (ethernet_driver == 3) b44_shutdown();
+    else if (ethernet_driver == 2) tg3_shutdown();
+    else if (ethernet_driver == 1) e1000_shutdown();
+    else if (ethernet_driver == 0) net_shutdown();
+    ethernet_lease = (dhcp_lease_t){0};
+    ethernet_mask = ethernet_gateway = 0;
 }
 
 void sys_net_poll(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_poll();
-    else if (net_driver_type == 3) b44_poll();
-    else if (net_driver_type == 2) tg3_poll();
-    else if (net_driver_type == 1) e1000_poll();
-    else if (net_driver_type == 0) net_poll();
+    if (ethernet_driver == 4) r8169_poll();
+    else if (ethernet_driver == 3) b44_poll();
+    else if (ethernet_driver == 2) tg3_poll();
+    else if (ethernet_driver == 1) e1000_poll();
+    else if (ethernet_driver == 0) net_poll();
+    sys_wifi_poll();
     ipv4_poll();
+    tcp_poll();
+}
+
+static uint8_t driver_send(uint32_t driver, const uint8_t* data, uint32_t length) {
+    if (driver == 5) return sys_wifi_is_connected() && !iwlegacy_send(data, length);
+    if (driver == 4) return r8169_send(data, length);
+    if (driver == 3) return b44_send(data, length);
+    if (driver == 2) return tg3_send(data, length);
+    if (driver == 1) return e1000_send(data, length);
+    if (driver == 0) return net_send(data, length);
+    return 0;
 }
 
 uint8_t sys_net_send(const uint8_t* data, uint32_t length) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) return r8169_send(data, length);
-    if (net_driver_type == 3) return b44_send(data, length);
-    if (net_driver_type == 2) return tg3_send(data, length);
-    if (net_driver_type == 1) return e1000_send(data, length);
-    if (net_driver_type == 0) return net_send(data, length);
-    return 0;
+    return driver_send(net_driver_type, data, length);
+}
+
+uint8_t sys_net_link_send(sys_net_link_t link, const uint8_t* data, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
+    return driver_send(link_driver(link), data, length);
+}
+
+static void set_receiver(uint32_t driver, net_receive_handler_t handler) {
+    if (driver == 5) iwlegacy_set_receiver(handler);
+    else if (driver == 4) r8169_set_receive_handler(handler);
+    else if (driver == 3) b44_set_receive_handler(handler);
+    else if (driver == 2) tg3_set_receive_handler(handler);
+    else if (driver == 1) e1000_set_receive_handler(handler);
+    else if (driver == 0) net_set_receive_handler(handler);
+}
+
+static uint8_t link_receive(sys_net_link_t link, const uint8_t* data, uint32_t length) {
+    MUTEX_GUARD(kernel_mutex);
+    uint8_t handled = 0;
+    if (link_driver(link) == net_driver_type && primary_receiver)
+        handled = primary_receiver(data, length);
+    if (link_receivers[link]) handled |= link_receivers[link](data, length);
+    return handled;
+}
+
+static uint8_t ethernet_receive(const uint8_t* data, uint32_t length) {
+    return link_receive(SYS_NET_ETHERNET, data, length);
+}
+
+static uint8_t wifi_receive(const uint8_t* data, uint32_t length) {
+    return link_receive(SYS_NET_WIFI, data, length);
 }
 
 void sys_net_set_receive_handler(net_receive_handler_t handler) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_set_receive_handler(handler);
-    else if (net_driver_type == 3) b44_set_receive_handler(handler);
-    else if (net_driver_type == 2) tg3_set_receive_handler(handler);
-    else if (net_driver_type == 1) e1000_set_receive_handler(handler);
-    else if (net_driver_type == 0) net_set_receive_handler(handler);
+    primary_receiver = handler;
+}
+
+void sys_net_link_set_receive_handler(sys_net_link_t link, net_receive_handler_t handler) {
+    MUTEX_GUARD(kernel_mutex);
+    if (link == SYS_NET_ETHERNET || link == SYS_NET_WIFI) link_receivers[link] = handler;
+}
+
+static uint64_t driver_mac(uint32_t driver) {
+    if (driver == 5) {
+        wifi_status_t status;
+        sys_wifi_get_status(&status);
+        uint64_t mac = 0;
+        for (unsigned i = 0; i < 6; i++) mac = (mac << 8) | status.intel.eeprom.mac[i];
+        return mac;
+    }
+    if (driver == 4) return r8169_get_mac_address();
+    if (driver == 3) return b44_get_mac_address();
+    if (driver == 2) return tg3_get_mac_address();
+    if (driver == 1) return e1000_get_mac_address();
+    if (driver == 0) return net_get_mac_address();
+    return 0;
 }
 
 uint64_t sys_net_get_mac_address(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) return r8169_get_mac_address();
-    if (net_driver_type == 3) return b44_get_mac_address();
-    if (net_driver_type == 2) return tg3_get_mac_address();
-    if (net_driver_type == 1) return e1000_get_mac_address();
-    if (net_driver_type == 0) return net_get_mac_address();
-    return 0;
+    return driver_mac(net_driver_type);
+}
+
+uint64_t sys_net_link_mac(sys_net_link_t link) {
+    MUTEX_GUARD(kernel_mutex);
+    return driver_mac(link_driver(link));
 }
 
 void sys_net_set_ip_address(uint32_t address) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) r8169_set_ip_address(address);
+    if (net_driver_type == 5) wifi_ip=address;
+    else if (net_driver_type == 4) r8169_set_ip_address(address);
     else if (net_driver_type == 3) b44_set_ip_address(address);
     else if (net_driver_type == 2) tg3_set_ip_address(address);
     else if (net_driver_type == 1) e1000_set_ip_address(address);
     else if (net_driver_type == 0) net_set_ip_address(address);
 }
 
+static uint32_t driver_ip(uint32_t driver) {
+    if (driver == 5) return wifi_ip;
+    if (driver == 4) return r8169_get_ip_address();
+    if (driver == 3) return b44_get_ip_address();
+    if (driver == 2) return tg3_get_ip_address();
+    if (driver == 1) return e1000_get_ip_address();
+    if (driver == 0) return net_get_ip_address();
+    return 0;
+}
+
 uint32_t sys_net_get_ip_address(void) {
     MUTEX_GUARD(kernel_mutex);
-    if (net_driver_type == 4) return r8169_get_ip_address();
-    if (net_driver_type == 3) return b44_get_ip_address();
-    if (net_driver_type == 2) return tg3_get_ip_address();
-    if (net_driver_type == 1) return e1000_get_ip_address();
-    if (net_driver_type == 0) return net_get_ip_address();
-    return 0;
+    return driver_ip(net_driver_type);
+}
+
+uint32_t sys_net_link_ip(sys_net_link_t link) {
+    MUTEX_GUARD(kernel_mutex);
+    return driver_ip(link_driver(link));
 }
 
 void sys_net_get_diagnostics(net_diagnostics_t* d) {
     MUTEX_GUARD(kernel_mutex);
     if (!d) return;
     *d = (net_diagnostics_t){0};
-    if (net_driver_type == 4) r8169_get_diagnostics(d);
+    if (net_driver_type == 5) iwlegacy_get_diagnostics(d);
+    else if (net_driver_type == 4) r8169_get_diagnostics(d);
     else if (net_driver_type == 3) b44_get_diagnostics(d);
     else if (net_driver_type == 2) tg3_get_diagnostics(d);
     else if (net_driver_type == 1) e1000_get_diagnostics(d);
@@ -296,4 +411,44 @@ uint8_t sys_net_set_manual_configuration(uint32_t address, uint32_t mask, uint32
     dhcp_clear_lease();
     ipv4_set_configuration(address, gateway, mask);
     return 1;
+}
+
+uint8_t sys_net_select_wifi(void) {
+    MUTEX_GUARD(kernel_mutex);
+    if(!sys_wifi_is_connected()) return 0;
+    if (net_driver_type == 5) return 1;
+    ipv4_get_configuration(&ethernet_mask, &ethernet_gateway);
+    ethernet_lease = *dhcp_get_lease();
+    if (!ethernet_lease.leased) ethernet_lease = (dhcp_lease_t){0};
+    dhcp_clear_lease();
+    wifi_status_t status; sys_wifi_get_status(&status);
+    net_driver_type=5; wifi_ip=0;
+    net_detected_vendor=status.intel.vendor; net_detected_device=status.intel.device;
+    net_detected_name="Intel PRO/Wireless 3945"; selected_pci_device=0;
+    for(unsigned i=0;i<pci_device_count();i++) {
+        const pci_device_t* p=pci_device_at(i);
+        if(p && p->bus==status.intel.pci_bus && p->slot==status.intel.pci_slot &&
+           p->function==status.intel.pci_function) { selected_pci_device=p; break; }
+    }
+    set_receiver(5, wifi_receive);
+    sys_net_initialize_stack();
+    return 1;
+}
+
+void sys_net_wifi_down(void) {
+    MUTEX_GUARD(kernel_mutex);
+    if (net_driver_type != 5) return;
+    reset_stack();
+    set_receiver(5, 0);
+    net_driver_type = ethernet_driver;
+    selected_pci_device = ethernet_device;
+    net_detected_vendor = ethernet_device ? ethernet_device->vendor_id : 0;
+    net_detected_device = ethernet_device ? ethernet_device->device_id : 0;
+    net_detected_name = ethernet_device ? ethernet_name : "None";
+    if (driver_ready(ethernet_driver)) {
+        uint32_t address = driver_ip(ethernet_driver);
+        sys_net_initialize_stack();
+        ipv4_set_configuration(address, ethernet_gateway, ethernet_mask);
+        dhcp_restore_lease(&ethernet_lease);
+    }
 }

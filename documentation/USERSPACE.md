@@ -1,9 +1,18 @@
 # Userspace transition
 
-The kernel now has a first i386 ring-3 path. The existing application loader
-still executes legacy applications in ring 0 and passes them `os_api_t`; only
-apps marked as user apps enter ring 3. Remaining legacy GUI and console apps
-use the ring-0 `os_api_t` callback interface until they are migrated.
+All disk-loaded applications execute in i386 ring 3. The loader accepts only
+`APP_TYPE_USER` (3); legacy GUI/console headers (1 and 2) are rejected for every
+user, including root. OOBE and System Diagnostics now use the window/syscall
+interface. Built-in kernel UI components still use internal callbacks.
+
+Root applications remain in ring 3 and receive no `os_api_t` kernel callbacks.
+The calling task's UID authorizes sensitive services; `sudo <app>` authenticates
+and creates a child with UID 0. Restoring the shell's UID does not change that
+child, and ordinary launches do not inherit a previous sudo command's elevation.
+
+See [ABI permissions](APP_DEVELOPMENT.md#permissions) for protected calls and
+`SYS_ERR_PERMISSION` handling. `sys_shutdown` and `sys_reboot` now return on
+failure, so callers must handle denial rather than assume they never return.
 
 The first system-call ABI lives in `src/system/user/sys_api.h`. Calls use
 `int 0x80`, with the call number in EAX, arguments in EBX/ECX/EDX, and the
@@ -81,7 +90,7 @@ Query from an app with `user_memory_info_t info; sys_memory_info(&info);`, or
 from the kernel with `paging_memory_info(&info)`.
 
 `sys_write` accepts only readable user pages in the current app address space.
-`sys_shutdown` is a privileged service exposed through the syscall dispatcher;
+`sys_shutdown` requires UID 0 in the syscall dispatcher;
 user apps do not call kernel power routines directly. `shutdown` is the second
 app using the ring-3 path. `netdiag` is the third ring-3 app and demonstrates
 the diagnostics snapshot syscall. `sys_write` forwards output to the Terminal
@@ -127,8 +136,8 @@ vector `0x80` is callable from ring 3. `userhello` is the first ring-3 app;
 launch it from the shell to exercise write, tick, and exit calls.
 
 Timer interrupts can switch between concurrent user applications and kernel
-workers. Legacy ring-0 applications still use the privileged `os_api_t`
-callback interface; ring-3 apps use validated kernel services.
+workers. All loaded applications use validated kernel services; legacy ring-0
+executables are rejected.
 
 Doom uses the expanded 4 MiB app slot with a 2 MiB zone. Window clients may submit
 bounded packed RGB frames with `USER_WINDOW_DRAW_PIXELS` and opt into raw PS/2
@@ -158,3 +167,10 @@ a brief gap and loss of already submitted device buffers can occur during switch
 Hardware OPL bypasses the PCM mixer on the selected card. `sys_audio_opl(256, 0)` acquires exclusive synth ownership; subsequent register writes require that owner. PCM streams may run concurrently. Audio shutdown or process exit releases the synth and silences its voices. Device changes are rejected while the synth is owned. Cards without OPL return unavailable so synthesizers use their software PCM path.
 
 Run `sh src/system/services/audio/tests/run_mixer_tests.sh` for mixer regressions.
+
+`sys_fs_delete(path)` (54) removes a regular file under the filesystem's normal
+permission and sticky-directory checks: 0 on success, -1 on failure.
+
+The system menu shutdown dialog is compiled into the kernel's WM components.
+It invokes the internal power service without launching a disk executable or
+changing the session UID. Application power syscalls still require UID 0.

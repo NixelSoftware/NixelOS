@@ -724,6 +724,11 @@ uint8_t r8169_is_ready(void) {
     return ready;
 }
 
+/* Cached PHY carrier state, refreshed by r8169_poll(). */
+uint8_t r8169_link_is_up(void) {
+    return ready && link_up;
+}
+
 void r8169_shutdown(void) {
     ready = 0;
     if (!mmio) return;
