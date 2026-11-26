@@ -1,4 +1,5 @@
 #include "../mutex.h"
+#include "../irq.h"
 #include "net.h"
 #include "wifi.h"
 #include "../net/wireless/intel/iwlegacy/station.h"
@@ -82,6 +83,8 @@ uint16_t net_detected_device = 0;
 const char* net_detected_name = "None";
 static const pci_device_t* selected_pci_device;
 static uint32_t wifi_ip;
+static task_event_t net_event;
+static volatile uint8_t net_interrupted, net_backlog;
 static uint32_t ethernet_driver = ~0u;
 static const pci_device_t* ethernet_device;
 static const char* ethernet_name;
@@ -209,6 +212,7 @@ void sys_net_shutdown(void) {
     MUTEX_GUARD(kernel_mutex);
     if (net_driver_type == 5) sys_wifi_disconnect();
     reset_stack();
+    net_interrupted = 0;
     if (ethernet_driver == 4) r8169_shutdown();
     else if (ethernet_driver == 3) b44_shutdown();
     else if (ethernet_driver == 2) tg3_shutdown();
@@ -228,6 +232,28 @@ void sys_net_poll(void) {
     sys_wifi_poll();
     ipv4_poll();
     tcp_poll();
+}
+
+void net_rx_signal(void) {
+    net_interrupted = 1;
+    task_event_signal(&net_event);
+}
+
+void net_rx_backlog(void) { net_backlog = 1; }
+
+void sys_net_wait(void) {
+    if (net_backlog) {
+        /* Let input and rendering run while the ring keeps refilling. */
+        net_backlog = 0;
+        task_sleep_ms(1);
+        return;
+    }
+    /* Wait longer only once the adapter has really delivered an interrupt;
+     * the timeout still drives TCP, ARP and NTP timers. Polled adapters and
+     * Wi-Fi keep the short period. */
+    int interrupt_driven = net_interrupted && ethernet_device &&
+        irq_active(ethernet_device->irq_line) && !sys_wifi_is_connected();
+    task_event_wait_ms(&net_event, interrupt_driven ? 10 : 2);
 }
 
 static uint8_t driver_send(uint32_t driver, const uint8_t* data, uint32_t length) {

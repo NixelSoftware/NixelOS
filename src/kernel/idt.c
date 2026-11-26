@@ -1,4 +1,5 @@
 #include "idt.h"
+#include "irq.h"
 #include "drivers/display/font.h"
 #include "drivers/display.h"
 #include "drivers/serial.h"
@@ -201,6 +202,7 @@ static void kernel_panic(registers_t* regs) {
 
 void isr_handler(registers_t* regs) {
     if (regs && regs->int_no == 37) { audio_interrupt((uint8_t)regs->int_no); return; }
+    if (regs && irq_dispatch(regs->int_no)) return;
     if (regs->int_no == 39) {
         outb(0x20, 0x0B);
         uint8_t isr = inb(0x20);

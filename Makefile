@@ -137,7 +137,7 @@ KERNEL_C := \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
   src/system/graphics/widgets.c src/system/graphics/text_layout.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
   src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/services/audio/mixer.c src/system/loader/app_loader.c \
-  src/kernel/idt.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
+  src/kernel/idt.c src/kernel/irq.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
   src/kernel/drivers/display/vga.c src/kernel/drivers/display/intel_gma.c src/kernel/drivers/display/i915/i915.c src/kernel/drivers/display/i915/gen4_engine.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c src/kernel/drivers/display/virgl.c \
@@ -419,6 +419,8 @@ src/kernel/net/broadcom/tg3.o src/kernel/net/phys/broadcom.o: src/kernel/net/phy
 $(KERNEL_C:.c=.o): src/kernel/hal/net.h src/kernel/hal/net_types.h
 src/kernel/net/amd/pcnet.o: src/kernel/net/amd/pcnet.h
 src/kernel/net/intel/e1000.o: src/kernel/net/intel/e1000.h
+src/kernel/irq.o src/kernel/idt.o src/kernel/hal/net.o src/kernel/net/intel/e1000.o src/kernel/net/amd/pcnet.o: src/kernel/irq.h
+src/kernel/net/realtek/r8169.o src/kernel/net/broadcom/b44.o src/kernel/net/broadcom/tg3.o: src/kernel/irq.h
 src/kernel/net/realtek/r8169.o: src/kernel/net/realtek/r8169.h
 src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3.h
 src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h src/kernel/net/broadcom/tg3.h src/kernel/net/realtek/r8169.h

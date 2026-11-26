@@ -15,6 +15,7 @@ volatile uint32_t frame_timer;
 static dhcp_lease_t lease = {.leased=1,.dns=0xc0a80101};
 const dhcp_lease_t* dhcp_get_lease(void) { return &lease; }
 void task_sleep_ms(uint32_t ms) { frame_timer += ms; }
+void net_rx_signal(void) { }
 void debug_print(const char* s) { (void)s; }
 void debug_hex(uint32_t n) { (void)n; }
 uint32_t paging_current_directory(void) { return 0x1000; }

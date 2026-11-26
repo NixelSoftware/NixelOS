@@ -77,6 +77,12 @@ int task_snapshot(task_info_t* output, int capacity);
 int task_cwd_in_use(const char* path);
 void task_sleep(uint32_t legacy_ticks);
 void task_sleep_ms(uint32_t milliseconds);
+/* One-waiter wakeup latch. A signal with no waiter is kept for the next wait. */
+typedef struct { task_t* waiter; uint8_t pending; } task_event_t;
+/* Returns on signal or timeout, whichever comes first. */
+void task_event_wait_ms(task_event_t* event, uint32_t milliseconds);
+/* Safe from IRQ handlers and tasks. */
+void task_event_signal(task_event_t* event);
 void task_preempt_disable(void);
 void task_preempt_enable(void);
 void task_preempt_point(void);

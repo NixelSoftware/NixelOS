@@ -1,8 +1,8 @@
-/* Realtek RTL8169/8110/8168/810x/8111 PCI Ethernet, polled DMA driver.
+/* Realtek RTL8169/8110/8168/810x/8111 PCI Ethernet, DMA driver.
  *
  * Register level port of Linux drivers/net/ethernet/realtek/r8169_main.c
  * (GPL-2.0-only).  No kernel device model, workqueues, phylib or firmware
- * loader: Nixel drives the MAC directly from the boot-time poll loop.
+ * loader: Nixel drives the MAC directly; interrupts only wake the network task.
  *
  * The legacy 16-byte descriptor format is used (one TX queue, one RX queue),
  * which is what RTL8169 through RTL8111 provide.  RTL8125 and newer use the
@@ -15,6 +15,8 @@
 #include "../../drivers/delay.h"
 #include "../../drivers/pci.h"
 #include "../../drivers/serial.h"
+#include "../../irq.h"
+#include "../../task.h"
 
 #define RTL_VENDOR_ID 0x10EC
 
@@ -55,6 +57,8 @@
 
 /* ---- Interrupt/status bits -------------------------------------------- */
 #define IntrErrBits (0x8000 | 0x0040 | 0x0010 | 0x0008 | 0x0002)
+/* RX OK, link change, and every error source. TX completion stays masked. */
+#define IntrWakeBits (IntrErrBits | 0x0001 | 0x0020)
 
 /* ---- Cfg9346 ----------------------------------------------------------- */
 #define Cfg9346_Lock   0x00
@@ -261,6 +265,8 @@ static uint16_t tx_cur, tx_dirty, rx_cur;
 static uint32_t link_poll;
 static net_receive_handler_t rx_handler;
 static net_diagnostics_t diag;
+static uint8_t irq_line, irq_on;
+static volatile uint8_t irq_armed;
 static void (*init_progress)(const char* status);
 
 static void progress(const char* status) {
@@ -423,6 +429,24 @@ static void lock_config(void)   { write8(Cfg9346, Cfg9346_Lock); }
 static void irq_mask_and_ack(void) {
     write16(IntrMask, 0);
     write16(IntrStatus, 0xFFFF);
+}
+
+/* Masks the chip until r8169_poll() has drained the ring. */
+static int r8169_interrupt(void) {
+    if (!irq_armed) return 0;
+    uint16_t status = read16(IntrStatus);
+    if (status == 0xFFFF || !(status & IntrWakeBits)) return 0;
+    irq_armed = 0;
+    write16(IntrMask, 0);
+    net_rx_signal();
+    return 1;
+}
+
+static void irq_arm(void) {
+    uint32_t flags = task_irq_save();
+    irq_armed = 1;
+    write16(IntrMask, IntrWakeBits);
+    task_irq_restore(flags);
 }
 
 /* ---- MAC address ------------------------------------------------------- */
@@ -716,6 +740,12 @@ uint8_t r8169_init(void) {
     ready = 1;
     diag.initialized = 1;
     update_link();
+    irq_line = pci_device->irq_pin ? pci_device->irq_line : 0xFF;
+    irq_on = (uint8_t)irq_register(irq_line, r8169_interrupt);
+    if (irq_on) {
+        pci_enable_intx(pci_device);
+        irq_arm();
+    }
     progress("Realtek: adapter initialized");
     return 1;
 }
@@ -732,8 +762,11 @@ uint8_t r8169_link_is_up(void) {
 void r8169_shutdown(void) {
     ready = 0;
     if (!mmio) return;
+    irq_armed = 0;
     write8(ChipCmd, 0);
     irq_mask_and_ack();
+    if (irq_on) irq_unregister(irq_line);
+    irq_on = 0;
     write32(RxConfig, read32(RxConfig) & ~RX_ACCEPT_MASK);
     if (pci_device) pci_set_master(pci_device, 0);
 }
@@ -794,8 +827,10 @@ void r8169_poll(void) {
         diag.last_error_status = (uint16_t)status;
         if (status & (0x8000 | 0x0040 | 0x0010)) diag.rx_errors++;
         if (status & 0x0008) diag.tx_errors++;
-        write16(IntrStatus, (uint16_t)status);
     }
+    /* Acknowledge before draining: a frame that lands afterwards sets its bit
+     * again and interrupts once the mask is restored. */
+    if (status && status != 0xFFFF) write16(IntrStatus, (uint16_t)status);
 
     /* Receive with a bounded budget so the desktop keeps running. */
     for (uint32_t budget = RX_POLL_BUDGET; budget; --budget) {
@@ -830,6 +865,9 @@ void r8169_poll(void) {
         __asm__ volatile ("" ::: "memory");
         rx_cur = (uint16_t)((rx_cur + 1) % NUM_RX_DESC);
     }
+
+    if (!(rx_ring[rx_cur].opts1 & DescOwn)) net_rx_backlog();
+    else if (irq_on && !irq_armed) irq_arm();
 }
 
 void r8169_set_receive_handler(net_receive_handler_t handler) {

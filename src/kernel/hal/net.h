@@ -17,6 +17,8 @@ uint8_t  sys_net_init(uint16_t io);
 uint8_t  sys_net_is_ready(void);
 void     sys_net_shutdown(void);
 void     sys_net_poll(void);
+/* Network task only: sleep until there is something for sys_net_poll(). */
+void     sys_net_wait(void);
 uint8_t  sys_net_send(const uint8_t* data, uint32_t length);
 void     sys_net_set_receive_handler(net_receive_handler_t handler);
 uint64_t sys_net_get_mac_address(void);

@@ -1,6 +1,8 @@
 #include "e1000.h"
 #include "../../drivers/pci.h"
 #include "../../drivers/serial.h"
+#include "../../irq.h"
+#include "../../task.h"
 
 
 #define INTEL_VENDOR_ID    0x8086
@@ -28,6 +30,10 @@
 #define REG_MTA       0x5200
 #define REG_RAL       0x5400
 #define REG_RAH       0x5404
+
+/* Link change, RX descriptors low, RX overrun, RX timer. */
+#define E1000_RX_CAUSES ((1 << 2) | (1 << 4) | (1 << 6) | (1 << 7))
+#define PCI_CMD_INTX_DISABLE (1 << 10)
 
 #define CTRL_SLU      (1 << 6)
 #define CTRL_RST      (1 << 26)
@@ -86,6 +92,9 @@ static uint64_t mac_addr = 0;
 static uint32_t ip_addr = 0;
 static net_receive_handler_t rx_handler = 0;
 static net_diagnostics_t diag;
+static uint8_t irq_line = 0xFF;
+static uint8_t irq_on = 0;
+static volatile uint8_t irq_armed = 0;
 
 static uint16_t rx_cur = 0;
 static uint16_t tx_cur = 0;
@@ -155,6 +164,8 @@ static int e1000_pci_find(void) {
 
             uint32_t cmd = pci_config_read32((uint8_t)bus, slot, func, 0x04);
             cmd |= 0x0007;
+            cmd &= ~(uint32_t)PCI_CMD_INTX_DISABLE;
+            irq_line = dev->irq_pin ? dev->irq_line : 0xFF;
             pci_config_write16((uint8_t)bus, slot, func, 0x04, (uint16_t)cmd);
 
             uint32_t bar0 = pci_config_read32((uint8_t)bus, slot, func, 0x10);
@@ -196,6 +207,24 @@ static int e1000_pci_find(void) {
 
     }
     return 0;
+}
+
+/* Masks the device until e1000_poll() has drained the ring. */
+static int e1000_interrupt(void) {
+    if (!irq_armed) return 0;
+    uint32_t cause = e1000_read(REG_ICR); /* read clears */
+    if (cause == 0xFFFFFFFFU || !(cause & E1000_RX_CAUSES)) return 0;
+    irq_armed = 0;
+    e1000_write(REG_IMC, 0xFFFFFFFF);
+    net_rx_signal();
+    return 1;
+}
+
+static void e1000_arm(void) {
+    uint32_t flags = task_irq_save();
+    irq_armed = 1;
+    e1000_write(REG_IMS, E1000_RX_CAUSES);
+    task_irq_restore(flags);
 }
 
 uint8_t e1000_init(void) {
@@ -320,6 +349,10 @@ uint8_t e1000_init(void) {
     }
     ready = 1;
     diag.initialized = 1;
+    /* I/O-port access is an address/data pair an IRQ could tear: poll then. */
+    irq_on = use_mmio && irq_register(irq_line, e1000_interrupt);
+    if (irq_on) e1000_arm();
+    debug_print(irq_on ? "[E1000] Interrupt driven\n" : "[E1000] Polling\n");
     return 1;
 }
 
@@ -334,7 +367,11 @@ void e1000_shutdown(void) {
     if (!ready) return;
     e1000_write(REG_RCTL, 0);
     e1000_write(REG_TCTL, 0);
+    irq_armed = 0;
     e1000_write(REG_IMC, 0xFFFFFFFF);
+    e1000_read(REG_ICR);
+    if (irq_on) irq_unregister(irq_line);
+    irq_on = 0;
     ready = 0;
 }
 
@@ -398,6 +435,9 @@ void e1000_poll(void) {
         rx_cur = (rx_cur + 1) % E1000_NUM_RX_DESC;
         e1000_write(REG_RDT, old_cur);
     }
+
+    if (rx_descs[rx_cur].status & RX_STATUS_DD) net_rx_backlog();
+    else if (irq_on && !irq_armed) e1000_arm();
 }
 
 void e1000_set_receive_handler(net_receive_handler_t handler) {

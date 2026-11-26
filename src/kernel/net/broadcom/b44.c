@@ -1,4 +1,4 @@
-/* BCM4401 PCI Fast Ethernet, polled DMA driver.
+/* BCM4401 PCI Fast Ethernet DMA driver.
  * Hardware sequencing follows iPXE's b44 driver (GPL-2.0-or-later):
  * https://github.com/ipxe/ipxe/blob/master/src/drivers/net/b44.c
  * Copyright (c) 2008 Stefan Hajnoczi and Pantelis Koukousoulas;
@@ -10,6 +10,8 @@
 #include "b44_regs.h"
 #include "../../drivers/serial.h"
 #include "../../drivers/pci.h"
+#include "../../irq.h"
+#include "../../task.h"
 
 #define COUNT 16U
 #define BUFFER_SIZE 1600U
@@ -19,6 +21,8 @@
 #define DMA_TRANSLATION 0x40000000U
 #define CORE_CLOCK 0x00010000U
 #define CORE_FORCE 0x00020000U
+/* TX completion stays masked: sends reap their own descriptors. */
+#define IRQ_WAKE (ISTAT_RX | ISTAT_ERRORS)
 
 typedef struct { uint32_t control, address; } descriptor_t;
 /* The 12-bit DMA cursor requires each ring to start on a 4 KiB boundary.
@@ -32,6 +36,8 @@ static uint64_t mac;
 static uint8_t ready, link_up, phy, tx_prod, tx_cons, rx_cons;
 static uint32_t link_poll;
 static uint8_t core_accessible;
+static uint8_t irq_line, irq_on;
+static volatile uint8_t irq_armed;
 static net_receive_handler_t handler;
 static net_diagnostics_t diag;
 static void (*init_progress)(const char* status);
@@ -90,7 +96,9 @@ static uint8_t discover(void) {
         pci_config_write16(bus, slot, fn, 0x44, pm & ~0x8003U);
         delay_us(10000);
         /* Write only command, never the write-one-to-clear PCI status. */
-        pci_config_write16(bus, slot, fn, 4, (uint16_t)pci_read(4) | 6);
+        pci_config_write16(bus, slot, fn, 4,
+            ((uint16_t)pci_read(4) | 6) & ~PCI_COMMAND_INTX_OFF);
+        irq_line = dev->irq_pin ? dev->irq_line : 0xFF;
         return 1;
     }
     return 0;
@@ -135,8 +143,30 @@ static uint8_t disable_core(void) {
     delay_us(10);
     return 1;
 }
+/* Masks the core until b44_poll() has drained the ring. */
+static int b44_interrupt(void) {
+    if (!irq_armed) return 0;
+    uint32_t status = read_reg(B44_ISTAT);
+    if (status == 0xFFFFFFFFU || !(status & IRQ_WAKE)) return 0;
+    irq_armed = 0;
+    write_reg(B44_IMASK, IMASK_DISABLE);
+    net_rx_signal();
+    return 1;
+}
+static void irq_arm(void) {
+    uint32_t flags = task_irq_save();
+    irq_armed = 1;
+    write_reg(B44_IMASK, IRQ_WAKE);
+    task_irq_restore(flags);
+}
 void b44_shutdown(void) {
     ready = 0;
+    irq_armed = 0;
+    if (irq_on) {
+        write_reg(B44_IMASK, IMASK_DISABLE);
+        irq_unregister(irq_line);
+        irq_on = 0;
+    }
     if (!mmio || !core_accessible) return;
     write_reg(B44_IMASK, 0);
     write_reg(B44_ENET_CTRL, ENET_CTRL_DISABLE);
@@ -186,6 +216,8 @@ uint8_t b44_init(void) {
     progress("BCM4401: configuring PCI bridge");
     pci_write(0x80, 0x18002000U);
     write_reg(SSB_PCI_TRANS_2, read_reg(SSB_PCI_TRANS_2) | SSB_PCI_PREF | SSB_PCI_BURST);
+    /* Route the Ethernet core's interrupt through the PCI core to INTA#. */
+    write_reg(B44_SBINTVEC, read_reg(B44_SBINTVEC) | SBINTVEC_ENET0);
     pci_write(0x80, 0x18000000U);
     progress("BCM4401: reading core state");
     /* Firmware may leave the Ethernet core asleep. Never call the MAC
@@ -270,6 +302,8 @@ uint8_t b44_init(void) {
     ready = 1;
     progress("BCM4401: checking PHY link");
     update_link();
+    irq_on = (uint8_t)irq_register(irq_line, b44_interrupt);
+    if (irq_on) irq_arm();
     progress("BCM4401: adapter initialized");
     return 1;
 }
@@ -309,6 +343,9 @@ void b44_poll(void) {
         b44_shutdown();
         return;
     }
+    /* Acknowledge before reading the RX cursor, so a later frame sets its bit
+     * again and interrupts once the mask is restored. */
+    write_reg(B44_ISTAT, status);
     if ((link_poll++ & 127U) == 0) update_link();
     reap_tx();
     uint32_t pending = (read_reg(B44_DMARX_STAT) & 0xFFF) / sizeof(descriptor_t);
@@ -334,7 +371,9 @@ void b44_poll(void) {
         write_reg(B44_DMARX_PTR, rx_cons * sizeof(descriptor_t));
         rx_cons = (rx_cons + 1) % COUNT;
     }
-    write_reg(B44_ISTAT, status);
+    pending = (read_reg(B44_DMARX_STAT) & 0xFFF) / sizeof(descriptor_t);
+    if (pending < COUNT && rx_cons != pending) net_rx_backlog();
+    else if (irq_on && !irq_armed) irq_arm();
 }
 uint8_t b44_is_ready(void) { return ready; }
 /* Cached PHY carrier state, refreshed by b44_poll(). */

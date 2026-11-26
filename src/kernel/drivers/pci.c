@@ -232,6 +232,12 @@ void pci_prepare_polling(const pci_device_t* d) {
     pci_write16(d, 4, pci_read16(d, 4) | PCI_COMMAND_INTX_OFF);
     config_unlock(flags);
 }
+void pci_enable_intx(const pci_device_t* d) {
+    if (!d) return;
+    uint32_t flags = config_lock();
+    pci_write16(d, 4, pci_read16(d, 4) & ~PCI_COMMAND_INTX_OFF);
+    config_unlock(flags);
+}
 int pci_save_state(const pci_device_t* d, pci_saved_state_t* s) {
     if (!d || !s || d->header_type != 0 || pci_read16(d, 0) != d->vendor_id) return 0;
     *s = (pci_saved_state_t){0};

@@ -62,6 +62,8 @@ The network stack polls every adapter on a timer. [src/kernel/main.c:397](src/ke
 
 **Fix:** register the NIC IRQ, drain RX in the handler (or a deferred bottom half), and keep polling only as a fallback when no IRQ line is available.
 
+**Status:** fixed in code. `e1000`, PCnet, `r8169`, `b44` and `tg3` interrupt ([src/kernel/irq.c](src/kernel/irq.c)): the handler masks the device and wakes the network task, which drains RX. Only `e1000` and PCnet have been tested, in QEMU. The `r8169`, `b44` and `tg3` interrupt paths are untested and need hardware. With a working interrupt the task still wakes at least every 10 ms for TCP, ARP and NTP timers; an adapter on an unsupported IRQ line (including IRQ 5) is still polled. Wi-Fi is still polled.
+
 ### P6. Polling loops with fixed sleeps (Medium)
 
 Several services wake on a fixed period regardless of work:

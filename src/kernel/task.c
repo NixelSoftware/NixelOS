@@ -105,6 +105,28 @@ void task_sleep_ms(uint32_t milliseconds) {
     task_yield();
     task_irq_restore(flags);
 }
+void task_event_wait_ms(task_event_t* event, uint32_t milliseconds) {
+    if (!current_task || !scheduler_running() || current_task->preempt_count) return;
+    uint32_t flags = task_irq_save();
+    if (!event->pending) {
+        /* Published only while sleeping here, so a signal can never wake this
+         * task out of an unrelated mutex wait. */
+        event->waiter = current_task;
+        task_sleep_ms(milliseconds);
+        event->waiter = 0;
+    }
+    event->pending = 0;
+    task_irq_restore(flags);
+}
+void task_event_signal(task_event_t* event) {
+    uint32_t flags = task_irq_save();
+    event->pending = 1;
+    if (event->waiter) {
+        scheduler_wake(event->waiter, scheduler_clock());
+        event->waiter = 0;
+    }
+    task_irq_restore(flags);
+}
 void task_sleep(uint32_t ticks) {
     task_sleep_ms(ticks > 0x0fffffffu ? 0x7fffffffu : ticks * 10u);
 }

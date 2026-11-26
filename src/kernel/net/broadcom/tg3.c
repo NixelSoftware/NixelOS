@@ -2,6 +2,8 @@
 #include "../../drivers/serial.h"
 #include "../../drivers/pci.h"
 #include "../../drivers/delay.h"
+#include "../../irq.h"
+#include "../../task.h"
 #include "../../hal/net.h"
 #include "tg3_regs.h"
 #include "../phys/broadcom.h"
@@ -12,6 +14,11 @@
 #define TG3_MISC_HOST_CTRL_CLEAR_INT 0x00000001
 #define TG3_MISC_HOST_CTRL_MASK_INT 0x00000002
 #define TG3_DMA_RWCTRL              0x0000006C
+#define TG3_PCISTATE                0x00000070
+#define TG3_PCISTATE_INT_NOT_ACTIVE 0x00000002
+/* Low half of interrupt mailbox 0: 0 enables, nonzero acknowledges/disables. */
+#define TG3_INT_MBOX                0x00000204
+#define TG3_SD_STATUS_UPDATED       0x00000001
 
 #define TG3_GRC_MODE                0x00006800
 #define TG3_GRC_MODE_HOST_SENDBDS   0x00020000
@@ -209,6 +216,8 @@ static uint8_t tg3_cpmu, tg3_57765, tg3_asf;
 static uint32_t tg3_host_control;
 static uint8_t tg3_link_up;
 static uint32_t tg3_link_poll;
+static uint8_t tg3_irq_line, tg3_irq_on;
+static volatile uint8_t tg3_irq_armed, tg3_irq_fired;
 
 static tg3_rx_desc_t rx_std_ring[TG3_RX_RING_SIZE] __attribute__((aligned(64)));
 static volatile tg3_rx_desc_t rx_ret_ring[TG3_RX_RING_SIZE] __attribute__((aligned(64)));
@@ -629,6 +638,46 @@ static int tg3_phy_init(void) {
     return 1;
 }
 
+/* Disables chip interrupts until tg3_poll() has drained the return ring. */
+static int tg3_interrupt(void) {
+    if (!tg3_irq_armed) return 0;
+    if (!(status_block.status & TG3_SD_STATUS_UPDATED) &&
+        (tg3_read32(TG3_PCISTATE) & TG3_PCISTATE_INT_NOT_ACTIVE)) return 0;
+    tg3_irq_armed = 0;
+    tg3_irq_fired = 1;
+    tg3_write32(TG3_INT_MBOX, 1);
+    net_rx_signal();
+    return 1;
+}
+
+static void tg3_irq_arm(void) {
+    uint32_t flags = task_irq_save();
+    tg3_irq_armed = 1;
+    tg3_write32(TG3_INT_MBOX, 0);
+    task_irq_restore(flags);
+}
+
+static void tg3_irq_start(void) {
+    tg3_irq_fired = 0;
+    tg3_irq_line = tg3_pci->irq_pin ? tg3_pci->irq_line : 0xFF;
+    tg3_write32(TG3_INT_MBOX, 1);
+    tg3_irq_on = (uint8_t)irq_register(tg3_irq_line, tg3_interrupt);
+    if (!tg3_irq_on) return;
+    pci_enable_intx(tg3_pci);
+    pci_write32(tg3_pci, TG3PCI_MISC_HOST_CTRL,
+                tg3_host_control & ~TG3_MISC_HOST_CTRL_MASK_INT);
+    tg3_irq_arm();
+}
+
+static void tg3_irq_stop(void) {
+    if (!tg3_irq_on) return;
+    tg3_irq_armed = 0;
+    tg3_write32(TG3_INT_MBOX, 1);
+    pci_write32(tg3_pci, TG3PCI_MISC_HOST_CTRL, tg3_host_control);
+    irq_unregister(tg3_irq_line);
+    tg3_irq_on = 0;
+}
+
 uint8_t tg3_init(void) {
     if (tg3_mmio_base) tg3_shutdown();
     tg3_ready = 0;
@@ -823,6 +872,7 @@ uint8_t tg3_init(void) {
     debug_print("\n");
     tg3_ready = 1;
     tg3_diag.initialized = 1;
+    tg3_irq_start();
     return 1;
 }
 
@@ -873,6 +923,7 @@ uint8_t tg3_is_ready(void) {
 
 void tg3_shutdown(void) {
     if (!tg3_mmio_base) return;
+    tg3_irq_stop();
     tg3_write32(TG3_MAC_RX_MODE, 0);
     tg3_write32(TG3_MAC_TX_MODE, 0);
     static const uint16_t modes[] = {
@@ -936,8 +987,15 @@ void tg3_poll(void) {
     if (!tg3_ready) return;
     tg3_reap_tx();
     if ((tg3_link_poll++ & 255u) == 0) tg3_update_link();
-    /* Force a fresh DMA status snapshot even though PCI interrupts are masked. */
-    tg3_write32(TG3_HOSTCC_MODE, TG3_HOSTCC_MODE_ENABLE | TG3_HOSTCC_MODE_NOW);
+    /* Timer-driven polls force a fresh DMA status snapshot. Polls caused by an
+     * interrupt must not: forcing one raises another interrupt, forever. */
+    uint8_t fired = tg3_irq_fired;
+    tg3_irq_fired = 0;
+    if (!fired)
+        tg3_write32(TG3_HOSTCC_MODE, TG3_HOSTCC_MODE_ENABLE | TG3_HOSTCC_MODE_NOW);
+    /* Clear before reading the producer, so later updates stay visible. */
+    status_block.status &= ~TG3_SD_STATUS_UPDATED;
+    __asm__ volatile ("" ::: "memory");
     uint16_t producer = status_block.rx_producer;
     __asm__ volatile ("" ::: "memory");
     if (producer >= TG3_RX_RING_SIZE) { tg3_diag.rx_errors++; return; }
@@ -970,6 +1028,9 @@ void tg3_poll(void) {
         tg3_rx_rcb_cons = (tg3_rx_rcb_cons + 1) & (TG3_RX_RING_SIZE - 1);
         tg3_write32(TG3_RCV_RET_CONS_IDX_MBOX, tg3_rx_rcb_cons);
     }
+
+    if (status_block.rx_producer != tg3_rx_rcb_cons) net_rx_backlog();
+    else if (tg3_irq_on && !tg3_irq_armed) tg3_irq_arm();
 }
 
 void tg3_set_receive_handler(net_receive_handler_t handler) {

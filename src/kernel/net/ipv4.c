@@ -58,6 +58,7 @@ static uint8_t loopback_enqueue(uint32_t destination_ip, uint8_t protocol,
         slot->packet[IPV4_HEADER_MIN_SIZE + i] = payload[i];
     slot->length = IPV4_HEADER_MIN_SIZE + length;
     loopback_count++;
+    net_rx_signal();
     return 1;
 }
 

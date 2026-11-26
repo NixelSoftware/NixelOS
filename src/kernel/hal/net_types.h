@@ -47,4 +47,9 @@ typedef struct {
     uint16_t phy_id;
 } net_diagnostics_t;
 
+/* Provided by hal/net.c. Wake the network task; safe from IRQ handlers. */
+void net_rx_signal(void);
+/* A poll stopped at its budget with frames left: poll again soon. */
+void net_rx_backlog(void);
+
 #endif

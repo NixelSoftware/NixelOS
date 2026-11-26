@@ -1,5 +1,7 @@
 #include "pcnet.h"
 #include "../../drivers/pci.h"
+#include "../../irq.h"
+#include "../../task.h"
 
 #define PCNET_SW_RDP 0x10
 #define PCNET_SW_RAP 0x12
@@ -21,6 +23,11 @@
 #define CSR0_TINT 0x0200
 #define CSR0_RINT 0x0400
 #define CSR0_IDON 0x0100
+#define CSR0_INTR 0x0080
+/* CSR3: mask init-done and TX-done; RX and errors still interrupt. */
+#define CSR3_MASKS 0x0300
+/* CSR4: also mask the missed-frame, collision, TX-start and jabber sources. */
+#define CSR4_IRQ_MASKS 0x0115
 #define CSR0_ERR  0x8000
 
 #define BCR20_SSTYLE_32 0x0102
@@ -70,6 +77,9 @@ static uint32_t net_ip;
 static net_receive_handler_t net_handler;
 static net_diagnostics_t diagnostics;
 static uint8_t transmit_pending[RING_COUNT];
+static uint8_t irq_line = 0xFF;
+static uint8_t irq_on;
+static volatile uint8_t irq_armed;
 
 static pcnet_init_block_t init_block __attribute__((aligned(16)));
 static pcnet_rx_descriptor_t receive_ring[RING_COUNT] __attribute__((aligned(16)));
@@ -92,8 +102,38 @@ static void pcnet_write(uint32_t register_number, uint32_t value) {
     outl(net_io_base + PCNET_DW_RDP, value);
 }
 
+/* CSR0 writes replace IENA, so every one must carry the current state. */
+static void pcnet_command(uint32_t bits) {
+    uint32_t flags = task_irq_save();
+    pcnet_write(0, (bits & ~CSR0_IENA) | (irq_armed ? CSR0_IENA : 0));
+    task_irq_restore(flags);
+}
+
 static void pcnet_start(void) {
-    pcnet_write(0, CSR0_STRT | CSR0_IENA);
+    pcnet_command(CSR0_STRT);
+}
+
+/* Drops IENA until net_poll() has drained the ring. RAP is restored because
+ * the interrupted code may be between its address and data accesses. */
+static int pcnet_interrupt(void) {
+    if (!irq_armed) return 0;
+    uint32_t address = inl(net_io_base + PCNET_DW_RAP);
+    uint32_t status = pcnet_read(0);
+    int ours = status != 0xFFFFFFFFU && (status & CSR0_INTR);
+    if (ours) {
+        irq_armed = 0;
+        pcnet_write(0, 0);
+    }
+    outl(net_io_base + PCNET_DW_RAP, address);
+    if (ours) net_rx_signal();
+    return ours;
+}
+
+static void pcnet_arm(void) {
+    uint32_t flags = task_irq_save();
+    irq_armed = 1;
+    pcnet_write(0, CSR0_IENA);
+    task_irq_restore(flags);
 }
 
 static void pcnet_sw_bcr_write(uint16_t register_number, uint16_t value) {
@@ -120,6 +160,7 @@ static uint16_t find_pcnet_io_base(void) {
         if (!(bar & 1) || (bar & 0xFFFFFFFCU) == 0)
             return 0;
         pci_config_write16((uint8_t)bus, slot, function, 4, 0x0005);
+        irq_line = dev->irq_pin ? dev->irq_line : 0xFF;
         return (uint16_t)(bar & 0xFFFC);
 
     }
@@ -201,7 +242,8 @@ uint8_t net_init(uint16_t io_base) {
 
     pcnet_write(1, (uint16_t)((uint32_t)&init_block & 0xFFFF));
     pcnet_write(2, (uint16_t)(((uint32_t)&init_block >> 16) & 0xFFFF));
-    pcnet_write(4, CSR4_APAD_XMT);
+    pcnet_write(3, CSR3_MASKS);
+    pcnet_write(4, CSR4_APAD_XMT | CSR4_IRQ_MASKS);
     pcnet_write(0, CSR0_INIT);
 
     for (volatile uint32_t timeout = 0; timeout < 1000000; timeout++) {
@@ -211,6 +253,8 @@ uint8_t net_init(uint16_t io_base) {
             pcnet_start();
             net_ready = 1;
             diagnostics.initialized = 1;
+            irq_on = irq_register(irq_line, pcnet_interrupt);
+            if (irq_on) pcnet_arm();
             return 1;
         }
     }
@@ -223,7 +267,10 @@ uint8_t net_init(uint16_t io_base) {
 
 void net_shutdown(void) {
     if (!net_ready) return;
+    irq_armed = 0;
     pcnet_write(0, CSR0_STOP);
+    if (irq_on) irq_unregister(irq_line);
+    irq_on = 0;
     inw(net_io_base + PCNET_SW_RESET);
     net_ready = 0;
 }
@@ -256,7 +303,7 @@ uint8_t net_send(const uint8_t* data, uint32_t length) {
     transmit_pending[net_tx_index] = 1;
     net_tx_index = (uint8_t)((net_tx_index + 1) % RING_COUNT);
     diagnostics.tx_submitted++;
-    pcnet_write(0, CSR0_TXPOLL | CSR0_STRT);
+    pcnet_command(CSR0_TXPOLL | CSR0_STRT);
     return 1;
 }
 
@@ -283,7 +330,7 @@ void net_poll(void) {
     if (status & CSR0_ERR) {
         diagnostics.last_error_status = status;
         diagnostics.rx_errors++;
-        pcnet_write(0, status);
+        pcnet_command(status);
     }
 
     for (uint8_t i = 0; i < RING_COUNT; i++) {
@@ -323,7 +370,11 @@ void net_poll(void) {
         processed++;
     }
 
-    pcnet_write(0, (uint16_t)(status & (CSR0_RINT | CSR0_TINT)));
+    /* Acknowledge RINT before the final ring check: a frame landing after the
+     * check sets it again and interrupts as soon as IENA returns. */
+    pcnet_command(CSR0_RINT | CSR0_TINT);
+    if (!(receive_ring[net_rx_index].status & DESCRIPTOR_OWN)) net_rx_backlog();
+    else if (irq_on && !irq_armed) pcnet_arm();
 }
 
 void net_set_receive_handler(net_receive_handler_t handler) {

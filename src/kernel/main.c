@@ -395,7 +395,7 @@ static void network_service(void* arg) {
     /* DHCP polls the adapter and sleeps between replies once scheduled, so
      * lease acquisition can run alongside login and the other services. */
     sys_net_configure_address();
-    for (;;) { sys_net_poll(); ntp_poll(); task_sleep_ms(2); }
+    for (;;) { sys_net_poll(); ntp_poll(); sys_net_wait(); }
 }
 static void audio_task(void* arg) {
     (void)arg;

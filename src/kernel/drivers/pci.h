@@ -62,6 +62,8 @@ int pci_enable_device(const pci_device_t* dev, uint16_t decode);
 void pci_set_master(const pci_device_t* dev, int enabled);
 void pci_disable_device(const pci_device_t* dev);
 void pci_prepare_polling(const pci_device_t* dev);
+/* Lift the INTx disable once a driver has a handler registered. */
+void pci_enable_intx(const pci_device_t* dev);
 int pci_save_state(const pci_device_t* dev, pci_saved_state_t* state);
 int pci_restore_state(const pci_device_t* dev, const pci_saved_state_t* state);
 #endif
