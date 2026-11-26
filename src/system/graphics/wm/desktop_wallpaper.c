@@ -10,7 +10,10 @@
 static uint32_t* wallpaper_pixels = 0;
 static uint32_t  allocated_frames[TARGET_PAGES];
 static uint8_t   wallpaper_loaded = 0;
-static wallpaper_mode_t current_mode = WALLPAPER_MODE_STRETCH;
+static wallpaper_mode_t current_mode = WALLPAPER_MODE_ZOOM;
+/* The loaded image's own size; the pixel buffer does not keep its shape. */
+static uint32_t source_width, source_height;
+#define WALLPAPER_FIT_CONFIG "/.config/desktop/wallpaper-fit"
 
 static uint8_t   bmp_header_buf[54];
 static char wallpaper_path[FS_MAX_PATH];
@@ -87,6 +90,12 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
     fs_home_path("/.config/desktop/wallpaper", config);
     int n = fs_read_file(config, (uint8_t*)name, sizeof(name) - 1);
     if (n > 0 && n < FS_MAX_FILENAME) { name[n] = 0; if (desktop_wallpaper_valid_name(name)) copy_name(selected_name, name); }
+    char fit;
+    fs_home_path(WALLPAPER_FIT_CONFIG, config);
+    if (fs_read_file(config, (uint8_t*)&fit, 1) == 1) {
+        if (fit == 's') current_mode = WALLPAPER_MODE_STRETCH;
+        else if (fit == 'z') current_mode = WALLPAPER_MODE_ZOOM;
+    }
     if (!load_wallpaper(selected_name, 0)) {
         copy_name(selected_name, "chess.bmp");
         load_wallpaper(selected_name, 0);
@@ -168,6 +177,8 @@ static int load_wallpaper(const char* name, int persist) {
     fs_home_path("/.config/desktop/wallpaper", config_path);
     int len = 0; while (selected_name[len]) len++;
     int saved = !persist || fs_write_file(config_path, (const uint8_t*)selected_name, len) == len;
+    source_width = (uint32_t)img_w;
+    source_height = (uint32_t)img_h;
     wallpaper_loaded = 1;
     debug_print("[WALLPAPER] Applied wallpaper successfully.\n");
     return saved ? 1 : 2;
@@ -181,11 +192,28 @@ void desktop_wallpaper_draw(void) {
     uint32_t* buffer = display_get_backbuffer();
     text_rect_t clip = text_rect_intersect(display_clip(),
         (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
+    /* The part of the pixel buffer that is shown. The whole image fills the
+     * buffer, so cropping a fraction of one crops the same of the other. */
+    uint32_t crop_w = SCREEN_W, crop_h = SCREEN_H;
+    if (current_mode == WALLPAPER_MODE_ZOOM) {
+        uint32_t screen_aspect = (uint32_t)SCREEN_WIDTH * source_height;
+        uint32_t image_aspect = (uint32_t)SCREEN_HEIGHT * source_width;
+        /* Keep the products below in 32 bits (no 64-bit division here). */
+        while ((screen_aspect | image_aspect) >> 22) {
+            screen_aspect >>= 1;
+            image_aspect >>= 1;
+        }
+        if (image_aspect > screen_aspect) crop_w = SCREEN_W * screen_aspect / image_aspect;
+        else if (screen_aspect > image_aspect) crop_h = SCREEN_H * image_aspect / screen_aspect;
+        if (!crop_w) crop_w = 1;
+        if (!crop_h) crop_h = 1;
+    }
+    int crop_x = (int)(SCREEN_W - crop_w) / 2, crop_y = (int)(SCREEN_H - crop_h) / 2;
     for (int y = clip.top; y < clip.bottom; y++) {
         uint32_t* dest = buffer + y * SCREEN_WIDTH + clip.left;
-        int sy = current_mode == WALLPAPER_MODE_TILE ? y % SCREEN_H : y * SCREEN_H / SCREEN_HEIGHT;
+        int sy = current_mode == WALLPAPER_MODE_TILE ? y % SCREEN_H : crop_y + y * (int)crop_h / SCREEN_HEIGHT;
         for (int x = clip.left; x < clip.right; x++) {
-            int sx = current_mode == WALLPAPER_MODE_TILE ? x % SCREEN_W : x * SCREEN_W / SCREEN_WIDTH;
+            int sx = current_mode == WALLPAPER_MODE_TILE ? x % SCREEN_W : crop_x + x * (int)crop_w / SCREEN_WIDTH;
             uint32_t pixel = sy * SCREEN_W + sx;
             const uint32_t* source = (const uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
             *dest++ = source[pixel % (PAGE_SIZE / 4u)];
@@ -193,8 +221,16 @@ void desktop_wallpaper_draw(void) {
     }
 }
 
-void desktop_wallpaper_set_mode(wallpaper_mode_t mode) {
+int desktop_wallpaper_set_mode(wallpaper_mode_t mode) {
     current_mode = mode;
+    char path[FS_MAX_PATH];
+    const char fit = mode == WALLPAPER_MODE_STRETCH ? 's' : 'z';
+    fs_home_path(WALLPAPER_FIT_CONFIG, path);
+    return fs_write_file(path, (const uint8_t*)&fit, 1) == 1 ? 1 : 2;
+}
+
+wallpaper_mode_t desktop_wallpaper_mode(void) {
+    return current_mode;
 }
 
 uint8_t desktop_wallpaper_is_loaded(void) {

@@ -70,6 +70,21 @@ static int test(int w, int h, int bpp, int top, wallpaper_mode_t mode) {
     if (w==720 && h==540 && reads>25) { printf("too many reads %u\n",reads); return 0; }
     return 1;
 }
+/* Zoom on the 4:3 test screen: wide images lose their sides, tall images lose
+ * top and bottom, and the shown part stays centred. */
+static int test_zoom(int w, int h, int cx, int cy, int cw, int ch) {
+    make_image(w,h,24,0);
+    current_mode=WALLPAPER_MODE_ZOOM;
+    if (!desktop_wallpaper_select("test.bmp")) return 0;
+    desktop_wallpaper_draw();
+    for (int y=0;y<SCREEN_H;y++) for (int x=0;x<SCREEN_W;x++) {
+        int bx=cx+x*cw/SCREEN_W, by=cy+y*ch/SCREEN_H;
+        if (screen[y*SCREEN_W+x]!=expected(bx*w/SCREEN_W,by*h/SCREEN_H)) {
+            printf("zoom mismatch %dx%d at %d %d\n",w,h,x,y); return 0;
+        }
+    }
+    return 1;
+}
 int main(void) {
     os_api_t api={0}; api.fs.read=fs_read_file; wallpaper_api=&api;
     if (!test(720,540,24,0,WALLPAPER_MODE_STRETCH) ||
@@ -82,6 +97,12 @@ int main(void) {
     user_chess_available = 1;
     shared_chess_reads = 0;
     if (!desktop_wallpaper_select("chess.bmp") || !user_chess_reads || shared_chess_reads) return 3;
+    if (!test_zoom(1000,500, 133,0,533,600) ||   /* 2:1 */
+        !test_zoom(400,800, 0,187,800,225) ||    /* 1:2 */
+        !test_zoom(720,540, 0,0,800,600)) return 5; /* same shape: no crop */
+    writes=0;
+    if (desktop_wallpaper_set_mode(WALLPAPER_MODE_STRETCH)!=1 || writes!=1 ||
+        desktop_wallpaper_mode()!=WALLPAPER_MODE_STRETCH) return 6;
     fail_read=1;
     if (desktop_wallpaper_select("test.bmp")) return 4;
     printf("wallpaper tests passed; boot BMP reads: %u\n", boot_reads);

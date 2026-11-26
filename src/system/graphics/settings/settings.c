@@ -222,6 +222,8 @@ static void draw(Window* win) {
              video_can_set_resolution() ? "Choose a mode and click Apply." :
              "Firmware mode: resolution switching unavailable.", COLOR_TEXT_MUTED);
         text(20, 278, "Wallpaper", COLOR_TEXT_PRIMARY);
+        button(240, 270, 104, "Zoom", desktop_wallpaper_mode() == WALLPAPER_MODE_ZOOM);
+        button(356, 270, 104, "Stretch", desktop_wallpaper_mode() == WALLPAPER_MODE_STRETCH);
         button(20, 306, 40, "<", 0);
         button(72, 306, 220, wallpaper_count ? wallpaper_files[wallpaper_index] : "No BMP images", 0);
         button(304, 306, 40, ">", 0); button(356, 306, 104, "Apply", 0);
@@ -359,6 +361,11 @@ static void mouse(Window* win, int32_t x, int32_t y, uint8_t buttons) {
         if (hit(x,y,20,188,40)) mode = (mode + mode_count - 1) % mode_count;
         if (hit(x,y,304,188,40)) mode = (mode + 1) % mode_count;
         if (hit(x,y,356,188,104)) video_request_resolution(widths[mode], heights[mode]);
+        int zoom = hit(x,y,240,270,104), stretch = hit(x,y,356,270,104);
+        if (zoom || stretch) {
+            int result = desktop_wallpaper_set_mode(zoom ? WALLPAPER_MODE_ZOOM : WALLPAPER_MODE_STRETCH);
+            set_message(result == 1 ? "Wallpaper fit changed." : "Applied, but could not save the fit.");
+        }
         if (wallpaper_count && hit(x,y,20,306,40)) wallpaper_index = (wallpaper_index + wallpaper_count - 1) % wallpaper_count;
         if (wallpaper_count && hit(x,y,304,306,40)) wallpaper_index = (wallpaper_index + 1) % wallpaper_count;
         if (wallpaper_count && hit(x,y,356,306,104)) {
