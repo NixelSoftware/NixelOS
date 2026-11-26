@@ -1,0 +1,23 @@
+gpudiag on-screen output (no serial port needed)
+
+sudo gpudiag        read-only register survey, printed in the terminal
+sudo gpudiag run    brings up the Intel gen4 render ring and runs one batch
+sudo gpudiag save   writes the last report to /gpu-diag.txt
+
+Progress cells (bottom-left, left to right): white = running, green = done,
+red = failed.  1 idle check, 2 reserve, 3 scan GGTT, 4 allocate RAM, 5 flush,
+6 write GGTT entries, 7 entries verified, 8 stop ring, 9 program ring,
+10 ring latched/started, 11 batch submitted, 12 batch executed (or shutdown
+after a failure), 13 shutdown.
+
+Cell 21 is the verdict, painted the moment the test ends: green = passed,
+red = failed, yellow = ring init declined. A failed step stays red.
+
+On failure, hex values appear at the top-left of the screen, one 8-digit row
+each, in this order:
+  1 wanted fence seqno      2 status-page seqno (what the GPU wrote)
+  3 RING_CTL   4 RING_HEAD   5 RING_TAIL   6 RING_START   7 HWS_PGA
+  8 ACTHD      9 IPEIR      10 IPEHR      11 EIR         12 ESR
+ 13 MI_MODE   14 INSTPM     15 PGTBL_CTL  16 PGTBL_ER
+Digits are 0-9 and A-F in a small 3x5 font (B and D look like 6 and 0 without
+the left bar: B = 110/101/110/101/110, D = 110/101/101/101/110).

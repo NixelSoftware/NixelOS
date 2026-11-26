@@ -25,4 +25,6 @@ int video_3d_available(void);
 /* Caller holds kernel_mutex. Output is owned by the renderer until next call. */
 const uint32_t* video_3d_render(const user_3d_triangle_t* triangles, uint32_t count,
     uint32_t width, uint32_t height, uint32_t clear_color, uint32_t* stride);
+/* Text report; run=1 also exercises the GPU command streamer (risky). */
+const char* video_gpu_diagnose(int run);
 #endif

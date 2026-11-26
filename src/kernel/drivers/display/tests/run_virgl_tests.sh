@@ -19,3 +19,8 @@ ${CC:-cc} -O2 -Wall -Wextra -Werror "$test_dir/virgl_host_test.c" \
 # absent. These verify the actual host protocol, not hardware performance.
 LIBGL_ALWAYS_SOFTWARE=1 "$build_dir/virgl-test"
 "$build_dir/virgl-test" --reject-init
+# Gen4 command streamer against a software model of the engine.
+${CC:-cc} -O2 -Wall -Wextra -Werror -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
+    -I"$test_dir" "$test_dir/gen4_engine_test.c" "$repo_dir/src/kernel/drivers/display/i915/gen4_engine.c" \
+    "$repo_dir/src/kernel/drivers/display/i915/i915.c" -o "$build_dir/gen4-test"
+"$build_dir/gen4-test"

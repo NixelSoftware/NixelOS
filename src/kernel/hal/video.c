@@ -99,3 +99,9 @@ const uint32_t* video_3d_render(const user_3d_triangle_t* triangles, uint32_t co
     if (!virtio_active) return 0;
     return virgl_render(triangles, count, width, height, clear_color, stride);
 }
+/* Serial-free GPU diagnostics for the gpudiag shell command (see intel_gma.c). */
+const char* video_gpu_diagnose(int run) {
+    MUTEX_GUARD(command_mutex);
+    return intel_active ? intel_gma_diagnose(run) :
+        "The active display driver is not an Intel gen4 adapter.\n";
+}

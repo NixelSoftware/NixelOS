@@ -58,23 +58,36 @@ int i915_display_can_modeset(i915_display_t* d) {
         (rd(d, 0x403Cu) & 1u)) return 0;
     return (rd(d, I915_PP_STATUS) & (I915_ENABLE | I915_PP_SEQUENCE)) == I915_ENABLE;
 }
-void i915_display_adopt(i915_display_t* d, const i915_io_t* io,
+/* From i915_pciids.h INTEL_I965G/I965GM/GM45/G45 lists. */
+static const i915_gen4_info_t gen4_family[] = {
+    {0x2972,0,0,"946GZ"}, {0x2982,0,0,"G35"}, {0x2992,0,0,"Q965"}, {0x29A2,0,0,"G965"},
+    {0x2A02,0,1,"GM965 (GMA X3100)"}, {0x2A12,0,1,"GME965 (GMA X3100)"},
+    {0x2A42,1,1,"GM45 (GMA 4500MHD)"}, {0x2E02,1,0,"Eaglelake"}, {0x2E12,1,0,"Q45"},
+    {0x2E22,1,0,"G45"}, {0x2E32,1,0,"G41"}, {0x2E42,1,0,"B43"}, {0x2E92,1,0,"B43"},
+};
+const i915_gen4_info_t* i915_gen4_lookup(uint16_t id) {
+    for (unsigned i = 0; i < sizeof(gen4_family) / sizeof(gen4_family[0]); i++)
+        if (gen4_family[i].id == id) return &gen4_family[i];
+    return 0;
+}
+void i915_display_adopt(i915_display_t* d, const i915_io_t* io, const i915_gen4_info_t* info,
                         uint32_t aperture, uint32_t plane, uint32_t pipe) {
     *d = (i915_display_t){0};
-    d->io = *io; d->aperture = aperture; d->plane = plane; d->pipe = pipe;
+    d->io = *io; d->info = info; d->aperture = aperture; d->plane = plane; d->pipe = pipe;
     d->attached = 1;
     d->panel_width = (rd(d, preg(d, I915_HTOTAL)) & 0xFFFFu) + 1;
     d->panel_height = (rd(d, preg(d, I915_VTOTAL)) & 0xFFFFu) + 1;
-    d->modeset = d->panel_width >= 640 && d->panel_height >= 480 &&
+    /* Mode setting is validated only for LVDS on original gen4 (i965 watermarks). */
+    d->modeset = info && info->mobile && !info->g4x &&
+        d->panel_width >= 640 && d->panel_height >= 480 &&
         d->panel_width <= 4096 && d->panel_height <= 4096;
 }
 /* Reserve a driver-owned GGTT range. Prefer invalid entries. Firmware often
  * fills the rest with one repeated scratch-page PTE; with engines/other planes
  * inactive, such aliases can also be reclaimed outside the live framebuffer.
- * Distinct valid mappings are never overwritten. Preserve original PTEs for
- * failed publication. Gen4 snoops writes through the GTT MMIO alias. */
-static int pin_scanout(i915_display_t* d) {
-    if (d->physical) return 1;
+ * Preserve original PTEs so failed publication can be undone. */
+static int gtt_find(i915_display_t* d, uint32_t pages, uint32_t* first_out) {
+    if (!pages) return 0;
     uint32_t src = rd(d,preg(d,I915_PIPESRC));
     uint32_t live = (rd(d,plane_reg(d,I915_DSPSURF)) & 0xFFFFF000u) +
                     rd(d,plane_reg(d,I915_DSPLINOFF));
@@ -92,27 +105,60 @@ static int pin_scanout(i915_display_t* d) {
             if (!pass) run = (pte & 1u) ? 0 : run + 1;
             else run = (pte & 1u) ? (run && pte == previous ? run + 1 : 1) : 0;
             previous = pte;
-            if (run == I915_SCANOUT_PAGES) { first = i + 1 - run; found = 1; break; }
+            if (run == pages) { first = i + 1 - run; found = 1; break; }
         }
     }
     if (!found) return 0;
-    uint32_t physical = d->io.allocate(d->io.context, I915_SCANOUT_PAGES);
+    *first_out = first;
+    return 1;
+}
+int i915_gtt_can_reserve(i915_display_t* d, uint32_t pages) {
+    uint32_t first;
+    return d && d->attached && gtt_find(d, pages, &first);
+}
+int i915_gtt_reserve(i915_display_t* d, uint32_t pages, uint32_t* gtt_offset,
+                     uint32_t* physical_out, uint32_t* saved) {
+    uint32_t first;
+    if (d->io.trace) d->io.trace(d->io.context, "step: gtt: scan for free range", 0, 0);
+    if (!gtt_offset || !physical_out || !saved || !gtt_find(d, pages, &first)) return 0;
+    if (d->io.trace) d->io.trace(d->io.context, "step: gtt: allocate RAM, first page ", first, 1);
+    uint32_t physical = d->io.allocate(d->io.context, pages);
     if (!physical) return 0;
+    if (d->io.trace) d->io.trace(d->io.context, "step: gtt: flush CPU caches, physical ", physical, 1);
     d->io.flush_cpu(d->io.context); /* allocator zeros RAM through its WB alias */
+    if (d->io.trace) d->io.trace(d->io.context, "step: gtt: write entries", 0, 0);
     uint32_t i;
-    for (i = 0; i < I915_SCANOUT_PAGES; i++) {
+    for (i = 0; i < pages; i++) {
         uint32_t reg = I915_GTT + (first + i) * 4u;
-        d->original_ptes[i] = rd(d, reg);
+        saved[i] = rd(d, reg);
         uint32_t pte = (physical + i * 4096u) | 1u; /* uncached, valid */
         wr(d, reg, pte);
         if (rd(d, reg) != pte) break;
     }
-    if (i != I915_SCANOUT_PAGES) {
-        for (uint32_t j = 0; j <= i; j++) wr(d, I915_GTT + (first + j) * 4u, d->original_ptes[j]);
-        d->io.release(d->io.context, physical, I915_SCANOUT_PAGES);
+    if (i != pages) {
+        for (uint32_t j = 0; j <= i; j++) wr(d, I915_GTT + (first + j) * 4u, saved[j]);
+        d->io.release(d->io.context, physical, pages);
         return 0;
     }
-    d->physical = physical; d->gtt_offset = first * 4096u; d->pages = I915_SCANOUT_PAGES;
+    if (d->io.trace) d->io.trace(d->io.context, "step: gtt: entries verified", 0, 0);
+    *physical_out = physical; *gtt_offset = first * 4096u;
+    return 1;
+}
+/* Only safe once the GPU can no longer fetch through these entries. */
+void i915_gtt_unreserve(i915_display_t* d, uint32_t gtt_offset, uint32_t physical,
+                        uint32_t pages, const uint32_t* saved) {
+    for (uint32_t i = 0; i < pages; i++)
+        wr(d, I915_GTT + (gtt_offset / 4096u + i) * 4u, saved[i]);
+    d->io.release(d->io.context, physical, pages);
+}
+/* Driver-owned scanout. Prefer invalid GGTT entries; reclaim firmware's repeated
+ * scratch-page PTE otherwise. Distinct valid mappings are never overwritten.
+ * Gen4 snoops writes through the GTT MMIO alias. */
+static int pin_scanout(i915_display_t* d) {
+    if (d->physical) return 1;
+    uint32_t offset, physical;
+    if (!i915_gtt_reserve(d, I915_SCANOUT_PAGES, &offset, &physical, d->original_ptes)) return 0;
+    d->physical = physical; d->gtt_offset = offset; d->pages = I915_SCANOUT_PAGES;
     return 1;
 }
 /* Registers modified by the transaction. Immutable panel timings/PLL and
@@ -193,7 +239,7 @@ int i915_display_set_mode(i915_display_t* d, video_framebuffer_t* fb,
     wr(d,plane_reg(d,I915_DSPCNTR),old[CONTROL]);
     wr(d,plane_reg(d,I915_DSPSURF),d->gtt_offset);
     if (!panel_on(d,old)) goto rollback;
-    *fb = (video_framebuffer_t){d->aperture + d->gtt_offset,32,stride,"Nixel i915 / GMA X3100"};
+    *fb = (video_framebuffer_t){d->aperture + d->gtt_offset,32,stride,"Nixel i915 (gen4)"};
     return 1;
 rollback:
     /* Never rewrite fitter/source registers while the pipe is active. Keep

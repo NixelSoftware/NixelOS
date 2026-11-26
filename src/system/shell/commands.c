@@ -10,6 +10,7 @@
 #include "wifi_commands.h"
 #include "../loader/app_loader.h"
 #include "../graphics/terminal/terminal.h"
+#include "../../kernel/hal/video.h"
 
 static os_api_t* shell_api;
 #define shell_output (current_task->shell_output)
@@ -229,6 +230,32 @@ const char* shell_command_args(void) {
     return shell_args;
 }
 
+/* gpudiag [run|save]: serial-free Intel GPU diagnostics, printed on screen.
+ * 'run' exercises the command streamer, which can hang a machine; a progress
+ * bar of cells is painted along the bottom of the screen (last lit cell = last
+ * step). No disk I/O happens unless you ask: 'gpudiag save' writes the most
+ * recent report to /gpu-diag.txt. */
+static int gpu_diag_command(const char* command) {
+    if (!has_prefix(command,"gpudiag") || (command[7] && command[7]!=' ')) return 0;
+    const char* arg=command+7;
+    while (*arg==' ') arg++;
+    int run=has_prefix(arg,"run") && (!arg[3] || arg[3]==' ');
+    int save=has_prefix(arg,"save") && (!arg[4] || arg[4]==' ');
+    if (*arg && !run && !save) { print("Usage: gpudiag [run|save]\n"); return 1; }
+    if (user_uid()!=USER_ROOT) { print("gpudiag: permission denied; use sudo gpudiag.\n"); return 1; }
+    if (save) {
+        const char* text=video_gpu_diagnose(-1);
+        uint32_t length=0; while (text[length]) length++;
+        print("Saving /gpu-diag.txt ...\n");
+        print(fs_write_file("/gpu-diag.txt",(const uint8_t*)text,length)<0 ?
+              "gpudiag: could not save /gpu-diag.txt\n" : "Saved /gpu-diag.txt\n");
+        return 1;
+    }
+    if (run) print("Running engine test. If the screen freezes, note the last lit cell at the bottom.\n");
+    print(video_gpu_diagnose(run));
+    print("gpudiag finished.\n");
+    return 1;
+}
 static int serial_output_command(const char* command) {
     if (!has_prefix(command,"srout") || (command[5] && command[5]!=' ')) return 0;
     const char* arg=command+5;
@@ -528,6 +555,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
     }
     if (account_command(command)) return;
     if (serial_output_command(command)) return;
+    if (gpu_diag_command(command)) return;
     if (storage_command(command)) return;
     if (install_command(command, read_reply)) return;
     if ((has_prefix(command, "help") && (!command[4] || command[4] == ' '))) {
@@ -543,6 +571,7 @@ void shell_execute_command(const char* command, shell_output_fn output,
                     " chown <account> <path> Set owner (root only)\n"
                     " ps              Show processes and parent PIDs\n"
                     " srout <port> [filter]  Follow serial output (0 = first UART)\n"
+                    " gpudiag [run|save]  Intel GPU report (root); run = test engine\n"
                     " ls [path]       List directory or file (exact case)\n"
                     " cd [dir]        Change directory (default home)\n"
                     " mkdir <dir>     Create a directory\n"
