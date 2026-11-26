@@ -1,7 +1,11 @@
 /* Host test: compile without PIE so the simulated 32-bit frames fit in uint32_t. */
+#define NIXEL_KERNEL 1 /* a runtime screen size, to test resolution changes */
 #include "../desktop_wallpaper.c"
 extern int printf(const char*, ...);
 static uint8_t image[3000000], frames[TARGET_PAGES][PAGE_SIZE];
+int32_t screen_width = SCREEN_W, screen_height = SCREEN_H;
+static uint32_t scaled_memory[SCREEN_W * SCREEN_H];
+static int scaled_available, scaled_allocations, fail_pixels;
 static uint32_t screen[SCREEN_W * SCREEN_H];
 static uint32_t image_size, next_frame, reads, writes;
 static int fail_read, user_chess_available, user_chess_reads, shared_chess_reads;
@@ -31,7 +35,7 @@ int fs_read_file_at(const char* path, uint8_t* dest, uint32_t size, uint32_t off
     }
     if (!dest || !size) return image_size;
     reads++;
-    if (fail_read) return -1;
+    if (fail_read || (fail_pixels && size > 54)) return -1;
     if (off >= image_size) return 0;
     if (size > image_size-off) size=image_size-off;
     for (uint32_t i=0;i<size;i++) dest[i]=image[off+i];
@@ -41,6 +45,12 @@ int fs_read_file(const char* p, uint8_t* d, uint32_t n) { return fs_read_file_at
 int fs_write_file(const char* p, const uint8_t* d, uint32_t n) { (void)p; (void)d; writes++; return n; }
 uint32_t paging_frame_alloc(void) { return (uint32_t)(unsigned long)frames[next_frame++]; }
 void paging_frame_free(uint32_t p) { (void)p; }
+uint32_t paging_alloc_contiguous(uint32_t pages) {
+    (void)pages;
+    if (!scaled_available) return 0;
+    scaled_allocations++;
+    return (uint32_t)(unsigned long)scaled_memory;
+}
 void debug_print(const char* p) { (void)p; }
 void display_clear(uint32_t c) { (void)c; }
 uint32_t* display_get_backbuffer(void) { return screen; }
@@ -85,6 +95,61 @@ static int test_zoom(int w, int h, int cx, int cy, int cw, int ch) {
     }
     return 1;
 }
+/* Does the screen show the 73x41 test image stretched to its current size? */
+static int shows_stretched(int w, int h) {
+    for (int y=0;y<screen_height;y++) for (int x=0;x<screen_width;x++) {
+        int bx=x*SCREEN_W/screen_width, by=y*SCREEN_H/screen_height;
+        if (screen[y*screen_width+x]!=expected(bx*w/SCREEN_W,by*h/SCREEN_H)) return 0;
+    }
+    return 1;
+}
+static void source_pixel(uint32_t color) { *(uint32_t*)frames[0] = color; }
+static int test_cache(os_api_t* api) {
+    scaled_available=1; fail_read=0;
+    desktop_wallpaper_init(api,WALLPAPER_MODE_STRETCH);
+    desktop_wallpaper_init(api,WALLPAPER_MODE_STRETCH);
+    if (scaled_allocations!=1) return 1;                 /* allocated once */
+    make_image(73,41,24,0); current_mode=WALLPAPER_MODE_STRETCH;
+    if (!desktop_wallpaper_select("test.bmp")) return 2;
+    desktop_wallpaper_draw();
+    if (!shows_stretched(73,41)) return 3;
+    /* Unchanged settings reuse the cache rather than the source. */
+    uint32_t original=*(uint32_t*)frames[0];
+    source_pixel(0x123456); screen[0]=0; desktop_wallpaper_draw();
+    if (screen[0]!=original) return 4;
+    /* Another mode rebuilds it. */
+    current_mode=WALLPAPER_MODE_ZOOM; desktop_wallpaper_draw(); current_mode=WALLPAPER_MODE_STRETCH;
+    desktop_wallpaper_draw();
+    if (screen[0]!=0x123456) return 5;
+    source_pixel(original);
+    /* So does another resolution. */
+    screen_width=640; screen_height=400; desktop_wallpaper_draw();
+    if (!shows_stretched(73,41)) return 6;
+    screen_width=SCREEN_W; screen_height=SCREEN_H; desktop_wallpaper_draw();
+    if (!shows_stretched(73,41)) return 7;
+    /* So does a newly selected image of the same size and mode. */
+    make_image(31,29,32,1);
+    if (!desktop_wallpaper_select("test.bmp")) return 8;
+    desktop_wallpaper_draw();
+    if (!shows_stretched(31,29)) return 9;
+    /* A clipped copy touches only the clip. */
+    for (int i=0;i<SCREEN_W*SCREEN_H;i++) screen[i]=0xff000000u;
+    clip=(text_rect_t){5,7,300,200}; desktop_wallpaper_draw(); clip=(text_rect_t){0,0,SCREEN_W,SCREEN_H};
+    for (int y=0;y<SCREEN_H;y++) for (int x=0;x<SCREEN_W;x++) {
+        int inside=x>=5 && x<300 && y>=7 && y<200;
+        if (screen[y*SCREEN_W+x]!=(inside ? scaled_memory[y*SCREEN_W+x] : 0xff000000u)) return 10;
+    }
+    /* A load rejected at the header keeps the current picture. */
+    fail_read=1;
+    if (desktop_wallpaper_select("test.bmp") || !scaled_valid) return 11;
+    fail_read=0;
+    /* One that fails after overwriting the source must not show the cache. */
+    for (int i=0;i<SCREEN_W*SCREEN_H;i++) screen[i]=0xff000000u;
+    fail_pixels=1;
+    if (desktop_wallpaper_select("test.bmp") || scaled_valid ||
+        desktop_wallpaper_is_loaded()) return 12;
+    return 0;
+}
 int main(void) {
     os_api_t api={0}; api.fs.read=fs_read_file; wallpaper_api=&api;
     if (!test(720,540,24,0,WALLPAPER_MODE_STRETCH) ||
@@ -105,6 +170,10 @@ int main(void) {
         desktop_wallpaper_mode()!=WALLPAPER_MODE_STRETCH) return 6;
     fail_read=1;
     if (desktop_wallpaper_select("test.bmp")) return 4;
+    /* Everything above ran without the cache, as if allocation had failed. */
+    if (scaled) return 7;
+    int cache_failure = test_cache(&api);
+    if (cache_failure) { printf("cache check %d failed\n", cache_failure); return 8; }
     printf("wallpaper tests passed; boot BMP reads: %u\n", boot_reads);
     return 0;
 }

@@ -14,6 +14,12 @@ static wallpaper_mode_t current_mode = WALLPAPER_MODE_ZOOM;
 /* The loaded image's own size; the pixel buffer does not keep its shape. */
 static uint32_t source_width, source_height;
 #define WALLPAPER_FIT_CONFIG "/.config/desktop/wallpaper-fit"
+/* The wallpaper already scaled to the screen, so a repaint only copies rows.
+ * Sized for the largest mode: a resolution change never has to allocate. */
+#define SCALED_PAGES ((SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE)
+static uint32_t* scaled;
+static int scaled_valid, scaled_width, scaled_height;
+static wallpaper_mode_t scaled_mode;
 
 static uint8_t   bmp_header_buf[54];
 static char wallpaper_path[FS_MAX_PATH];
@@ -84,6 +90,9 @@ void desktop_wallpaper_init(os_api_t* api, wallpaper_mode_t mode) {
     wallpaper_loaded = 0;
     copy_name(selected_name, "chess.bmp");
     wallpaper_api = api;
+    /* Without this buffer every draw scales the image again. */
+    if (!scaled) scaled = (uint32_t*)paging_alloc_contiguous(SCALED_PAGES);
+    scaled_valid = 0;
     if (!api || !api->fs.read) return;
 
     char config[FS_MAX_PATH], name[FS_MAX_FILENAME];
@@ -154,6 +163,7 @@ static int load_wallpaper(const char* name, int persist) {
 
     image_file_size = file_size;
     cache_size[0] = cache_size[1] = cache_next = 0;
+    scaled_valid = 0; /* the source pixels are about to be overwritten */
     uint32_t bytes_per_pixel = bpp / 8;
     for (int y = 0; y < SCREEN_H; y++) {
         int src_y = current_mode == WALLPAPER_MODE_TILE ? y % img_h : (y * img_h) / SCREEN_H;
@@ -184,14 +194,8 @@ static int load_wallpaper(const char* name, int persist) {
     return saved ? 1 : 2;
 }
 
-void desktop_wallpaper_draw(void) {
-    if (!wallpaper_loaded || !wallpaper_pixels) {
-        display_clear(COLOR_DESKTOP);
-        return;
-    }
-    uint32_t* buffer = display_get_backbuffer();
-    text_rect_t clip = text_rect_intersect(display_clip(),
-        (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
+/* Scale the loaded image into the given area of a screen-sized buffer. */
+static void scale_wallpaper(uint32_t* buffer, text_rect_t area) {
     /* The part of the pixel buffer that is shown. The whole image fills the
      * buffer, so cropping a fraction of one crops the same of the other. */
     uint32_t crop_w = SCREEN_W, crop_h = SCREEN_H;
@@ -209,15 +213,44 @@ void desktop_wallpaper_draw(void) {
         if (!crop_h) crop_h = 1;
     }
     int crop_x = (int)(SCREEN_W - crop_w) / 2, crop_y = (int)(SCREEN_H - crop_h) / 2;
-    for (int y = clip.top; y < clip.bottom; y++) {
-        uint32_t* dest = buffer + y * SCREEN_WIDTH + clip.left;
+    for (int y = area.top; y < area.bottom; y++) {
+        uint32_t* dest = buffer + y * SCREEN_WIDTH + area.left;
         int sy = current_mode == WALLPAPER_MODE_TILE ? y % SCREEN_H : crop_y + y * (int)crop_h / SCREEN_HEIGHT;
-        for (int x = clip.left; x < clip.right; x++) {
+        for (int x = area.left; x < area.right; x++) {
             int sx = current_mode == WALLPAPER_MODE_TILE ? x % SCREEN_W : crop_x + x * (int)crop_w / SCREEN_WIDTH;
             uint32_t pixel = sy * SCREEN_W + sx;
             const uint32_t* source = (const uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];
             *dest++ = source[pixel % (PAGE_SIZE / 4u)];
         }
+    }
+}
+
+void desktop_wallpaper_draw(void) {
+    if (!wallpaper_loaded || !wallpaper_pixels) {
+        display_clear(COLOR_DESKTOP);
+        return;
+    }
+    uint32_t* buffer = display_get_backbuffer();
+    text_rect_t screen = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
+    text_rect_t clip = text_rect_intersect(display_clip(), screen);
+    if (clip.left >= clip.right || clip.top >= clip.bottom) return;
+    if (!scaled) {
+        scale_wallpaper(buffer, clip);
+        return;
+    }
+    if (!scaled_valid || scaled_width != SCREEN_WIDTH ||
+        scaled_height != SCREEN_HEIGHT || scaled_mode != current_mode) {
+        scale_wallpaper(scaled, screen);
+        scaled_width = SCREEN_WIDTH;
+        scaled_height = SCREEN_HEIGHT;
+        scaled_mode = current_mode;
+        scaled_valid = 1;
+    }
+    for (int y = clip.top; y < clip.bottom; y++) {
+        uint32_t* dest = buffer + y * SCREEN_WIDTH + clip.left;
+        const uint32_t* source = scaled + y * SCREEN_WIDTH + clip.left;
+        uint32_t count = (uint32_t)(clip.right - clip.left);
+        __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(count) : : "memory");
     }
 }
 
