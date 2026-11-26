@@ -154,9 +154,7 @@ static os_api_t kernel_api = {
 
 static void api_put_pixel(int32_t x, int32_t y, uint32_t color) {
     MUTEX_GUARD(kernel_mutex);
-    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) return;
-    uint32_t* buffer = display_get_backbuffer();
-    buffer[y * SCREEN_WIDTH + x] = color;
+    display_put_pixel(x, y, color);
 }
 
 static void api_move_cursor(int32_t x, int32_t y, uint8_t fast_update) {
@@ -223,8 +221,7 @@ void kernel_user_write(const char* text, uint32_t length) {
         }
         return;
     }
-    terminal_write(text, length);
-    needs_redraw = 1;
+    terminal_write(text, length); /* damages its own window */
 }
 
 static uint32_t api_get_ticks(void) {
@@ -380,7 +377,11 @@ static void kernel_finish_boot(void) {
     debug_subsystem_hex((uint32_t)display_get_backbuffer());
     debug_subsystem_print("\n");
     debug_print("[INIT] Drawing to display...\n");
-    if (nixinit_has_wm()) wm_render_screen();
+    if (nixinit_has_wm()) {
+        /* Boot output still covers the backbuffer: repaint all of it. */
+        request_redraw();
+        wm_render_screen();
+    }
     debug_subsystem_print("[INIT] Display drawing returned.\n");
     needs_redraw = 0;
     debug_print("[INIT] Enable interrupt...\n");

@@ -22,16 +22,24 @@ void wm_render_screen(void) {
     flags = task_irq_save();
     uint64_t started = scheduler_clock();
     task_irq_restore(flags);
+    /* The drag path keeps its own cache and always paints unclipped, but it
+     * still consumes the pending damage. */
+    text_rect_t damage = wm_take_damage();
+    text_rect_t outer_clip = display_set_clip(
+        (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
     if (!wm_render_drag()) {
+        display_set_clip(damage);
         //display_clear(COLOR_DESKTOP);
         desktop_wallpaper_draw();
         desktop_draw();
         wm_draw_windows();
         wm_draw_taskbar(wm_start_menu_is_open());
         desktop_draw_overlay();
-        display_blit();
+        display_blit_rect(damage.left, damage.top,
+                          damage.right - damage.left, damage.bottom - damage.top);
         wm_cursor_draw();
     }
+    display_set_clip(outer_clip);
     flags = task_irq_save();
     uint64_t finished = scheduler_clock();
     uint64_t elapsed = finished - started;

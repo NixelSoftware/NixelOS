@@ -44,6 +44,8 @@ void paging_frame_free(uint32_t p) { (void)p; }
 void debug_print(const char* p) { (void)p; }
 void display_clear(uint32_t c) { (void)c; }
 uint32_t* display_get_backbuffer(void) { return screen; }
+static text_rect_t clip = {0, 0, SCREEN_W, SCREEN_H};
+text_rect_t display_clip(void) { return clip; }
 static int test(int w, int h, int bpp, int top, wallpaper_mode_t mode) {
     make_image(w,h,bpp,top); reads=writes=0;
     current_mode=mode;
@@ -53,6 +55,17 @@ static int test(int w, int h, int bpp, int top, wallpaper_mode_t mode) {
         int sx=mode==WALLPAPER_MODE_TILE ? x%w : x*w/SCREEN_W;
         int sy=mode==WALLPAPER_MODE_TILE ? y%h : y*h/SCREEN_H;
         if (screen[y*SCREEN_W+x]!=expected(sx,sy)) { printf("mismatch %d %d image %d %d mode %d got %x expected %x\n",x,y,w,h,mode,screen[y*SCREEN_W+x],expected(sx,sy)); return 0; }
+    }
+    /* A clipped redraw restores the damaged area and nothing else. */
+    for (int i=0;i<SCREEN_W*SCREEN_H;i++) screen[i]=0xff000000u;
+    clip=(text_rect_t){37,41,205,131};
+    desktop_wallpaper_draw();
+    clip=(text_rect_t){0,0,SCREEN_W,SCREEN_H};
+    for (int y=0;y<SCREEN_H;y++) for (int x=0;x<SCREEN_W;x++) {
+        int sx=mode==WALLPAPER_MODE_TILE ? x%w : x*w/SCREEN_W;
+        int sy=mode==WALLPAPER_MODE_TILE ? y%h : y*h/SCREEN_H;
+        int inside=x>=37 && x<205 && y>=41 && y<131;
+        if (screen[y*SCREEN_W+x]!=(inside ? expected(sx,sy) : 0xff000000u)) return 0;
     }
     if (w==720 && h==540 && reads>25) { printf("too many reads %u\n",reads); return 0; }
     return 1;

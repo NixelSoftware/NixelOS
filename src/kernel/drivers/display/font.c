@@ -120,7 +120,8 @@ void draw_char(int32_t x, int32_t y, char c, uint32_t color, uint8_t bg, uint32_
     MUTEX_GUARD(kernel_mutex);
     if ((uint8_t)c > 127) c = '?';
     uint32_t* buf = display_get_backbuffer();
-    text_rect_t bounds = font_text_bounds();
+    /* Clip only pixel writes: layout must not depend on the damaged area. */
+    text_rect_t bounds = text_rect_intersect(font_text_bounds(), display_clip());
     for (int row = 0; row < 8; row++) {
         int64_t py = (int64_t)y + row;
         if (py < 0 || py >= SCREEN_HEIGHT || py < bounds.top || py >= bounds.bottom) continue;

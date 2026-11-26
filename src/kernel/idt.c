@@ -120,6 +120,8 @@ static void kernel_panic(registers_t* regs) {
     debug_hex(regs->gs);
     debug_print("\n========================================\n");
     
+    /* A fault during a partial repaint must not clip the crash screen. */
+    display_reset_clip();
     display_clear(0x000000AA); 
 
     

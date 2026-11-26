@@ -6,6 +6,7 @@
 
 static uint32_t* backbuffer = (uint32_t*)0x00A00000;
 static int resize_pending;
+static text_rect_t render_clip = {0, 0, SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT};
 #define PRESENT_PAGES ((SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT * 4u + PAGE_SIZE - 1u) / PAGE_SIZE)
 static uint32_t present_pages[PRESENT_PAGES];
 static int async_display, damage_pending;
@@ -196,17 +197,27 @@ uint32_t* display_get_backbuffer(void) {
     return backbuffer;
 }
 
-void display_clear(uint32_t color) {
-    MUTEX_GUARD(kernel_mutex);
+text_rect_t display_clip(void) {
+    return render_clip;
+}
+text_rect_t display_set_clip(text_rect_t clip) {
+    text_rect_t previous = render_clip;
+    render_clip = clip;
+    return previous;
+}
+void display_reset_clip(void) {
+    render_clip = (text_rect_t){0, 0, SCREEN_MAX_WIDTH, SCREEN_MAX_HEIGHT};
+}
 
-    uint32_t* dest = backbuffer;
-    uint32_t count = SCREEN_WIDTH * SCREEN_HEIGHT;
-    __asm__ volatile ("cld; rep stosl" : "+D"(dest), "+c"(count) : "a"(color) : "memory");
+void display_clear(uint32_t color) {
+    display_fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, color);
 }
 
 void display_put_pixel(int32_t x, int32_t y, uint32_t color) {
     MUTEX_GUARD(kernel_mutex);
     if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) return;
+    if (x < render_clip.left || x >= render_clip.right ||
+        y < render_clip.top || y >= render_clip.bottom) return;
     backbuffer[y * SCREEN_WIDTH + x] = color;
 }
 
@@ -217,6 +228,10 @@ void display_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t colo
     if (x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT) return;
     if (w > SCREEN_WIDTH - x) w = SCREEN_WIDTH - x;
     if (h > SCREEN_HEIGHT - y) h = SCREEN_HEIGHT - y;
+    if (x < render_clip.left) { w -= render_clip.left - x; x = render_clip.left; }
+    if (y < render_clip.top) { h -= render_clip.top - y; y = render_clip.top; }
+    if (w > render_clip.right - x) w = render_clip.right - x;
+    if (h > render_clip.bottom - y) h = render_clip.bottom - y;
     if (w <= 0 || h <= 0) return;
     for (int row = 0; row < h; row++) {
         uint32_t* dest = backbuffer + (y + row) * SCREEN_WIDTH + x;

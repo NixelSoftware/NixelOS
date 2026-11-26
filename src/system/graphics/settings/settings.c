@@ -450,12 +450,12 @@ void settings_poll(void) {
     if(!window.visible && !busy) clear_password();
     static uint64_t time_redraw;
     if (window.visible && tab == 3 && scheduler_clock() >= time_redraw) {
-        time_redraw = scheduler_clock() + 1000000000ull; request_redraw();
+        time_redraw = scheduler_clock() + 1000000000ull; wm_invalidate_window(&window);
     }
     if (message_expires && scheduler_clock() >= message_expires) {
         message = "Nothing to report.";
         message_expires = 0;
-        if (window.visible) request_redraw();
+        if (window.visible) wm_invalidate_window(&window);
     }
     static int last_status;
     int status = video_resolution_status();

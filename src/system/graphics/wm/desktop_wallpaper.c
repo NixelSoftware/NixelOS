@@ -178,10 +178,13 @@ void desktop_wallpaper_draw(void) {
         display_clear(COLOR_DESKTOP);
         return;
     }
-    uint32_t* dest = display_get_backbuffer();
-    for (int y = 0; y < SCREEN_HEIGHT; y++) {
+    uint32_t* buffer = display_get_backbuffer();
+    text_rect_t clip = text_rect_intersect(display_clip(),
+        (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
+    for (int y = clip.top; y < clip.bottom; y++) {
+        uint32_t* dest = buffer + y * SCREEN_WIDTH + clip.left;
         int sy = current_mode == WALLPAPER_MODE_TILE ? y % SCREEN_H : y * SCREEN_H / SCREEN_HEIGHT;
-        for (int x = 0; x < SCREEN_WIDTH; x++) {
+        for (int x = clip.left; x < clip.right; x++) {
             int sx = current_mode == WALLPAPER_MODE_TILE ? x % SCREEN_W : x * SCREEN_W / SCREEN_WIDTH;
             uint32_t pixel = sy * SCREEN_W + sx;
             const uint32_t* source = (const uint32_t*)allocated_frames[pixel / (PAGE_SIZE / 4u)];

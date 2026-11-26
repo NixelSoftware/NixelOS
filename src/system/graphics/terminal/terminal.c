@@ -206,6 +206,7 @@ void terminal_write(const char* text, uint32_t length) {
     }
     if (t->term_editing) terminal_show_input(t);
     /* Background output must not steal focus from the window being used. */
+    wm_invalidate_window(&t->window);
 }
 
 static void terminal_draw(Window* win) {
@@ -280,7 +281,6 @@ static void terminal_shell_output(const char* text) {
     uint32_t length = 0;
     while (text[length]) length++;
     terminal_write(text, length);
-    wm_invalidate();
 }
 static void terminal_shell_clear(void) {
     MUTEX_GUARD(kernel_mutex);
@@ -300,7 +300,7 @@ static void terminal_shell_clear(void) {
         t->term_editing = 1;
         terminal_show_input(t);
     }
-    wm_invalidate();
+    wm_invalidate_window(&t->window);
 }
 
 static void terminal_handle_key(Window* win, char c) {
@@ -325,7 +325,7 @@ static void terminal_handle_key(Window* win, char c) {
                 terminal_append_output(t, text);
             }
         }
-        wm_invalidate();
+        wm_invalidate_window(win);
         return;
     }
     if ((uint8_t)c == 3) {
@@ -339,7 +339,7 @@ static void terminal_handle_key(Window* win, char c) {
         t->term_input[0] = 0;
         int running = shell_interrupt(t);
         if (was_editing || !running) terminal_prompt(t);
-        wm_invalidate();
+        wm_invalidate_window(win);
         return;
     }
     if (!t->term_editing) return;

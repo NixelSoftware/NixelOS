@@ -122,13 +122,14 @@ void viewer_draw(Window* win) {
         int32_t start_y = box_y + (box_h - image_h) / 2;
 
         uint32_t* buf = display_get_backbuffer();
+        text_rect_t clip = display_clip();
         for (int y = 0; y < image_h; y++) {
             int py = start_y + y;
-            if (py < 0 || py >= SCREEN_HEIGHT) continue;
+            if (py < 0 || py >= SCREEN_HEIGHT || py < clip.top || py >= clip.bottom) continue;
 
             for (int x = 0; x < image_w; x++) {
                 int px = start_x + x;
-                if (px < 0 || px >= SCREEN_WIDTH) continue;
+                if (px < 0 || px >= SCREEN_WIDTH || px < clip.left || px >= clip.right) continue;
 
                 buf[py * SCREEN_WIDTH + px] = image_pixels[y * MAX_BMP_W + x];
             }
