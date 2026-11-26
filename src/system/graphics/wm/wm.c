@@ -38,6 +38,9 @@ static uint8_t previous_left_button;
 static uint8_t start_menu_open;
 static uint8_t redraw_pending;
 static uint32_t scene_generation;
+/* Damage accumulated since the last frame, kept as one bounding rectangle. */
+static text_rect_t damage;
+static uint8_t damage_partial, damage_full;
 /* One background and one retained image for the actively dragged window.
  * This keeps motion independent of legacy draw callbacks and other windows. */
 static uint32_t* drag_background;
@@ -74,8 +77,11 @@ typedef struct {
     int32_t restore_x, restore_y, restore_w, restore_h;
     uint8_t raw_keys;
     uint8_t keys_reset_pending;
+    uint8_t presented;
 } user_window_slot_t;
 
+static uint32_t window_context_enter(int index);
+static void window_context_leave(uint32_t previous);
 static user_window_slot_t user_window_slots[WM_MAX_WINDOWS];
 static uint32_t next_user_window_handle = 1;
 
@@ -197,11 +203,14 @@ static void user_surface_composite(user_window_slot_t* slot) {
     int32_t left = window->x < 0 ? -window->x : (slot->fullscreen ? 0 : 1);
     int32_t right = window->w - (slot->fullscreen ? 0 : 1);
     if (window->x + right > SCREEN_WIDTH) right = SCREEN_WIDTH - window->x;
+    text_rect_t clip = display_clip();
+    if (left < clip.left - window->x) left = clip.left - window->x;
+    if (right > clip.right - window->x) right = clip.right - window->x;
     if (left >= right) return;
     uint32_t* buffer = display_get_backbuffer();
     for (int32_t y = slot->fullscreen ? 0 : 18; y < window->h - (slot->fullscreen ? 0 : 1); y++) {
         int32_t py = window->y + y;
-        if (py < 0 || py >= SCREEN_HEIGHT) continue;
+        if (py < 0 || py >= SCREEN_HEIGHT || py < clip.top || py >= clip.bottom) continue;
         int32_t x = left;
         while (x < right) {
             uint32_t offset = ((uint32_t)y * window->w + x) * sizeof(uint32_t);
@@ -231,7 +240,51 @@ static void user_surface_release(user_window_slot_t* slot) {
     slot->surface_page_count = 0;
 }
 
+/* Repaint only this area on the next frame. Unlike request_redraw() this must
+ * not call invalidate(), which would be read back as a full-screen request. */
+static void damage_add(text_rect_t area) {
+    area = text_rect_intersect(area, (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT});
+    if (area.left >= area.right || area.top >= area.bottom) return;
+    if (!damage_partial) damage = area;
+    else {
+        if (area.left < damage.left) damage.left = area.left;
+        if (area.top < damage.top) damage.top = area.top;
+        if (area.right > damage.right) damage.right = area.right;
+        if (area.bottom > damage.bottom) damage.bottom = area.bottom;
+    }
+    damage_partial = 1;
+    scene_generation++;
+    redraw_pending = 1;
+}
+
+static void damage_window(const Window* window) {
+    if (window->visible)
+        damage_add((text_rect_t){window->x, window->y,
+                                 window->x + window->w, window->y + window->h});
+}
+
+/* Anything that did not describe its damage gets the whole screen. */
+text_rect_t wm_take_damage(void) {
+    text_rect_t area = damage;
+    if (damage_full || !damage_partial)
+        area = (text_rect_t){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
+    damage_full = damage_partial = 0;
+    return area;
+}
+
+void wm_invalidate_window(const Window* window) {
+    MUTEX_GUARD(kernel_mutex);
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (windows[i] != window) continue;
+        uint32_t previous = window_context_enter(i);
+        damage_window(windows[i]);
+        window_context_leave(previous);
+        return;
+    }
+}
+
 void request_redraw(void) {
+    damage_full = 1;
     scene_generation++;
     redraw_pending = 1;
     if (invalidate) invalidate();
@@ -380,6 +433,15 @@ static void draw_windows_except(Window* excluded) {
     MUTEX_GUARD(kernel_mutex);
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (!windows[i] || windows[i] == excluded) continue;
+        /* App surfaces never draw outside their window, so skip undamaged
+         * ones. Legacy callbacks may, so they rely on per-pixel clipping. */
+        user_window_slot_t* slot = user_slot_for_window(windows[i]);
+        if (slot) {
+            text_rect_t area = text_rect_intersect(display_clip(), (text_rect_t){
+                slot->window.x, slot->window.y,
+                slot->window.x + slot->window.w, slot->window.y + slot->window.h});
+            if (area.left >= area.right || area.top >= area.bottom) continue;
+        }
         uint32_t previous = window_context_enter(i);
         draw_window_frame(windows[i]);
         window_context_leave(previous);
@@ -757,6 +819,7 @@ int32_t wm_user_window_create(const user_window_desc_t* description,
 
     user_window_slot_t* slot = &user_window_slots[slot_index];
     slot->resizable = slot->fullscreen = slot->raw_keys = slot->keys_reset_pending = 0;
+    slot->presented = 0;
     slot->active = 1;
     slot->owner_directory = owner_directory;
     slot->handle = next_user_window_handle++;
@@ -889,6 +952,16 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
     if (!slot || !drawing || !wm_api)
         return -1;
     Window* window = &slot->window;
+
+    /* An app that has never presented relies on its drawing showing up by
+     * itself. The frame is rendered after this call releases the lock. */
+    if (!slot->presented && !slot->drawing_frame &&
+        drawing->operation != USER_WINDOW_RESIZABLE &&
+        drawing->operation != USER_WINDOW_FULLSCREEN &&
+        drawing->operation != USER_WINDOW_RAW_KEYS &&
+        drawing->operation != USER_WINDOW_3D_SUPPORTED &&
+        drawing->operation != USER_WINDOW_DRAW_BEGIN)
+        damage_window(window);
 
     if (drawing->operation == USER_WINDOW_RESIZABLE) {
         slot->resizable = drawing->pressed != 0;
@@ -1123,7 +1196,8 @@ int32_t wm_user_window_present(uint32_t handle, uint32_t owner_directory) {
     user_window_slot_t* slot = user_slot_by_handle(handle, owner_directory);
     if (!slot || !wm_api || !wm_api->graphics.blit_rect) return -1;
     slot->drawing_frame = 0;
-    request_redraw();
+    slot->presented = 1;
+    damage_window(&slot->window);
     return 0;
 }
 
@@ -1216,6 +1290,23 @@ void toggle_window(const char* title) {
     request_redraw();
 }
 
+/* A button press inside the client area of the app window that is already on
+ * top and focused changes nothing the compositor draws. */
+static int pointer_in_active_app(void) {
+    if (dragging_window || resizing_user || resizing_terminal ||
+        start_menu_is_open() || mouse_y >= WM_TASKBAR_Y) return 0;
+    int top = WM_MAX_WINDOWS - 1;
+    while (top >= 0 && !windows[top]) top--;
+    if (top < 0) return 0;
+    user_window_slot_t* slot = user_slot_for_window(windows[top]);
+    if (!slot || !slot->presented) return 0;
+    const Window* w = &slot->window;
+    if (!w->visible || !w->focused || mouse_x < w->x || mouse_x >= w->x + w->w ||
+        mouse_y <= w->y + 22 || mouse_y >= w->y + w->h) return 0;
+    return !(slot->resizable && mouse_x >= w->x + w->w - 14 &&
+             mouse_y >= w->y + w->h - 14);
+}
+
 static void handle_mouse_event(const os_input_event_t* event) {
     mouse_x += event->mouse_dx;
     mouse_y -= event->mouse_dy;
@@ -1242,8 +1333,11 @@ static void handle_mouse_event(const os_input_event_t* event) {
     if (network_mouse(mouse_x, mouse_y, click_down) ||
         volume_mouse(mouse_x, mouse_y, left, click_down)) {
         if (wm_api->input.move_cursor) wm_api->input.move_cursor(mouse_x, mouse_y, 1);
+        /* Hovering changes nothing; only the slider moves between clicks. */
+        if (left != previous_left_button) request_redraw();
+        else if (volume_drag)
+            damage_add((text_rect_t){VOLUME_X, VOLUME_Y, VOLUME_X + 264, VOLUME_Y + 170});
         previous_left_button = left;
-        request_redraw();
         return;
     }
     uint8_t desktop_right = right_down && mouse_y < WM_TASKBAR_Y && !start_menu_is_open();
@@ -1260,8 +1354,9 @@ static void handle_mouse_event(const os_input_event_t* event) {
     if ((desktop_overlay_active() || desktop_right) &&
         desktop_mouse(mouse_x, mouse_y, left, click_down, desktop_right)) {
         if (wm_api->input.move_cursor) wm_api->input.move_cursor(mouse_x, mouse_y, 1);
+        /* The menu and preview have no hover state; icons move while held. */
+        if (left || previous_left_button || right_down) request_redraw();
         previous_left_button = left;
-        request_redraw();
         return;
     }
 
@@ -1305,6 +1400,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                 if (windows[i]->y > WM_TASKBAR_Y - 24)
                     windows[i]->y = WM_TASKBAR_Y - 24;
                 window_context_leave(previous);
+                damage_full = 1;
                 redraw_pending = 1;
                 break;
             }
@@ -1312,7 +1408,8 @@ static void handle_mouse_event(const os_input_event_t* event) {
         if (wm_api->input.move_cursor)
             wm_api->input.move_cursor(mouse_x, mouse_y, dragging_window && left ? 0 : 1);
     }
-    if (left != previous_left_button) request_redraw();
+    int app_click = pointer_in_active_app();
+    if (left != previous_left_button && !app_click) request_redraw();
 
     if (!left) {
         /* Retained pixels move without repainting. Notify the application
@@ -1465,7 +1562,7 @@ static void handle_mouse_event(const os_input_event_t* event) {
                     caller_directory = app_loader_context_enter(owner_directory);
                     wm_bring_to_front(window);
                     app_loader_context_leave(caller_directory);
-                    request_redraw();
+                    if (!app_click) request_redraw();
                     handled = 1;
                     previous = app_loader_context_enter(owner_directory);
                     user_window_slot_t* user_slot = user_slot_for_window(window);
@@ -1553,7 +1650,11 @@ static void handle_key_event(const os_input_event_t* event) {
                 continue;
             }
             window_context_leave(previous);
-            request_redraw();
+            /* An app repaints by presenting; a terminal key only changes its
+             * own window. Other kernel windows may change anything. */
+            if (user_slot && user_slot->presented) return;
+            if (!user_slot && terminal_for_window(window)) wm_invalidate_window(window);
+            else request_redraw();
             return;
         }
         window_context_leave(previous);
@@ -1628,6 +1729,9 @@ void wm_poll(void) {
             startup_trace_event(TR_PHASE_OUT,TR_PHASE_RTC,0,0);
             if (t.minute != last_min) {
                 last_min = t.minute;
+                /* The popups show live status, so refresh them too. */
+                if (volume_open || network_open) damage_full = 1;
+                damage_add((text_rect_t){0, WM_TASKBAR_Y, SCREEN_WIDTH, SCREEN_HEIGHT});
                 redraw_pending = 1;
             }
         }
@@ -1648,6 +1752,7 @@ void wm_poll(void) {
         startup_trace_event(TR_PHASE_OUT,TR_PHASE_EVENT,event.type,0);
     }
     if (wm_api->graphics.take_redraw_request && wm_api->graphics.take_redraw_request()) {
+        damage_full = 1;
         scene_generation++;
         redraw_pending = 1;
     }

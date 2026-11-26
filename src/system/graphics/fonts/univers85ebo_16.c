@@ -483,7 +483,7 @@ const uint16_t univers85ebo_16[95][16] = {
 
 void font1_draw_char_16(int32_t x, int32_t y, char c, uint32_t color) {
     MUTEX_GUARD(kernel_mutex);
-    text_rect_t bounds = font_text_bounds();
+    text_rect_t bounds = text_rect_intersect(font_text_bounds(), display_clip());
     if ((uint8_t)c < UNIVERS16_START_CHAR || (uint8_t)c > UNIVERS16_END_CHAR) {
         c = '?';
     }

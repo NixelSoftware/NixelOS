@@ -3,6 +3,7 @@
 
 #include "../../../kernel/os_api.h"
 #include "../../user/window_api.h"
+#include "../text_layout.h"
 
 #define WM_MAX_WINDOWS 16
 #define WM_TASKBAR_Y (SCREEN_HEIGHT - WM_TASKBAR_HEIGHT)
@@ -19,6 +20,10 @@ void wm_draw_windows(void);
 void wm_draw_taskbar(uint8_t start_menu_open);
 void wm_poll(void);
 void wm_invalidate(void);
+/* Schedule a repaint of one registered window's rectangle. */
+void wm_invalidate_window(const Window* window);
+/* Consume the area the next frame must repaint. */
+text_rect_t wm_take_damage(void);
 uint8_t wm_start_menu_is_open(void);
 typedef struct {
     uint32_t frames, over_budget;

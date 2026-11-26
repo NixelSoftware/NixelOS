@@ -2,6 +2,7 @@
 #define DISPLAY_H
 
 #include "../types.h"
+#include "../../system/graphics/text_layout.h"
 
 /* Consume a geometry change from the presentation worker under kernel_mutex. */
 int display_take_resize(void);
@@ -26,5 +27,11 @@ void display_put_pixel(int32_t x, int32_t y, uint32_t color);
 void display_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
 
 uint32_t* display_get_backbuffer(void);
+
+/* Render clip for partial repaints. Everything that writes the backbuffer
+ * honours it. Only the renderer sets it, while holding kernel_mutex. */
+text_rect_t display_clip(void);
+text_rect_t display_set_clip(text_rect_t clip); /* returns the previous clip */
+void display_reset_clip(void);
 
 #endif

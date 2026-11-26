@@ -11,8 +11,11 @@ void mutex_lock(mutex_t* lock) { (void)lock; }
 void mutex_unlock(mutex_t* lock) { (void)lock; }
 static uint32_t framebuffer[96*80], expected[96*80];
 uint32_t* display_get_backbuffer(void) { return framebuffer; }
+static text_rect_t clip = {0, 0, 96, 80};
+text_rect_t display_clip(void) { return clip; }
 void display_put_pixel(int32_t x, int32_t y, uint32_t color) {
-    if (x >= 0 && x < screen_width && y >= 0 && y < screen_height)
+    if (x >= clip.left && x < clip.right && y >= clip.top && y < clip.bottom &&
+        x >= 0 && x < screen_width && y >= 0 && y < screen_height)
         framebuffer[y*screen_width+x] = color;
 }
 void display_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color) {
@@ -123,8 +126,58 @@ static void test_wm_scope(void) {
     }
     CHECK(colored>0 && font_text_bounds().right==96);
 }
+static int is_rect(text_rect_t r, int left, int top, int right, int bottom) {
+    return r.left==left && r.top==top && r.right==right && r.bottom==bottom;
+}
+static void test_damage(void) {
+    wm_take_damage();
+    /* Nothing described: repaint everything. */
+    CHECK(is_rect(wm_take_damage(),0,0,96,80));
+    Window a={10,5,20,20,"a",1,0,0,0,0}, b={50,40,100,100,"b",1,0,0,0,0};
+    damage_window(&a); damage_window(&b);
+    CHECK(redraw_pending && is_rect(wm_take_damage(),10,5,96,80));
+    /* A hidden window schedules no frame. */
+    a.visible=0; redraw_pending=0; damage_window(&a); CHECK(!redraw_pending);
+    /* A full request wins over partial damage, in either order. */
+    a.visible=1; request_redraw(); damage_window(&a);
+    CHECK(is_rect(wm_take_damage(),0,0,96,80));
+    damage_window(&a); request_redraw();
+    CHECK(is_rect(wm_take_damage(),0,0,96,80));
+    damage_window(&a); CHECK(is_rect(wm_take_damage(),10,5,30,25));
+}
+/* Repainting through a clip must match a full paint inside it and leave every
+ * pixel outside it alone. */
+static void paint_scene(void) {
+    static os_api_t api;
+    api.graphics.fill_rect=display_fill_rect;
+    api.graphics.put_pixel=display_put_pixel;
+    wm_api=&api;
+    Window win={10,5,60,60,"Title",1,1,overflowing_content,0,0};
+    draw_window_frame(&win);
+    font1_draw_string_16(8,50,"AB CD",0xABCDEF);
+}
+static void test_clipped_paint(void) {
+    clip=(text_rect_t){0,0,96,80}; clear(); paint_scene(); save();
+    const text_rect_t areas[]={{13,9,47,61},{0,0,1,1},{40,27,96,80},{9,50,31,57}};
+    for (unsigned n=0;n<sizeof(areas)/sizeof(areas[0]);n++) {
+        text_rect_t area=areas[n];
+        for (int i=0;i<96*80;i++) framebuffer[i]=0x5A5A5A;
+        static uint32_t full[96*80];
+        for (int i=0;i<96*80;i++) full[i]=expected[i];
+        /* Start from the same background the full paint had. */
+        for (int y=area.top;y<area.bottom;y++)
+            for (int x=area.left;x<area.right;x++) framebuffer[y*96+x]=0;
+        clip=area; paint_scene();
+        for (int y=0;y<80;y++) for (int x=0;x<96;x++) {
+            int inside=x>=area.left && x<area.right && y>=area.top && y<area.bottom;
+            CHECK(framebuffer[y*96+x]==(inside ? full[y*96+x] : 0x5A5A5A));
+        }
+    }
+    clip=(text_rect_t){0,0,96,80};
+}
 int main(void) {
     test_layout(); test_fonts(); test_surfaces(); test_wm_scope();
+    test_damage(); test_clipped_paint();
     puts("PASS: word wrapping, long words, newlines/tabs, bottom clipping, native/scaled fonts, WM content/title bounds and nested scopes");
     return 0;
 }

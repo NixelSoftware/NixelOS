@@ -4,6 +4,13 @@
 
 /* Exclusive right/bottom edges, in the destination's coordinate system. */
 typedef struct { int32_t left, top, right, bottom; } text_rect_t;
+static inline text_rect_t text_rect_intersect(text_rect_t a, text_rect_t b) {
+    if (b.left > a.left) a.left = b.left;
+    if (b.top > a.top) a.top = b.top;
+    if (b.right < a.right) a.right = b.right;
+    if (b.bottom < a.bottom) a.bottom = b.bottom;
+    return a;
+}
 typedef void (*text_glyph_fn)(void* context, int32_t x, int32_t y, uint8_t ch);
 
 /* Word wrap, hard-break long words, honor newlines/tabs, and emit only whole

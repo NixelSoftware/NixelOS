@@ -10,6 +10,7 @@ void emergency_console_clear(void) {
 
     serial_enter_sync();
 
+    display_reset_clip();
     display_clear(0x00000000);
     emg_line = 1;
 }

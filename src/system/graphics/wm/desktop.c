@@ -111,7 +111,7 @@ void desktop_init(os_api_t* api) {
     fs_home_path("/.config/desktop/layout", layout_dir);
     refresh_desktop();
     seen_generation = fs_generation();
-    desktop_wallpaper_init(api, WALLPAPER_MODE_STRETCH);
+    desktop_wallpaper_init(api, WALLPAPER_MODE_ZOOM);
 }
 
 void desktop_draw(void) {
