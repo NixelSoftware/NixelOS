@@ -393,6 +393,12 @@ os.img: .gui-config firmware $(FIRMWARE_INPUTS) $(DOOM_WADS) $(RESOURCE_AUDIO) r
 run: os.img
 	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
 
+# Host-GPU accelerated 3D: virtio-vga-gl exposes VirGL to the guest.
+# Needs a QEMU built with OpenGL. Use QEMU_DISPLAY_3D=egl-headless for no window.
+QEMU_DISPLAY_3D ?= sdl,gl=on
+run-3d: os.img
+	$(QEMU) $(QEMU_ACCEL_FLAGS) -cpu $(QEMU_CPU) -smp 1 -m $(QEMU_MEMORY) $(QEMU_DRIVE) -netdev user,id=net0,net=$(QEMU_DHCP)$(QEMU_FORWARD) -device $(QEMU_NETCARD),netdev=net0 -device virtio-vga-gl -display $(QEMU_DISPLAY_3D) $(QEMU_AUDIO_FLAGS) -device sb16,audiodev=audio0 $(QEMU_OPL_FLAGS) -serial stdio -rtc base=utc $(QEMU_USB) $(QEMU_EXTRA)
+
 clean-build:
 	$(PYTHON) -c "from pathlib import Path; pats=('*.o','*.tmp'); [p.unlink() for pat in pats for p in Path('.').rglob(pat) if p.is_file()]; [p.unlink(missing_ok=True) for p in [Path('src/boot.bin'),Path('src/boot_stage2.bin'),Path('src/kernel/kernel.bin')]+[Path(f'{a}.bin') for a in '$(STANDARD_APPS) doom syndig browser fastfetch mail sdkhost glcube glscene'.split()]]"
 
@@ -628,7 +634,7 @@ src/kernel/kernel.bin: $(ENTROPY_OBJ)
 src/kernel/crypto/div64.o: src/system/libraries/tls/div64.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-.PHONY: test-entropy test-entropy-qemu
+.PHONY: run-3d test-entropy test-entropy-qemu
 test-entropy:
 	CC="$(CC)" $(PYTHON) tools/tests/test_entropy.py
 test-entropy-qemu:
