@@ -4,8 +4,22 @@
 #include "logo_data.h"
 #include "../../graphics/wm/desktop.h"
 
-extern const uint8_t font_8x8[128][8];
 static uint8_t splash_active = 0;
+static uint32_t spin_frame = 0;
+
+#define SPIN_DOTS      12
+#define SPIN_RADIUS    26
+#define SPIN_DOT_SIZE  6
+#define SPIN_BURST     14
+#define SPIN_DELAY     9000
+#define COPYRIGHT_TEXT "Copyright (c) 2026 NixelSoftware"
+
+static const int kCos256[SPIN_DOTS] = {
+    256, 222, 128, 0, -128, -222, -256, -222, -128, 0, 128, 222
+};
+static const int kSin256[SPIN_DOTS] = {
+    0, 128, 222, 256, 222, 128, 0, -128, -222, -256, -222, -128
+};
 
 static int str_len(const char* s) {
     int len = 0;
@@ -13,148 +27,85 @@ static int str_len(const char* s) {
     return len;
 }
 
+static void draw_spinner(int cx, int cy, uint32_t frame) {
+    int head = (int)(frame % SPIN_DOTS);
+    for (int i = 0; i < SPIN_DOTS; i++) {
+        int dist  = (i - head + SPIN_DOTS) % SPIN_DOTS;
+        int level = 235 - dist * 18;
+        if (level < 30) level = 30;
+        uint32_t color = ((uint32_t)level << 16) | ((uint32_t)level << 8) | (uint32_t)level;
 
-static void draw_string_scaled(int32_t x, int32_t y, const char* str, uint32_t color, int scale) {
-    if (scale <= 1) {
-        draw_string(x, y, str, color);
-        return;
+        int px = cx + (kCos256[i] * SPIN_RADIUS) / 256 - SPIN_DOT_SIZE / 2;
+        int py = cy + (kSin256[i] * SPIN_RADIUS) / 256 - SPIN_DOT_SIZE / 2;
+        display_fill_rect(px, py, SPIN_DOT_SIZE, SPIN_DOT_SIZE, color);
     }
+}
 
-    int cur_x = x;
-    while (*str) {
-        char c = *str;
-        if (c < 0 || c > 127) c = '?';
-
-        for (int row = 0; row < 8; row++) {
-            uint8_t row_bits = font_8x8[(int)c][row];
-            for (int col = 0; col < 8; col++) {
-                if (row_bits & (0x80 >> col)) {
-                    display_fill_rect(cur_x + (col * scale), y + (row * scale), scale, scale, color);
-                }
+static void draw_logo(int logo_x, int logo_y, int scale) {
+    for (int y = 0; y < LOGO_HEIGHT; y++) {
+        for (int x = 0; x < LOGO_WIDTH; x++) {
+            uint32_t pixel = nixel_logo_64x64[y * LOGO_WIDTH + x];
+            uint8_t r = (pixel >> 16) & 0xFF;
+            uint8_t g = (pixel >> 8) & 0xFF;
+            uint8_t b = pixel & 0xFF;
+            int is_bg = (r > 175 && g > 195 && b > 235) || (pixel == 0x00FFFFFF);
+            if (!is_bg) {
+                display_fill_rect(logo_x + x * scale, logo_y + y * scale,
+                                  scale, scale, pixel);
             }
         }
-        cur_x += 8 * scale;
-        str++;
     }
 }
 
 void startscreen_show(const char* status_text, int percent) {
+    (void)status_text;
+    (void)percent;
     splash_active = 1;
-    if (percent == 95) desktop_trace_api("95% splash entered");
 
-    
-    display_fill_rect(0, 0, SCREEN_WIDTH, 495, COLOR_WHITE);
-    if (percent == 95) desktop_trace_api("95% splash background drawn");
+    int scale  = (SCREEN_HEIGHT < 700) ? 3 : 4;
+    int logo_w = LOGO_WIDTH  * scale;
+    int logo_h = LOGO_HEIGHT * scale;
 
-    
-    
-    int base_left = 210;
-    int base_top  = 165;
+    int spin_box = 2 * SPIN_RADIUS + SPIN_DOT_SIZE;
+    int gap_logo_spin = 44;
+    int gap_spin_text = 30;
+    int text_h = 8;
 
-    
-    draw_string(base_left + 2, base_top, "Nixel", 0x00000000);
+    int group_h   = logo_h + gap_logo_spin + spin_box + gap_spin_text + text_h;
+    int group_top = (SCREEN_HEIGHT - group_h) / 2;
+    if (group_top < 0) group_top = 0;
 
-    
-    int title_y = base_top + 16;
-    draw_string_scaled(base_left,     title_y,     "NixelOS", 0x00101010, 3);
-    draw_string_scaled(base_left + 1, title_y,     "NixelOS", 0x00101010, 3);
+    int logo_x = (SCREEN_WIDTH - logo_w) / 2;
+    int logo_y = group_top;
 
-    
-    int os_text_w = 7 * (8 * 3); 
-    draw_string_scaled(base_left + os_text_w + 8, title_y, "", 0x00101010, 3);
+    int spin_cx = SCREEN_WIDTH / 2;
+    int spin_cy = logo_y + logo_h + gap_logo_spin + spin_box / 2;
 
-    
-    int sub_y = title_y + 30;
-    draw_string_scaled(base_left + 2, sub_y, "Workstation", 0x00101010, 2);
-    draw_string_scaled(base_left + 3, sub_y, "Workstation", 0x00101010, 2);
+    int text_w = str_len(COPYRIGHT_TEXT) * 8;
+    int text_x = (SCREEN_WIDTH - text_w) / 2;
+    int text_y = spin_cy + spin_box / 2 + gap_spin_text;
 
-    
-    draw_string(base_left + 70, sub_y + 24, "Built on 32-bit Architecture", 0x00333333);
-
-    
-    int logo_x = base_left + 250;
-    int logo_y = base_top + 6;
-
-    for (int y = 0; y < LOGO_HEIGHT; y++) {
-        for (int x = 0; x < LOGO_WIDTH; x++) {
-            uint32_t pixel = nixel_logo_64x64[y * LOGO_WIDTH + x];
-            
-            uint8_t r = (pixel >> 16) & 0xFF;
-            uint8_t g = (pixel >> 8) & 0xFF;
-            uint8_t b = pixel & 0xFF;
-
-            
-            int is_bg = (r > 175 && g > 195 && b > 235) || (pixel == 0x00FFFFFF);
-            if (!is_bg) {
-                display_put_pixel(logo_x + x, logo_y + y, pixel);
-            }
-        }
-    }
-    if (percent == 95) desktop_trace_api("95% splash logo drawn");
-
-    
-    display_fill_rect(0, 492, SCREEN_WIDTH, 2, 0x004A8BFF); 
-    display_fill_rect(0, 494, SCREEN_WIDTH, 6, 0x000A2C9C); 
-
-    
-    int base_y = 500;
-    int base_h = SCREEN_HEIGHT - base_y;
-    display_fill_rect(0, base_y, SCREEN_WIDTH, base_h, 0x00D4D0C8);
-
-    
-    int bar_w = 260;
-    int bar_h = 15;
-    int bar_x = (SCREEN_WIDTH - bar_w) / 2;
-    int bar_y = base_y + 28;
-
-    
-    display_fill_rect(bar_x, bar_y, bar_w, bar_h, 0x00D4D0C8);
-    display_fill_rect(bar_x - 1, bar_y - 1, bar_w + 2, 1, 0x00808080);
-    display_fill_rect(bar_x - 1, bar_y - 1, 1, bar_h + 2, 0x00808080);
-    display_fill_rect(bar_x - 1, bar_y + bar_h, bar_w + 2, 1, COLOR_WHITE);
-    display_fill_rect(bar_x + bar_w, bar_y - 1, 1, bar_h + 2, COLOR_WHITE);
-
-    
-    display_fill_rect(bar_x + 1, bar_y + 1, bar_w - 2, bar_h - 2, 0x00FFFFFF);
-
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-
-    int inner_w = bar_w - 4;
-    int fill_w = (inner_w * percent) / 100;
-
-    if (fill_w > 0) {
-        
-        for (int py = 0; py < bar_h - 4; py++) {
-            uint32_t col = (py < 4) ? 0x003A70D0 : (py > (bar_h - 7)) ? 0x000A2870 : 0x001B4EB8;
-            display_fill_rect(bar_x + 2, bar_y + 2 + py, fill_w, 1, col);
-        }
-    }
-    if (percent == 95) desktop_trace_api("95% splash progress drawn");
-
-    
-    if (status_text) {
-        int text_px_width = str_len(status_text) * 8;
-        int status_x = (SCREEN_WIDTH - text_px_width) / 2;
-        int status_y = bar_y + 24;
-
-        draw_string(status_x, status_y, status_text, 0x00101010);
-    }
-    if (percent == 95) desktop_trace_api("95% splash text drawn");
-
+    display_fill_rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0x00000000);
+    draw_logo(logo_x, logo_y, scale);
+    draw_string(text_x, text_y, COPYRIGHT_TEXT, 0x00B8B8B8);
+    draw_spinner(spin_cx, spin_cy, spin_frame);
     display_blit();
-    if (percent == 95) desktop_trace_api("95% splash blit done");
+
+    int sx = spin_cx - SPIN_RADIUS - SPIN_DOT_SIZE;
+    int sy = spin_cy - SPIN_RADIUS - SPIN_DOT_SIZE;
+    int sw = 2 * (SPIN_RADIUS + SPIN_DOT_SIZE);
+    int sh = 2 * (SPIN_RADIUS + SPIN_DOT_SIZE);
+    for (int f = 0; f < SPIN_BURST; f++) {
+        spin_frame++;
+        display_fill_rect(sx, sy, sw, sh, 0x00000000);
+        draw_spinner(spin_cx, spin_cy, spin_frame);
+        display_blit_rect(sx, sy, sw, sh);
+        for (volatile int d = 0; d < SPIN_DELAY; d++) __asm__ volatile ("pause");
+    }
 }
 
 void startscreen_stop(void) {
     if (!splash_active) return;
-
-    startscreen_show("Starting NixelOS...", 100);
-
-    for (volatile int i = 0; i < 2500000; i++) {
-        __asm__ volatile ("pause");
-    }
-
     splash_active = 0;
     display_clear(COLOR_DESKTOP);
 }
