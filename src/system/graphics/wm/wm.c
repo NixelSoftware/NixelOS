@@ -223,8 +223,7 @@ static void user_surface_composite(user_window_slot_t* slot) {
                                            (offset & (PAGE_SIZE - 1u)));
             if (!source) break;
             uint32_t* dest = buffer + py * SCREEN_WIDTH + window->x + x;
-            uint32_t copied = count;
-            __asm__ volatile ("cld; rep movsl" : "+S"(source), "+D"(dest), "+c"(copied) : : "memory");
+            for (uint32_t i = 0; i < count; i++) dest[i] = source[i];
             x += count;
         }
     }
@@ -452,7 +451,7 @@ static void draw_windows_except(Window* excluded) {
 void wm_draw_windows(void) { draw_windows_except(0); }
 
 static void copy_pixels(uint32_t* dest, const uint32_t* source, uint32_t count) {
-    __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(count) : : "memory");
+    for (uint32_t i = 0; i < count; i++) dest[i] = source[i];
 }
 
 /* Restore/paste only a clipped window footprint; taskbar pixels stay intact. */
@@ -1065,7 +1064,7 @@ int32_t wm_user_window_draw(uint32_t handle, uint32_t owner_directory,
             const uint32_t* source = (const uint32_t*)slot->surface_frames[i];
             uint32_t* dest = (uint32_t*)slot->visible_frames[i];
             uint32_t count = PAGE_SIZE / sizeof(uint32_t);
-            __asm__ volatile ("cld; rep movsl" : "+S"(source), "+D"(dest), "+c"(count) : : "memory");
+            for (uint32_t word = 0; word < count; word++) dest[word] = source[word];
         }
         slot->drawing_frame = 1;
         return 0;

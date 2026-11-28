@@ -1,4 +1,5 @@
 #include "dhcp.h"
+#include "../arch/arch.h"
 #include "../mutex.h"
 #include "udp.h"
 #include "ipv4.h"
@@ -60,7 +61,7 @@ static uint8_t wait_for_response(uint32_t timeout_seconds, uint32_t generation) 
             elapsed += (now.second + 60u - previous) % 60u;
             previous = now.second;
             if (elapsed >= timeout_seconds) return 0;
-            __asm__ volatile ("pause");
+            arch_cpu_relax();
         }
     }
 }

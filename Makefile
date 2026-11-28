@@ -134,14 +134,22 @@ NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 ARCH ?= i386
 BOARD ?= pc
 ARCH_DIR := src/kernel/arch/$(ARCH)
+CFLAGS += -I$(ARCH_DIR)
 
 ifeq ($(ARCH),i386)
   ARCH_C := $(ARCH_DIR)/idt.c $(ARCH_DIR)/irq.c $(ARCH_DIR)/paging.c \
             $(ARCH_DIR)/arch_i386.c $(ARCH_DIR)/arch_fpu.c $(ARCH_DIR)/timer.c
   ARCH_ASM := $(ARCH_DIR)/kernel_entry.asm $(ARCH_DIR)/idt_asm.asm \
               $(ARCH_DIR)/task_switch.asm $(ARCH_DIR)/gdt_asm.asm
+else ifeq ($(ARCH),arm)
+  ifeq ($(BOARD),pc)
+    BOARD := virt
+  endif
+  ifneq ($(BOARD),virt)
+    $(error BOARD=$(BOARD) is not supported for ARCH=arm; use BOARD=virt)
+  endif
 else
-  $(error ARCH=$(ARCH) is not implemented; only i386 builds today)
+  $(error ARCH=$(ARCH) is not implemented; only i386 and arm build today)
 endif
 
 KERNEL_CORE_C := \
@@ -162,6 +170,7 @@ KERNEL_CORE_C := \
   src/kernel/net/ntp.c src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
   src/system/graphics/wm/cursor.c src/kernel/drivers/display/font.c \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
+  src/system/graphics/fonts/font_8x8.c \
   src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c \
   src/kernel/sched_policy.c src/kernel/sched_wide.c src/kernel/mutex.c \
   src/system/graphics/dialog/dialog.c src/system/graphics/dialog/shutdown.c \
@@ -208,11 +217,13 @@ BOARD_C_PC := \
   src/kernel/drivers/usb/ehci.c \
   src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c
 
-ifeq ($(BOARD),pc)
-  BOARD_C := $(BOARD_C_PC)
-  LDSCRIPT := $(ARCH_DIR)/kernel-pc.ld
-else
-  $(error BOARD=$(BOARD) is not implemented; only pc builds today)
+ifeq ($(ARCH),i386)
+  ifeq ($(BOARD),pc)
+    BOARD_C := $(BOARD_C_PC)
+    LDSCRIPT := $(ARCH_DIR)/kernel-pc.ld
+  else
+    $(error BOARD=$(BOARD) is not implemented; only pc builds today)
+  endif
 endif
 
 KERNEL_C := $(KERNEL_CORE_C) $(BOARD_C) $(ARCH_C)
@@ -249,7 +260,11 @@ src/include/os_version.h: FORCE_VERSION VERSION tools/generate_version.py
 	$(PYTHON) tools/generate_version.py
 
 src/system/shell/commands.o src/system/graphics/wm/start.o: src/include/os_version.h
+ifeq ($(ARCH),arm)
+all: arm-kernel
+else
 all: os.img
+endif
 
 %.o: %.c Makefile
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -607,11 +622,13 @@ test-iwlegacy:
 	/tmp/nixel-test-iwlegacy-protocol
 
 # Reusable user-space TLS library; applications opt in by linking this archive.
+ifeq ($(ARCH),i386)
 include src/system/libraries/tls/tls.mk
 
 # Reusable user-space math and OpenGL libraries; apps opt in by linking them.
 include src/system/libraries/m/m.mk
 include src/system/libraries/gl/gl.mk
+endif
 
 
 .PHONY: test-browser-https
@@ -744,3 +761,182 @@ test-accounts:
 .PHONY: test-accounts-qemu
 test-accounts-qemu: os.img
 	$(PYTHON) tools/tests/test_accounts_qemu.py
+
+ARM_CC ?= arm-none-eabi-gcc
+QEMU_ARM ?= qemu-system-arm
+ARM_BUILD := build/arm
+ARM_BOARD_SRC := src/kernel/board/virt
+ARM_GEN_SRC := src/kernel
+ARM_LDSCRIPT := $(ARCH_DIR)/kernel-virt.ld
+
+ARM_CFLAGS := -mcpu=cortex-a15 -marm -mfloat-abi=soft -O2 -g \
+              -DSTARTUP_TRACE=0 -ffreestanding -fno-pie -fno-common -fno-builtin \
+              -Wall -Wextra -nostdlib -Wa,--noexecstack \
+              -I$(ARM_BOARD_SRC) -I$(ARCH_DIR) -I$(ARM_GEN_SRC) -Isrc/system/graphics/fonts
+
+ARM_HEADERS := $(ARCH_DIR)/mmu.h $(ARCH_DIR)/gic.h $(ARCH_DIR)/timer.h \
+               $(ARCH_DIR)/arch_context.h $(ARM_GEN_SRC)/task.h $(ARM_GEN_SRC)/scheduler.h \
+               $(ARM_GEN_SRC)/sched_policy.h $(ARM_GEN_SRC)/sched_wide.h \
+               $(ARM_GEN_SRC)/arch/arch.h $(ARM_BOARD_SRC)/serial.h
+
+ARM_CORE_SRC := \
+  src/kernel/main.c src/kernel/startup_trace.c src/kernel/syscall.c \
+  src/kernel/login.c src/kernel/bootlog.c \
+  src/system/init/main.c \
+  src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
+  src/system/graphics/wm/cursor.c src/system/graphics/wm/desktop.c \
+  src/system/graphics/wm/desktop_wallpaper.c src/system/graphics/wm/start.c \
+  src/system/graphics/widgets.c src/system/graphics/text_layout.c \
+  src/system/graphics/session.c src/system/graphics/settings/settings.c \
+  src/system/graphics/terminal/terminal.c src/system/graphics/screenshot/screenshot.c \
+  src/system/graphics/image/png.c src/system/graphics/fonts/univers85ebo_16.c \
+  src/system/graphics/dialog/dialog.c src/system/graphics/dialog/shutdown.c \
+  src/system/graphics/dialog/crash_dialog.c \
+  src/system/init/splash/startscreen.c src/system/init/splash/logo_data.c \
+  src/system/services/input/input.c src/system/loader/app_loader.c \
+  src/kernel/drivers/display/font.c src/kernel/keyboard.c \
+  src/apps/notepad/notepad.c src/apps/viewer/viewer.c
+
+ARM_CORE_OBJS := $(patsubst src/%.c,$(ARM_BUILD)/obj/%.o,$(ARM_CORE_SRC))
+
+ARM_WOLF_OBJ := $(addprefix $(ARM_BUILD)/wolf/,$(addsuffix .o,sha sha256 hmac hash pwdbased aes))
+ARM_WOLF_CFLAGS := -U__unix__ -U__linux__ -DWOLFSSL_USER_SETTINGS \
+  -I$(ARM_GEN_SRC)/net/wireless/security -Isrc/system/libraries/tls/compat \
+  -Isrc/system/libraries/tls/vendor/wolfssl -fno-stack-protector
+
+ARM_OBJS := \
+  $(ARM_BUILD)/start.o $(ARM_BUILD)/vectors.o $(ARM_BUILD)/task_switch.o \
+  $(ARM_BUILD)/boot.o $(ARM_BUILD)/mmu.o $(ARM_BUILD)/gic.o $(ARM_BUILD)/timer.o \
+  $(ARM_BUILD)/irq.o $(ARM_BUILD)/arch_cpu.o $(ARM_BUILD)/usermode.o \
+  $(ARM_BUILD)/task.o $(ARM_BUILD)/scheduler.o $(ARM_BUILD)/sched_policy.o \
+  $(ARM_BUILD)/sched_wide.o $(ARM_BUILD)/memory.o $(ARM_BUILD)/mutex.o $(ARM_BUILD)/fs.o \
+  $(ARM_BUILD)/paging.o $(ARM_BUILD)/video.o $(ARM_BUILD)/display.o \
+  $(ARM_BUILD)/users.o $(ARM_BUILD)/hw_stubs.o $(ARM_CORE_OBJS) $(ARM_WOLF_OBJ) \
+  $(ARM_BUILD)/serial.o $(ARM_BUILD)/virtio_gpu.o $(ARM_BUILD)/virtio_input.o \
+  $(ARM_BUILD)/input_bridge.o $(ARM_BUILD)/virtio_blk.o \
+  $(ARM_BUILD)/fbcon.o $(ARM_BUILD)/shell.o $(ARM_BUILD)/font_8x8.o \
+  $(ARM_BUILD)/debug.o $(ARM_BUILD)/fs_stubs.o
+
+.PHONY: arm-kernel run-arm clean-arm
+
+arm-kernel: $(ARM_BUILD)/kernel-virt.elf
+
+$(ARM_BUILD):
+	$(PYTHON) -c "from pathlib import Path; Path('$@').mkdir(parents=True, exist_ok=True)"
+
+$(ARM_BUILD)/start.o: $(ARCH_DIR)/start.S | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/vectors.o: $(ARCH_DIR)/vectors.S | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/task_switch.o: $(ARCH_DIR)/task_switch.S | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/boot.o: $(ARCH_DIR)/boot.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/mmu.o: $(ARCH_DIR)/mmu.c $(ARCH_DIR)/mmu.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/gic.o: $(ARCH_DIR)/gic.c $(ARCH_DIR)/gic.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/timer.o: $(ARCH_DIR)/timer.c $(ARCH_DIR)/timer.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/irq.o: $(ARCH_DIR)/irq.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/arch_cpu.o: $(ARCH_DIR)/arch_cpu.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/usermode.o: $(ARCH_DIR)/usermode.c $(ARCH_DIR)/usermode.h $(ARM_BOARD_SRC)/fbcon.h $(ARM_GEN_SRC)/task.h $(ARCH_DIR)/timer.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/task.o: $(ARM_GEN_SRC)/task.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/scheduler.o: $(ARM_GEN_SRC)/scheduler.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/sched_policy.o: $(ARM_GEN_SRC)/sched_policy.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/sched_wide.o: $(ARM_GEN_SRC)/sched_wide.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/memory.o: $(ARM_GEN_SRC)/memory.c $(ARM_GEN_SRC)/types.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/mutex.o: $(ARM_GEN_SRC)/mutex.c $(ARM_GEN_SRC)/mutex.h $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/fs.o: $(ARM_GEN_SRC)/fs.c $(ARM_GEN_SRC)/fs.h $(ARM_GEN_SRC)/users.h $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -DNIXEL_ARM=1 -c $< -o $@
+
+$(ARM_BUILD)/debug.o: $(ARM_BOARD_SRC)/debug.c $(ARM_BOARD_SRC)/serial.h $(ARM_GEN_SRC)/drivers/serial.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/fs_stubs.o: $(ARM_BOARD_SRC)/fs_stubs.c $(ARM_GEN_SRC)/users.h $(ARM_GEN_SRC)/emergency.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/paging.o: $(ARCH_DIR)/paging.c $(ARM_GEN_SRC)/mm.h $(ARM_GEN_SRC)/arch/arch.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/video.o: $(ARM_BOARD_SRC)/video.c $(ARM_BOARD_SRC)/virtio_gpu.h $(ARM_GEN_SRC)/hal/video.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/display.o: $(ARM_GEN_SRC)/drivers/display.c $(ARM_GEN_SRC)/drivers/display.h $(ARM_GEN_SRC)/mm.h $(ARM_GEN_SRC)/hal/video.h $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/users.o: $(ARM_GEN_SRC)/users.c $(ARM_GEN_SRC)/users.h $(ARM_GEN_SRC)/fs.h $(ARM_GEN_SRC)/task.h $(ARM_GEN_SRC)/crypto/entropy.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -DNIXEL_ARM=1 $(ARM_WOLF_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/wolf/%.o: src/system/libraries/tls/vendor/wolfssl/wolfcrypt/src/%.c | $(ARM_BUILD)
+	$(PYTHON) -c "from pathlib import Path; Path('$(@D)').mkdir(parents=True, exist_ok=True)"
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -DNIXEL_ARM=1 $(ARM_WOLF_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/hw_stubs.o: $(ARM_BOARD_SRC)/hw_stubs.c $(ARM_HEADERS) | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/obj/%.o: src/%.c | $(ARM_BUILD)
+	$(PYTHON) -c "from pathlib import Path; Path('$(@D)').mkdir(parents=True, exist_ok=True)"
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -DNIXEL_ARM=1 -c $< -o $@
+
+$(ARM_BUILD)/serial.o: $(ARM_BOARD_SRC)/serial.c $(ARM_BOARD_SRC)/serial.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/virtio_gpu.o: $(ARM_BOARD_SRC)/virtio_gpu.c $(ARM_BOARD_SRC)/virtio_gpu.h $(ARM_BOARD_SRC)/serial.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/virtio_input.o: $(ARM_BOARD_SRC)/virtio_input.c $(ARM_BOARD_SRC)/virtio_input.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/input_bridge.o: $(ARM_BOARD_SRC)/input_bridge.c $(ARM_BOARD_SRC)/virtio_input.h $(ARM_GEN_SRC)/drivers/ps2.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/virtio_blk.o: $(ARM_BOARD_SRC)/virtio_blk.c $(ARM_BOARD_SRC)/virtio_blk.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/fbcon.o: $(ARM_BOARD_SRC)/fbcon.c $(ARM_BOARD_SRC)/fbcon.h $(ARM_BOARD_SRC)/virtio_gpu.h src/system/graphics/fonts/font_8x8.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/shell.o: $(ARM_BOARD_SRC)/shell.c $(ARM_BOARD_SRC)/shell.h $(ARM_BOARD_SRC)/fbcon.h $(ARM_BOARD_SRC)/virtio_input.h $(ARM_GEN_SRC)/task.h $(ARCH_DIR)/timer.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -DNIXEL_KERNEL=1 -c $< -o $@
+
+$(ARM_BUILD)/font_8x8.o: src/system/graphics/fonts/font_8x8.c src/system/graphics/fonts/font_8x8.h | $(ARM_BUILD)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(ARM_BUILD)/kernel-virt.elf: $(ARM_OBJS) $(ARM_LDSCRIPT) Makefile
+	$(ARM_CC) $(ARM_CFLAGS) -T $(ARM_LDSCRIPT) $(ARM_OBJS) -o $@ -Wl,--build-id=none -lgcc
+
+run-arm: $(ARM_BUILD)/kernel-virt.elf
+	$(QEMU_ARM) -M virt -cpu cortex-a15 -m 256M -display none -monitor none -serial stdio \
+		-global virtio-mmio.force-legacy=false -device virtio-gpu-device \
+		-device virtio-keyboard-device \
+		-drive file=os.img,format=raw,if=none,id=vblk \
+		-device virtio-blk-device,drive=vblk -kernel $<
+
+clean-arm:
+	$(PYTHON) -c "from pathlib import Path; [p.unlink(missing_ok=True) for p in Path('$(ARM_BUILD)').glob('*')]"

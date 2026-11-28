@@ -25,3 +25,5 @@ struct
 
 docs/arm-port-roadmap.md
 boot_serial.log
+
+build/*

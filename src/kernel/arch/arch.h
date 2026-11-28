@@ -92,6 +92,8 @@ uint32_t arch_kernel_address_space(void);
 void arch_switch_address_space(uint32_t root_phys); /* load the page-table root */
 void arch_flush_tlb(void);
 
+void arch_cpu_relax(void);
+
 typedef struct arch_address_space arch_address_space_t;
 arch_address_space_t* arch_address_space_create(void);
 void arch_address_space_destroy(arch_address_space_t* space);
@@ -105,6 +107,8 @@ uint32_t arch_address_space_root(const arch_address_space_t* space);
 /* Opaque per-task saved register state; the arch defines the real layout. */
 struct arch_context;
 void arch_context_switch(struct arch_context* prev, struct arch_context* next);
+void arch_task_init(struct arch_context* ctx, void (*entry)(void*), void* arg,
+                    uint32_t stack_top);
 
 /* ------------------------------------------------------------------ */
 /* Monotonic timer                                                     */

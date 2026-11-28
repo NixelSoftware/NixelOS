@@ -1,4 +1,5 @@
 #include "startscreen.h"
+#include "../../../kernel/arch/arch.h"
 #include "../../../kernel/drivers/display/font.h"
 #include "../../../kernel/drivers/display.h"
 #include "logo_data.h"
@@ -100,7 +101,7 @@ void startscreen_show(const char* status_text, int percent) {
         display_fill_rect(sx, sy, sw, sh, 0x00000000);
         draw_spinner(spin_cx, spin_cy, spin_frame);
         display_blit_rect(sx, sy, sw, sh);
-        for (volatile int d = 0; d < SPIN_DELAY; d++) __asm__ volatile ("pause");
+        for (volatile int d = 0; d < SPIN_DELAY; d++) arch_cpu_relax();
     }
 }
 

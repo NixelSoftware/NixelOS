@@ -273,9 +273,6 @@ static void kernel_init_interrupts(void) {
 static void kernel_init_timer(void) {
     debug_print("[INIT] PIT init...\n");
     arch_timer_init(100);
-    /* The bootloader masks every PIC line; PIT programming alone cannot
-     * deliver ticks for scheduling, sleeps, and network/audio deadlines. */
-    outb(0x21, inb(0x21) & ~1u);
 }
 
 static void kernel_init_acpi(void) {

@@ -7,14 +7,20 @@
 #include "fs.h"
 #include "emergency.h"
 #include "users.h"
+#include "drivers/serial.h"
+#ifdef NIXEL_ARM
+#include "board/virt/virtio_blk.h"
+#include "crypto/entropy.h"
+int ahci_flush(uint8_t port_no);
+#else
 #include "crypto/entropy.h"
 #include "drivers/ata.h"
 #include "drivers/nvme.h"
 #include "drivers/ahci.h"
 #include "drivers/usb/mass_storage.h"
-#include "drivers/serial.h"
 #include "drivers/delay.h"
 #include "hal/usb.h"
+#endif
 
 #define BLOCK_SIZE 4096u
 #define INODE_SIZE 256u
@@ -24,9 +30,18 @@
 #define KIND 0170000u
 #define ROOT_INO 2u
 
+#ifdef NIXEL_ARM
+enum { STORAGE_VIRTIO };
+#define STORAGE_AHCI 0xFFu
+#define ATA_DRIVE_COUNT 1u
+#define USB_MSC_COUNT 0u
+#define NVME_DISK 1u
+#define AHCI_FIRST_DISK 2u
+#else
 enum { STORAGE_ATA, STORAGE_NVME, STORAGE_USB, STORAGE_AHCI };
 enum { NVME_DISK = ATA_DRIVE_COUNT + USB_MSC_COUNT, AHCI_FIRST_DISK = NVME_DISK + 1 };
 _Static_assert(FS_DISK_COUNT == AHCI_FIRST_DISK + 32, "block device count");
+#endif
 typedef struct {
     uint8_t v_super[1024], v_group[BLOCK_SIZE];
     uint32_t v_base, v_blocks, v_inodes, v_inode_table, v_block_bitmap, v_inode_bitmap;
@@ -77,6 +92,14 @@ static int same_name(const uint8_t* a, const char* b, unsigned n) {
 }
 
 static int select_storage(unsigned disk) {
+#ifdef NIXEL_ARM
+    if (disk != 0) return 0;
+    active_volume->disk = disk;
+    storage_kind = STORAGE_VIRTIO;
+    return virtio_blk_ready();
+
+#else
+
     active_volume->disk = disk;
 
     if (disk >= AHCI_FIRST_DISK && disk < FS_DISK_COUNT) {
@@ -96,8 +119,15 @@ static int select_storage(unsigned disk) {
     }
     storage_kind = STORAGE_NVME; 
     return disk == NVME_DISK && nvme_is_ready();
+
+#endif
 }
 static uint32_t storage_capacity(void) {
+#ifdef NIXEL_ARM
+    return (uint32_t)virtio_blk_sectors();
+
+#else
+
     if (storage_kind == STORAGE_ATA) return ata_get_sector_count();
     if (storage_kind == STORAGE_NVME) return nvme_get_sector_count();
     if (storage_kind == STORAGE_AHCI) {
@@ -107,16 +137,30 @@ static uint32_t storage_capacity(void) {
     uint32_t sectors, generation;
     return usb_msc_info(active_volume->disk - ATA_DRIVE_COUNT, &sectors, &generation) &&
         generation == active_volume->media_generation ? sectors : 0;
+
+#endif
 }
 static int select_volume_media(void) {
+#ifdef NIXEL_ARM
+    return virtio_blk_ready();
+
+#else
+
     if (storage_kind == STORAGE_AHCI)
         return ahci_is_drive_available(active_volume->disk - AHCI_FIRST_DISK);
     if (storage_kind == STORAGE_ATA) return ata_select_drive(active_volume->disk);
     if (storage_kind == STORAGE_USB)
         return usb_msc_select_media(active_volume->disk - ATA_DRIVE_COUNT, active_volume->media_generation);
     return nvme_is_ready();
+
+#endif
 }
 static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
+#ifdef NIXEL_ARM
+    return virtio_blk_read(lba, buf, count) == 0;
+
+#else
+
     if (!select_volume_media()) return 0;
     if (storage_kind == STORAGE_AHCI) {
         return ahci_read(active_volume->disk - AHCI_FIRST_DISK, lba, count, buf) == 0;
@@ -126,9 +170,16 @@ static int storage_read_sectors(uint32_t lba, uint8_t count, uint8_t* buf) {
         return nvme_read_sectors(lba, count, buf);
     }
     return ata_read_sectors(lba, count, buf);
+
+#endif
 }
 
 static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf) {
+#ifdef NIXEL_ARM
+    return virtio_blk_write(lba, buf, count) == 0;
+
+#else
+
     if (!select_volume_media()) return 0;
     if (storage_kind == STORAGE_AHCI) {
         return ahci_write(active_volume->disk - AHCI_FIRST_DISK, lba, count, buf) == 0;
@@ -138,6 +189,8 @@ static int storage_write_sectors(uint32_t lba, uint8_t count, const uint8_t* buf
         return nvme_write_sectors(lba, count, buf);
     }
     return ata_write_sectors(lba, count, buf);
+
+#endif
 }
 
 static int read_block(uint32_t n, uint8_t* data) {
@@ -496,6 +549,7 @@ static void load_volume(uint32_t start, uint32_t sectors) {
     ready=1; change_generation++;
     debug_print("[ext4] Mounted successfully!\n");
 }
+#ifndef NIXEL_ARM
 static void mount_boot_disk(const volatile uint8_t* boot) {
     ready=0;
     if (boot[510]!=0x55 || boot[511]!=0xaa || boot[450]!=0x83) {
@@ -533,8 +587,31 @@ probe_boot_disk:
     copy(active_volume->target,"/",2);
     load_volume(u32(io+454),u32(io+458));
 }
+#endif
 
 void fs_init(void) {
+#ifdef NIXEL_ARM
+    MUTEX_GUARD(filesystem_mutex);
+    zero(volumes,sizeof(volumes));
+    active_volume=&volumes[0];
+    copy(active_volume->target,"/",2);
+    debug_print("[FS] Initializing filesystem...\n");
+    if (!select_storage(0)) { debug_print("[FS] No virtio disk.\n"); return; }
+    static const uint32_t virtio_partitions[] = { 0, 500, 2048 };
+    for (unsigned p = 0; p < sizeof(virtio_partitions)/sizeof(virtio_partitions[0]); p++) {
+        uint32_t cand_base = virtio_partitions[p];
+        if (storage_read_sectors(cand_base + 2, 2, super)) {
+            if (u16(super + 56) == 0xEF53) {
+                active_volume->partition = cand_base ? 1 : 0;
+                load_volume(cand_base, (uint32_t)virtio_blk_sectors() - cand_base);
+                if (ready) return;
+            }
+        }
+    }
+    debug_print("[FS] No ext4 found on virtio disk.\n");
+
+#else
+
     MUTEX_GUARD(filesystem_mutex);
     zero(volumes,sizeof(volumes));
     active_volume=&volumes[0];
@@ -591,6 +668,8 @@ void fs_init(void) {
             }
         }
     }
+
+#endif
 }
 static void device_name(unsigned disk, unsigned partition, char* out) {
     const char* prefix = disk >= AHCI_FIRST_DISK ? "sata" :

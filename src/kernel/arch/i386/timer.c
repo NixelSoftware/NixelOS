@@ -68,6 +68,7 @@ static void program_pit(uint32_t divisor) {
 void arch_timer_init(uint32_t hz) {
     pit_divisor = hz ? PIT_INPUT_HZ / hz : PIT_INPUT_HZ / SCHED_TICK_HZ;
     program_pit(pit_divisor);
+    outb(0x21, inb(0x21) & ~1u);
 }
 
 int arch_timer_started(void) {

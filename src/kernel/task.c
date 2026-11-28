@@ -207,7 +207,6 @@ int task_wait(int pid) {
     task_irq_restore(flags);
     return 0;
 }
-static void task_return_stub(void) { task_exit(); }
 static void idle_main(void* arg) {
     (void)arg;
     for (;;) {
@@ -245,15 +244,7 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
     int n = 0;
     while (name && name[n] && n < 15) { t->name[n] = name[n]; n++; }
     t->name[n] = 0;
-    uint32_t* sp = (uint32_t*)((uint32_t)(t->stack + TASK_STACK_SIZE) & ~0xFu);
-    sp -= 3;
-    *(--sp) = (uint32_t)arg; *(--sp) = (uint32_t)task_return_stub;
-    task_switch_frame_t* frame = (task_switch_frame_t*)((uint8_t*)sp - sizeof(*frame));
-    *frame = (task_switch_frame_t){
-        .gs = 0x10, .fs = 0x10, .es = 0x10, .ds = 0x10,
-        .eip = (uint32_t)entry, .cs = 0x08, .eflags = 0x202
-    };
-    t->arch.esp = (uint32_t)frame;
+    arch_task_init(&t->arch, entry, arg, (uint32_t)(t->stack + TASK_STACK_SIZE));
 }
 static int slot_reusable(const task_t* t) {
     /* setup overwrites the stack and linkage. Never do that while any of

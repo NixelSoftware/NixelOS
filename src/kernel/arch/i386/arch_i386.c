@@ -1,4 +1,6 @@
 #include "arch_i386.h"
+#include "arch_context.h"
+#include "../../task.h"
 
 void arch_irq_enable(void) {
     __asm__ volatile ("sti" : : : "memory");
@@ -20,6 +22,10 @@ void arch_irq_restore(uint32_t state) {
 
 int arch_irq_were_enabled(uint32_t state) {
     return (state & 0x200u) != 0;
+}
+
+void arch_cpu_relax(void) {
+    __asm__ volatile ("pause" : : : "memory");
 }
 
 void arch_halt(void) {
@@ -139,4 +145,19 @@ __attribute__((noreturn)) void arch_boot_entry(void) {
         *(volatile uint32_t*)0x9010u);
     kernel_main(&info);
     arch_halt_forever();
+}
+static void task_return_stub(void) { task_exit(); }
+
+void arch_task_init(struct arch_context* ctx, void (*entry)(void*), void* arg,
+                    uint32_t stack_top) {
+    uint32_t* sp = (uint32_t*)(stack_top & ~0xFu);
+    sp -= 3;
+    *(--sp) = (uint32_t)arg;
+    *(--sp) = (uint32_t)task_return_stub;
+    task_switch_frame_t* frame = (task_switch_frame_t*)((uint8_t*)sp - sizeof(*frame));
+    *frame = (task_switch_frame_t){
+        .gs = 0x10, .fs = 0x10, .es = 0x10, .ds = 0x10,
+        .eip = (uint32_t)entry, .cs = 0x08, .eflags = 0x202
+    };
+    ctx->esp = (uint32_t)frame;
 }

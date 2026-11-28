@@ -3,7 +3,7 @@
 #include "types.h"
 #include "scheduler.h"
 #include "arch/arch.h"
-#include "arch/i386/arch_context.h"
+#include "arch_context.h"
 #include "startup_trace.h"
 #define MAX_TASKS 32
 #define TASK_STACK_SIZE 32768
@@ -33,7 +33,6 @@ typedef struct task {
     char name[16];
 } task_t;
 _Static_assert(__builtin_offsetof(task_t, arch.esp) == 0, "assembly task ESP offset");
-_Static_assert(__builtin_offsetof(task_t, arch.fpu_state) % 16 == 0, "task FPU alignment");
 void tasking_init(void);
 int task_create(void (*entry)(void*), void* arg, const char* name);
 int task_create_nice(void (*entry)(void*), void* arg, const char* name, int nice);

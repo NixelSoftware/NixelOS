@@ -250,7 +250,7 @@ void desktop_wallpaper_draw(void) {
         uint32_t* dest = buffer + y * SCREEN_WIDTH + clip.left;
         const uint32_t* source = scaled + y * SCREEN_WIDTH + clip.left;
         uint32_t count = (uint32_t)(clip.right - clip.left);
-        __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(count) : : "memory");
+        for (uint32_t i = 0; i < count; i++) dest[i] = source[i];
     }
 }
 

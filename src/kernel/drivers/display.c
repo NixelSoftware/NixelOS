@@ -46,10 +46,20 @@ static int can_queue(void) {
     if (!async_display || !scheduler_running()) return 0;
     uint32_t flags = task_irq_save();
     task_irq_restore(flags);
-    return (flags & 0x200u) != 0; /* panic/early boot still present synchronously */
+    return arch_irq_were_enabled(flags); /* panic/early boot still present synchronously */
 }
 static uint32_t* snapshot_pixel(uint32_t pixel) {
     return (uint32_t*)present_pages[pixel / (PAGE_SIZE / 4u)] + pixel % (PAGE_SIZE / 4u);
+}
+static void copy_words(uint32_t* dest, const uint32_t* source, uint32_t count) {
+    while (count--) *dest++ = *source++;
+}
+static void fill_words(uint32_t* dest, uint32_t color, uint32_t count) {
+    while (count--) *dest++ = color;
+}
+static int words_equal(const uint32_t* a, const uint32_t* b, uint32_t count) {
+    while (count--) if (*a++ != *b++) return 0;
+    return 1;
 }
 /* The worker owns the retained image. Compare only ordinary RAM, then send
  * changed row spans to VRAM without holding the scene lock. */
@@ -62,7 +72,7 @@ static void snapshot_rows(int32_t x, int32_t y, int32_t right, int32_t bottom,
         uint32_t* dest = row_pixels + x;
         const uint32_t* source = backbuffer + row * SCREEN_WIDTH + x;
         uint32_t count = right - x;
-        __asm__ volatile ("cld; rep movsl" : "+D"(dest), "+S"(source), "+c"(count) : : "memory");
+        copy_words(dest, source, count);
         int32_t cy = row - present_cursor_y;
         if (present_cursor && cy >= 0 && cy < 19) {
             for (int32_t cx = 0; cx < 12; cx++) {
@@ -81,15 +91,8 @@ static void snapshot_rows(int32_t x, int32_t y, int32_t right, int32_t bottom,
             if (span > (uint32_t)(right - col)) span = right - col;
             uint32_t* saved = snapshot_pixel(pixel);
             source = row_pixels + col;
-            const uint32_t* old = saved;
-            count = span;
-            uint8_t equal;
-            __asm__ volatile ("cld; repe cmpsl; sete %0"
-                : "=qm"(equal), "+S"(source), "+D"(old), "+c"(count) : : "memory", "cc");
-            if (!present_valid || !equal) {
-                source = row_pixels + col;
-                count = span;
-                __asm__ volatile ("cld; rep movsl" : "+D"(saved), "+S"(source), "+c"(count) : : "memory");
+            if (!present_valid || !words_equal(source, saved, span)) {
+                copy_words(saved, source, span);
                 if (changed_left[row] > col) changed_left[row] = col;
                 changed_right[row] = col + span;
             }
@@ -235,8 +238,7 @@ void display_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t colo
     if (w <= 0 || h <= 0) return;
     for (int row = 0; row < h; row++) {
         uint32_t* dest = backbuffer + (y + row) * SCREEN_WIDTH + x;
-        uint32_t count = (uint32_t)w;
-        __asm__ volatile ("cld; rep stosl" : "+D"(dest), "+c"(count) : "a"(color) : "memory");
+        fill_words(dest, color, (uint32_t)w);
     }
 }
 
