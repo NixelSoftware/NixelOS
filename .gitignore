@@ -22,3 +22,6 @@ struct
 .boot-config
 
 /src/apps/nixelcraft/*
+
+docs/arm-port-roadmap.md
+boot_serial.log
