@@ -4,7 +4,7 @@
 #include "arp.h"
 #include "../hal/net.h"
 #include "../drivers/serial.h"
-#include "../paging.h"
+#include "../arch/arch.h"
 #include "../../system/loader/app_loader.h"
 
 #define IPV4_ETHERNET_HEADER_SIZE 14
@@ -172,8 +172,8 @@ void ipv4_set_configuration(uint32_t address, uint32_t gateway,
 void ipv4_set_protocol_handler(uint8_t protocol,
                                ipv4_protocol_handler_t handler) {
     MUTEX_GUARD(kernel_mutex);
-    uint32_t current_directory = paging_current_directory();
-    uint32_t kernel_directory = paging_kernel_directory();
+    uint32_t current_directory = arch_current_address_space();
+    uint32_t kernel_directory = arch_kernel_address_space();
     /*
     debug_print("[NET RX] handler registration protocol/current/old/new: ");
     debug_hex(protocol);
@@ -220,12 +220,12 @@ void ipv4_clear_handlers_for_directory(uint32_t directory_address) {
     for (uint32_t i = 0; i < IPV4_PENDING_MAX; i++)
         if (pending_packets[i].owner == directory_address) pending_packets[i].active = 0;
 
-    if (!directory_address || directory_address == paging_kernel_directory()) return;
+    if (!directory_address || directory_address == arch_kernel_address_space()) return;
     for (uint16_t protocol = 0; protocol < 256; protocol++) {
         if (protocol_handler_directories[protocol] != directory_address) continue;
         if (kernel_fallback_valid[protocol]) {
             protocol_handlers[protocol] = kernel_fallback_handlers[protocol];
-            protocol_handler_directories[protocol] = paging_kernel_directory();
+            protocol_handler_directories[protocol] = arch_kernel_address_space();
         } else {
             protocol_handlers[protocol] = 0;
             protocol_handler_directories[protocol] = 0;
@@ -308,14 +308,14 @@ uint8_t ipv4_receive_frame(const uint8_t* frame, uint32_t length) {
     if (handler) {
         uint32_t handler_directory = protocol_handler_directories[header->protocol];
         uint8_t app_handler = handler_directory &&
-                              handler_directory != paging_kernel_directory();
+                              handler_directory != arch_kernel_address_space();
         if (app_handler) {
             debug_print("[APP NET] dispatching IPv4 protocol ");
             debug_hex(header->protocol);
             debug_print(" to app\n");
         }
         uint32_t previous_directory = app_loader_context_enter(
-            handler_directory ? handler_directory : paging_current_directory());
+            handler_directory ? handler_directory : arch_current_address_space());
         handler(
             read_be32((const uint8_t*)&header->source_ip),
             read_be32((const uint8_t*)&header->destination_ip),
@@ -347,7 +347,7 @@ uint8_t ipv4_send(uint32_t destination_ip, uint8_t protocol,
         p->destination = destination_ip;
         p->protocol = protocol;
         p->length = length;
-        p->owner = paging_current_directory();
+        p->owner = arch_current_address_space();
         p->started = frame_timer;
         for (uint32_t n = 0; n < length; n++) p->payload[n] = payload[n];
         p->active = 1;

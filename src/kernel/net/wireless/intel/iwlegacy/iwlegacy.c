@@ -7,7 +7,7 @@
 /* Native lifecycle ownership, not inferred from firmware/PCI register bits. */
 int iwlegacy_native_owned;
 #include "../../../../mutex.h"
-#include "../../../../paging.h"
+#include "../../../../mm.h"
 #include "../../../../drivers/delay.h"
 static uint32_t mmio_read(void* base, uint32_t reg) {
     return *(volatile uint32_t*)((volatile uint8_t*)base + reg);

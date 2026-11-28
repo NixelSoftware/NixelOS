@@ -1,7 +1,7 @@
 #include "e1000.h"
 #include "../../drivers/pci.h"
 #include "../../drivers/serial.h"
-#include "../../irq.h"
+#include "../../arch/arch.h"
 #include "../../task.h"
 
 
@@ -210,7 +210,8 @@ static int e1000_pci_find(void) {
 }
 
 /* Masks the device until e1000_poll() has drained the ring. */
-static int e1000_interrupt(void) {
+static int e1000_interrupt(void* ctx) {
+    (void)ctx;
     if (!irq_armed) return 0;
     uint32_t cause = e1000_read(REG_ICR); /* read clears */
     if (cause == 0xFFFFFFFFU || !(cause & E1000_RX_CAUSES)) return 0;
@@ -350,7 +351,7 @@ uint8_t e1000_init(void) {
     ready = 1;
     diag.initialized = 1;
     /* I/O-port access is an address/data pair an IRQ could tear: poll then. */
-    irq_on = use_mmio && irq_register(irq_line, e1000_interrupt);
+    irq_on = use_mmio && arch_irq_register(irq_line, e1000_interrupt, 0);
     if (irq_on) e1000_arm();
     debug_print(irq_on ? "[E1000] Interrupt driven\n" : "[E1000] Polling\n");
     return 1;
@@ -370,7 +371,7 @@ void e1000_shutdown(void) {
     irq_armed = 0;
     e1000_write(REG_IMC, 0xFFFFFFFF);
     e1000_read(REG_ICR);
-    if (irq_on) irq_unregister(irq_line);
+    if (irq_on) arch_irq_unregister(irq_line);
     irq_on = 0;
     ready = 0;
 }

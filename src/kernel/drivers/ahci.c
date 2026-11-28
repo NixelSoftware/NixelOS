@@ -1,6 +1,5 @@
 #include "ahci.h"
-#include "../arch_i386.h"
-#include "../paging.h"
+#include "../mm.h"
 #include "serial.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8

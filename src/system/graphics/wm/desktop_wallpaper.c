@@ -1,7 +1,7 @@
 #include "desktop_wallpaper.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../../kernel/drivers/serial.h"
-#include "../../../kernel/paging.h"
+#include "../../../kernel/mm.h"
 
 #define SCREEN_W  800
 #define SCREEN_H  600

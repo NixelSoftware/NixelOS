@@ -1,8 +1,9 @@
 /* Mono PCM converted to a one-bit pulse-density stream at the PIT IRQ rate. */
 #include "pc_speaker.h"
 #include "../mutex.h"
-#include "../scheduler.h"
+#include "../arch/arch.h"
 #define CAPACITY 32768u
+#define PC_SPEAKER_TICK_HZ 31400u
 static int16_t samples[CAPACITY];
 static volatile uint32_t head, tail;
 static uint32_t rate, phase, volume = 100;
@@ -16,7 +17,7 @@ static int32_t init(uint32_t hz) {
     head = tail = phase = 0; rate = hz; draining = 0;
     quantization_error = 0;
     silence(); opened = 1;
-    scheduler_set_audio_timer(1);
+    arch_timer_set_rate(PC_SPEAKER_TICK_HZ);
     task_irq_restore(flags);
     return 0;
 }
@@ -65,7 +66,7 @@ static int32_t drain(void) { if (!opened) return -1; draining = 1; return 0; }
 static void shutdown(void) {
     uint32_t flags = task_irq_save();
     opened = 0; head = tail = 0; silence();
-    scheduler_set_audio_timer(0);
+    arch_timer_set_rate(1000u);
     task_irq_restore(flags);
 }
 static void set_volume(uint32_t value) { volume = value > 100u ? 100u : value; }

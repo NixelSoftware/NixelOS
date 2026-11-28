@@ -32,7 +32,7 @@ global task_yield
     mov eax, [current_task]
     test eax, eax
     jz %%done
-    mov [eax + 8], esp
+    mov [eax], esp
 %%done:
 %endmacro
 
@@ -69,7 +69,7 @@ restore_context:
     mov eax, [current_task]
     test eax, eax
     jz .restore
-    mov esp, [eax + 8]
+    mov esp, [eax]
 .restore:
     ; Only unwind at a user return boundary, after kernel work releases locks.
     cmp dword [arch_user_exit_requested], 0

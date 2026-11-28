@@ -2,7 +2,7 @@
 #include "../../drivers/serial.h"
 #include "../../drivers/pci.h"
 #include "../../drivers/delay.h"
-#include "../../irq.h"
+#include "../../arch/arch.h"
 #include "../../task.h"
 #include "../../hal/net.h"
 #include "tg3_regs.h"
@@ -639,7 +639,8 @@ static int tg3_phy_init(void) {
 }
 
 /* Disables chip interrupts until tg3_poll() has drained the return ring. */
-static int tg3_interrupt(void) {
+static int tg3_interrupt(void* ctx) {
+    (void)ctx;
     if (!tg3_irq_armed) return 0;
     if (!(status_block.status & TG3_SD_STATUS_UPDATED) &&
         (tg3_read32(TG3_PCISTATE) & TG3_PCISTATE_INT_NOT_ACTIVE)) return 0;
@@ -661,7 +662,7 @@ static void tg3_irq_start(void) {
     tg3_irq_fired = 0;
     tg3_irq_line = tg3_pci->irq_pin ? tg3_pci->irq_line : 0xFF;
     tg3_write32(TG3_INT_MBOX, 1);
-    tg3_irq_on = (uint8_t)irq_register(tg3_irq_line, tg3_interrupt);
+    tg3_irq_on = (uint8_t)arch_irq_register(tg3_irq_line, tg3_interrupt, 0);
     if (!tg3_irq_on) return;
     pci_enable_intx(tg3_pci);
     pci_write32(tg3_pci, TG3PCI_MISC_HOST_CTRL,
@@ -674,7 +675,7 @@ static void tg3_irq_stop(void) {
     tg3_irq_armed = 0;
     tg3_write32(TG3_INT_MBOX, 1);
     pci_write32(tg3_pci, TG3PCI_MISC_HOST_CTRL, tg3_host_control);
-    irq_unregister(tg3_irq_line);
+    arch_irq_unregister(tg3_irq_line);
     tg3_irq_on = 0;
 }
 

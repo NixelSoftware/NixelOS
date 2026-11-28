@@ -6,9 +6,8 @@
 #include "syscall_policy.h"
 #include "task.h"
 #include "mutex.h"
-#include "idt.h"
-#include "paging.h"
-#include "arch_i386.h"
+#include "arch/arch.h"
+#include "mm.h"
 #include "drivers/serial.h"
 #include "drivers/power.h"
 #include "hal/net_types.h"
@@ -209,7 +208,7 @@ static int user_readable(uint32_t address, uint32_t length) {
         (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT &&
         length <= APP_HEAP_LIMIT - address))) return 0;
 
-    uint32_t* directory = (uint32_t*)paging_current_directory();
+    uint32_t* directory = (uint32_t*)arch_current_address_space();
     uint32_t end = address + length - 1u;
     for (uint32_t page = address & ~(PAGE_SIZE - 1u);;
          page += PAGE_SIZE) {
@@ -229,7 +228,7 @@ static int user_writable(uint32_t address, uint32_t length) {
         (address >= APP_HEAP_BASE && address < APP_HEAP_LIMIT &&
         length <= APP_HEAP_LIMIT - address))) return 0;
 
-    uint32_t* directory = (uint32_t*)paging_current_directory();
+    uint32_t* directory = (uint32_t*)arch_current_address_space();
     uint32_t end = address + length - 1u;
     for (uint32_t page = address & ~(PAGE_SIZE - 1u);;
          page += PAGE_SIZE) {
@@ -252,42 +251,42 @@ static int copy_user_text(uint32_t address, char* out, uint32_t capacity) {
     return 0;
 }
 
-static void syscall_dispatch_impl(registers_t* regs) {
-    if (!regs) return;
-    if ((regs->cs & 3u) != 3u) {
-        regs->eax = (uint32_t)-1;
+static void syscall_dispatch_impl(arch_syscall_t* sc) {
+    if (!sc) return;
+    if (!sc->from_user) {
+        sc->result = (uint32_t)-1;
         return;
     }
-    switch (regs->eax) {
+    switch (sc->number) {
         case SYS_WRITE: {
-            uint32_t address = regs->ebx;
-            uint32_t length = regs->ecx;
+            uint32_t address = sc->arg[0];
+            uint32_t length = sc->arg[1];
             if (length > SYS_WRITE_MAX || !user_readable(address, length)) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             const char* text = (const char*)address;
             if (!current_task->detached) kernel_user_write(text, length);
-            regs->eax = length;
+            sc->result = length;
             return;
         }
         case SYS_GET_TICKS:
-            regs->eax = frame_timer;
+            sc->result = frame_timer;
             return;
         case SYS_PCI_DEVICE_INFO: {
-            uint32_t index = regs->ebx;
-            uint32_t out_addr = regs->ecx;
+            uint32_t index = sc->arg[0];
+            uint32_t out_addr = sc->arg[1];
             if (!user_writable(out_addr, sizeof(user_pci_device_t))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             if (index >= pci_device_count()) {
-                regs->eax = (uint32_t)-1; /* End of inventory */
+                sc->result = (uint32_t)-1; /* End of inventory */
                 return;
             }
             const pci_device_t* dev = pci_device_at(index);
             if (!dev) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             user_pci_device_t info = {
@@ -305,38 +304,38 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 .irq_pin = dev->irq_pin
             };
             *(user_pci_device_t*)out_addr = info;
-            regs->eax = 0;
+            sc->result = 0;
             return;
         }
         case SYS_MEMORY_ALLOC:
-            regs->eax = paging_user_alloc(regs->ebx);
+            sc->result = paging_user_alloc(sc->arg[0]);
             return;
         case SYS_MEMORY_FREE:
-            regs->eax = (uint32_t)paging_user_free(regs->ebx);
+            sc->result = (uint32_t)paging_user_free(sc->arg[0]);
             return;
         case SYS_MEMORY_INFO: {
-            if (!user_writable(regs->ebx, sizeof(user_memory_info_t))) {
-                regs->eax = (uint32_t)-1;
+            if (!user_writable(sc->arg[0], sizeof(user_memory_info_t))) {
+                sc->result = (uint32_t)-1;
                 return;
             }
             user_memory_info_t snapshot;
             paging_memory_info(&snapshot);
-            *(user_memory_info_t*)regs->ebx = snapshot;
-            regs->eax = 0;
+            *(user_memory_info_t*)sc->arg[0] = snapshot;
+            sc->result = 0;
             return;
         }
         case SYS_DNS_START: {
             char hostname[254];
-            uint32_t address = regs->ebx;
+            uint32_t address = sc->arg[0];
             uint32_t length = 0;
             if (user_dns_active) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             while (length < sizeof(hostname) - 1u) {
                 uint32_t current = address + length;
                 if (current < address || !user_readable(current, 1)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 hostname[length] = *(const char*)current;
@@ -345,7 +344,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
             }
             if (!length || length == sizeof(hostname) - 1u ||
                 !dns_resolve_async_start(hostname)) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             uint32_t handle = next_dns_handle++;
@@ -354,146 +353,146 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 handle = 1;
             }
             user_dns_active = 1;
-            user_dns_owner = paging_current_directory();
+            user_dns_owner = arch_current_address_space();
             user_dns_handle = handle;
-            regs->eax = handle;
+            sc->result = handle;
             return;
         }
         case SYS_DNS_POLL: {
-            uint32_t output_address = regs->ecx;
+            uint32_t output_address = sc->arg[1];
             uint32_t resolved = 0;
-            if (!user_dns_active || user_dns_handle != regs->ebx ||
-                user_dns_owner != paging_current_directory() ||
+            if (!user_dns_active || user_dns_handle != sc->arg[0] ||
+                user_dns_owner != arch_current_address_space() ||
                 !user_writable(output_address, sizeof(resolved))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             int result = dns_resolve_async_poll(&resolved);
             if (result == 1) *(uint32_t*)output_address = resolved;
             if (result != 0) user_dns_active = 0;
-            regs->eax = result == 1 ? 1u : result == 0 ? 0u : 2u;
+            sc->result = result == 1 ? 1u : result == 0 ? 0u : 2u;
             return;
         }
         case SYS_TASK_LIST: {
-            task_info_t* buf = (task_info_t*)regs->ebx;
-            uint32_t cap = regs->ecx;
+            task_info_t* buf = (task_info_t*)sc->arg[0];
+            uint32_t cap = sc->arg[1];
             if (!buf || cap > 64 || !user_writable((uint32_t)buf, cap * sizeof(task_info_t))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 break;
             }
-            regs->eax = (uint32_t)task_snapshot(buf, (int)cap);
+            sc->result = (uint32_t)task_snapshot(buf, (int)cap);
             break;
         }
         case SYS_TASK_KILL: {
-            uint32_t pid = regs->ebx;
+            uint32_t pid = sc->arg[0];
             if (pid == 0) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 break;
             }
-            regs->eax = (uint32_t)task_kill(pid);
+            sc->result = (uint32_t)task_kill(pid);
             break;
         }
         case SYS_SERIAL_LOG_READ: {
-            if (!regs->ecx || regs->ecx > 256 || !user_writable(regs->ebx, regs->ecx) ||
-                !user_writable(regs->edx, sizeof(user_serial_cursor_t))) {
-                regs->eax = (uint32_t)-1;
+            if (!sc->arg[1] || sc->arg[1] > 256 || !user_writable(sc->arg[0], sc->arg[1]) ||
+                !user_writable(sc->arg[2], sizeof(user_serial_cursor_t))) {
+                sc->result = (uint32_t)-1;
                 return;
             }
-            user_serial_cursor_t cursor = *(user_serial_cursor_t*)regs->edx;
-            regs->eax = serial_log_read((char*)regs->ebx, regs->ecx, &cursor.next, &cursor.lost);
-            *(user_serial_cursor_t*)regs->edx = cursor;
+            user_serial_cursor_t cursor = *(user_serial_cursor_t*)sc->arg[2];
+            sc->result = serial_log_read((char*)sc->arg[0], sc->arg[1], &cursor.next, &cursor.lost);
+            *(user_serial_cursor_t*)sc->arg[2] = cursor;
             return;
         }
         case SYS_AUDIO_DEVICE_NAME: {
-            uint32_t capacity = regs->ecx;
-            if (!capacity || capacity > 64 || !user_writable(regs->ebx, capacity)) {
-                regs->eax = (uint32_t)-1;
+            uint32_t capacity = sc->arg[1];
+            if (!capacity || capacity > 64 || !user_writable(sc->arg[0], capacity)) {
+                sc->result = (uint32_t)-1;
                 return;
             }
             const char* name = audio_device_name(audio_device_selected());
-            char* output = (char*)regs->ebx;
+            char* output = (char*)sc->arg[0];
             uint32_t n = 0;
             while (n + 1 < capacity && name[n]) { output[n] = name[n]; ++n; }
             output[n] = 0;
-            regs->eax = n;
+            sc->result = n;
             return;
         }
         case SYS_AUDIO_OPL:
-            regs->eax = audio_mixer_opl(paging_current_directory(), regs->ebx, regs->ecx);
+            sc->result = audio_mixer_opl(arch_current_address_space(), sc->arg[0], sc->arg[1]);
             return;
         case SYS_AUDIO_CONFIGURE: {
-            if (!user_readable(regs->ebx, sizeof(user_audio_format_t))) {
-                regs->eax = (uint32_t)-1; return;
+            if (!user_readable(sc->arg[0], sizeof(user_audio_format_t))) {
+                sc->result = (uint32_t)-1; return;
             }
-            user_audio_format_t format = *(const user_audio_format_t*)regs->ebx;
-            regs->eax = audio_mixer_open(paging_current_directory(), &format);
+            user_audio_format_t format = *(const user_audio_format_t*)sc->arg[0];
+            sc->result = audio_mixer_open(arch_current_address_space(), &format);
             return;
         }
         case SYS_AUDIO_INIT: {
-            user_audio_format_t format = {regs->ebx, 2, USER_AUDIO_S16_LE};
-            regs->eax = audio_mixer_open(paging_current_directory(), &format);
+            user_audio_format_t format = {sc->arg[0], 2, USER_AUDIO_S16_LE};
+            sc->result = audio_mixer_open(arch_current_address_space(), &format);
             return;
         }
         case SYS_AUDIO_WRITE:
-            regs->eax = (uint32_t)((!regs->ecx || regs->ecx > AUDIO_BUFFER_CHUNK_SIZE ||
-                !user_readable(regs->ebx, regs->ecx)) ? -1 :
-                audio_mixer_write(paging_current_directory(), (const void*)regs->ebx, regs->ecx));
+            sc->result = (uint32_t)((!sc->arg[1] || sc->arg[1] > AUDIO_BUFFER_CHUNK_SIZE ||
+                !user_readable(sc->arg[0], sc->arg[1])) ? -1 :
+                audio_mixer_write(arch_current_address_space(), (const void*)sc->arg[0], sc->arg[1]));
             return;
         case SYS_AUDIO_DRAIN:
-            regs->eax = audio_mixer_drain(paging_current_directory());
+            sc->result = audio_mixer_drain(arch_current_address_space());
             return;
         case SYS_AUDIO_STATUS:
-            regs->eax = audio_mixer_status(paging_current_directory());
+            sc->result = audio_mixer_status(arch_current_address_space());
             return;
         case SYS_AUDIO_SHUTDOWN:
-            audio_mixer_close(paging_current_directory());
-            regs->eax = 0;
+            audio_mixer_close(arch_current_address_space());
+            sc->result = 0;
             return;
         case SYS_FS_GETCWD:
         case SYS_FS_HOME: {
-            const char* path = regs->eax == SYS_FS_HOME ? user_home() : fs_getcwd();
+            const char* path = sc->number == SYS_FS_HOME ? user_home() : fs_getcwd();
             uint32_t length = 0; while (path[length]) length++;
-            if (regs->ecx <= length || !user_writable(regs->ebx, length + 1)) {
-                regs->eax = (uint32_t)-1; return;
+            if (sc->arg[1] <= length || !user_writable(sc->arg[0], length + 1)) {
+                sc->result = (uint32_t)-1; return;
             }
-            for (uint32_t i = 0; i <= length; i++) ((char*)regs->ebx)[i] = path[i];
-            regs->eax = length; return;
+            for (uint32_t i = 0; i <= length; i++) ((char*)sc->arg[0])[i] = path[i];
+            sc->result = length; return;
         }
         case SYS_FS_CHMOD: {
             char path[FS_MAX_PATH];
-            regs->eax = regs->ecx <= 0777 && copy_user_text(regs->ebx, path, sizeof(path)) &&
-                fs_chmod(path, (uint16_t)regs->ecx) ? 0u : (uint32_t)-1;
+            sc->result = sc->arg[1] <= 0777 && copy_user_text(sc->arg[0], path, sizeof(path)) &&
+                fs_chmod(path, (uint16_t)sc->arg[1]) ? 0u : (uint32_t)-1;
             return;
         }
         case SYS_FS_DELETE: {
             char path[FS_MAX_PATH];
-            regs->eax = copy_user_text(regs->ebx, path, sizeof(path)) ?
+            sc->result = copy_user_text(sc->arg[0], path, sizeof(path)) ?
                 (fs_delete_file(path) ? 0u : (uint32_t)-1) : (uint32_t)-1;
             return;
         }
         case SYS_FS_MKDIR: {
             char path[FS_MAX_PATH];
-            regs->eax = copy_user_text(regs->ebx, path, sizeof(path)) ?
+            sc->result = copy_user_text(sc->arg[0], path, sizeof(path)) ?
                 (uint32_t)fs_mkdir(path) : (uint32_t)-1;
             return;
         }
         case SYS_FS_READ_AT:
         case SYS_FS_READ: {
             char filename[FS_MAX_PATH];
-            uint32_t filename_address = regs->ebx;
-            uint32_t output_address = regs->ecx;
-            uint32_t capacity = regs->edx;
+            uint32_t filename_address = sc->arg[0];
+            uint32_t output_address = sc->arg[1];
+            uint32_t capacity = sc->arg[2];
             uint32_t length = 0;
             if (capacity > SYS_FS_READ_MAX ||
                 (capacity && !user_writable(output_address, capacity)) ||
                 (!capacity && output_address)) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             while (length < sizeof(filename) - 1u) {
                 uint32_t current = filename_address + length;
                 if (current < filename_address || !user_readable(current, 1)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 filename[length] = *(const char*)current;
@@ -501,69 +500,69 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 length++;
             }
             if (!length || length == sizeof(filename) - 1u) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
-            regs->eax = (uint32_t)fs_read_file_at(filename,
+            sc->result = (uint32_t)fs_read_file_at(filename,
                 capacity ? (uint8_t*)output_address : 0, capacity,
-                regs->eax == SYS_FS_READ_AT ? regs->esi : 0);
+                sc->number == SYS_FS_READ_AT ? sc->arg[3] : 0);
             return;
         }
         case SYS_FS_LIST_DIR: {
             char path[FS_MAX_PATH];
-            if (!copy_user_text(regs->ebx, path, sizeof(path)) || !path[0] ||
-                !user_writable(regs->ecx, FS_MAX_FILES*FS_MAX_FILENAME) ||
-                !user_writable(regs->edx, FS_MAX_FILES) ||
+            if (!copy_user_text(sc->arg[0], path, sizeof(path)) || !path[0] ||
+                !user_writable(sc->arg[1], FS_MAX_FILES*FS_MAX_FILENAME) ||
+                !user_writable(sc->arg[2], FS_MAX_FILES) ||
                 !fs_access(path, FS_ACCESS_READ | FS_ACCESS_EXEC) ||
                 (!(path[0] == '/' && !path[1]) && !fs_is_directory(path))) {
-                regs->eax = (uint32_t)-1; return;
+                sc->result = (uint32_t)-1; return;
             }
-            regs->eax = fs_list_dir_types(path, (char (*)[FS_MAX_FILENAME])regs->ecx, (uint8_t*)regs->edx);
+            sc->result = fs_list_dir_types(path, (char (*)[FS_MAX_FILENAME])sc->arg[1], (uint8_t*)sc->arg[2]);
             return;
         }
         case SYS_FILE_PICK_RESULT: {
             char path[FS_MAX_PATH];
-            if (!copy_user_text(regs->ecx, path, sizeof(path))) {
-                regs->eax = (uint32_t)-1; return;
+            if (!copy_user_text(sc->arg[1], path, sizeof(path))) {
+                sc->result = (uint32_t)-1; return;
             }
-            regs->eax = desktop_picker_result(regs->ebx, current_task->id, path);
+            sc->result = desktop_picker_result(sc->arg[0], current_task->id, path);
             return;
         }
         case SYS_APP_LAUNCH: {
             char path[FS_MAX_PATH], arguments[256];
-            if (!copy_user_text(regs->ebx, path, sizeof(path)) || !path[0] ||
-                !copy_user_text(regs->ecx, arguments, sizeof(arguments))) {
-                regs->eax = (uint32_t)-1; return;
+            if (!copy_user_text(sc->arg[0], path, sizeof(path)) || !path[0] ||
+                !copy_user_text(sc->arg[1], arguments, sizeof(arguments))) {
+                sc->result = (uint32_t)-1; return;
             }
-            regs->eax = app_loader_launch_detached(kernel_get_api(), path, arguments);
+            sc->result = app_loader_launch_detached(kernel_get_api(), path, arguments);
             return;
         }
         case SYS_FS_LIST: {
-            uint32_t output_address = regs->ebx;
+            uint32_t output_address = sc->arg[0];
             uint32_t output_size = FS_MAX_FILES * FS_MAX_FILENAME;
             if (!user_writable(output_address, output_size)) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
-            regs->eax = (uint32_t)fs_list(
+            sc->result = (uint32_t)fs_list(
                 (char (*)[FS_MAX_FILENAME])output_address);
             return;
         }
         case SYS_FS_WRITE: {
             char filename[FS_MAX_PATH];
-            uint32_t filename_address = regs->ebx;
-            uint32_t source_address = regs->ecx;
-            uint32_t length = regs->edx;
+            uint32_t filename_address = sc->arg[0];
+            uint32_t source_address = sc->arg[1];
+            uint32_t length = sc->arg[2];
             uint32_t name_length = 0;
             if (length > SYS_FS_WRITE_MAX ||
                 (length && !user_readable(source_address, length))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             while (name_length < sizeof(filename) - 1u) {
                 uint32_t current = filename_address + name_length;
                 if (current < filename_address || !user_readable(current, 1)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 filename[name_length] = *(const char*)current;
@@ -571,15 +570,15 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 name_length++;
             }
             if (!name_length || name_length == sizeof(filename) - 1u) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
-            regs->eax = (uint32_t)fs_write_file(filename,
+            sc->result = (uint32_t)fs_write_file(filename,
                 (const uint8_t*)source_address, length);
             return;
         }
         case SYS_TCP_CONNECT: {
-            uint32_t owner_directory = paging_current_directory();
+            uint32_t owner_directory = arch_current_address_space();
             user_tcp_socket_t* slot = 0;
             for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
                 if (!user_tcp_sockets[i].active) {
@@ -587,13 +586,13 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     break;
                 }
             }
-            if (!slot || !regs->ecx || regs->ecx > 65535u) {
-                regs->eax = (uint32_t)-1;
+            if (!slot || !sc->arg[1] || sc->arg[1] > 65535u) {
+                sc->result = (uint32_t)-1;
                 return;
             }
-            tcp_socket_t* socket = tcp_connect(regs->ebx, (uint16_t)regs->ecx);
+            tcp_socket_t* socket = tcp_connect(sc->arg[0], (uint16_t)sc->arg[1]);
             if (!socket) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             uint32_t handle = next_tcp_handle++;
@@ -608,60 +607,60 @@ static void syscall_dispatch_impl(registers_t* regs) {
             slot->read_count = 0;
             slot->active = 1;
             tcp_bind(socket, user_tcp_receive);
-            regs->eax = handle;
+            sc->result = handle;
             return;
         }
         case SYS_TCP_STATE: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
-                regs->ebx, paging_current_directory());
-            regs->eax = slot ? (uint32_t)tcp_get_state(slot->socket)
+                sc->arg[0], arch_current_address_space());
+            sc->result = slot ? (uint32_t)tcp_get_state(slot->socket)
                              : (uint32_t)-1;
             return;
         }
         case SYS_TCP_REMOTE_IP: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
-                regs->ebx, paging_current_directory());
-            regs->eax = (slot && slot->socket) ? tcp_get_remote_ip(slot->socket) : 0;
+                sc->arg[0], arch_current_address_space());
+            sc->result = (slot && slot->socket) ? tcp_get_remote_ip(slot->socket) : 0;
             return;
         }
         case SYS_TCP_SEND: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
-                regs->ebx, paging_current_directory());
-            uint32_t length = regs->edx;
+                sc->arg[0], arch_current_address_space());
+            uint32_t length = sc->arg[2];
             if (!slot || length > SYS_TCP_SEND_MAX ||
-                (length && !user_readable(regs->ecx, length))) {
-                regs->eax = 0;
+                (length && !user_readable(sc->arg[1], length))) {
+                sc->result = 0;
                 return;
             }
-            regs->eax = (uint32_t)tcp_send(slot->socket,
-                length ? (const uint8_t*)regs->ecx : 0, (uint16_t)length);
+            sc->result = (uint32_t)tcp_send(slot->socket,
+                length ? (const uint8_t*)sc->arg[1] : 0, (uint16_t)length);
             return;
         }
         case SYS_TCP_READ: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
-                regs->ebx, paging_current_directory());
-            uint32_t capacity = regs->edx;
+                sc->arg[0], arch_current_address_space());
+            uint32_t capacity = sc->arg[2];
             if (!slot || !capacity || capacity > SYS_TCP_READ_MAX ||
-                !user_writable(regs->ecx, capacity)) {
-                regs->eax = (uint32_t)-1;
+                !user_writable(sc->arg[1], capacity)) {
+                sc->result = (uint32_t)-1;
                 return;
             }
             tcp_resume(slot->socket);
             uint32_t count = slot->read_count < capacity
                            ? slot->read_count : capacity;
-            uint8_t* output = (uint8_t*)regs->ecx;
+            uint8_t* output = (uint8_t*)sc->arg[1];
             for (uint32_t i = 0; i < count; i++) {
                 output[i] = slot->data[slot->read_head];
                 slot->read_head = (slot->read_head + 1u) % USER_TCP_QUEUE_SIZE;
             }
             slot->read_count -= count;
             tcp_resume(slot->socket);
-            regs->eax = count;
+            sc->result = count;
             return;
         }
         case SYS_TCP_CLOSE: {
             user_tcp_socket_t* slot = user_tcp_by_handle(
-                regs->ebx, paging_current_directory());
+                sc->arg[0], arch_current_address_space());
             if (slot) {
                 if (slot->is_listener) user_tcp_discard_pending(slot);
                 if (slot->socket) {
@@ -672,14 +671,14 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 slot->active = 0;
                 slot->read_head = 0;
                 slot->read_count = 0;
-                regs->eax = 0;
+                sc->result = 0;
                 return;
             }
-            regs->eax = (uint32_t)-1;
+            sc->result = (uint32_t)-1;
             return;
         }
         case SYS_TCP_LISTEN: {
-            uint32_t owner_directory = paging_current_directory();
+            uint32_t owner_directory = arch_current_address_space();
             user_tcp_socket_t* slot = 0;
             for (uint32_t i = 0; i < USER_TCP_SOCKET_MAX; i++) {
                 if (!user_tcp_sockets[i].active) {
@@ -687,13 +686,13 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     break;
                 }
             }
-            if (!slot || !regs->ebx || regs->ebx > 65535u) {
-                regs->eax = (uint32_t)-1;
+            if (!slot || !sc->arg[0] || sc->arg[0] > 65535u) {
+                sc->result = (uint32_t)-1;
                 return;
             }
-            tcp_socket_t* socket = tcp_listen((uint16_t)regs->ebx);
+            tcp_socket_t* socket = tcp_listen((uint16_t)sc->arg[0]);
             if (!socket) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             uint32_t handle = next_tcp_handle++;
@@ -710,16 +709,16 @@ static void syscall_dispatch_impl(registers_t* regs) {
             slot->is_listener = 1;
             slot->accept_head = 0;
             slot->accept_count = 0;
-            regs->eax = handle;
+            sc->result = handle;
             return;
         }
         case SYS_TCP_ACCEPT: {
-            uint32_t owner = paging_current_directory();
+            uint32_t owner = arch_current_address_space();
             user_tcp_reap_closed(owner);
             user_tcp_socket_t* slot = user_tcp_by_handle(
-                regs->ebx, paging_current_directory());
+                sc->arg[0], arch_current_address_space());
             if (!slot || !slot->is_listener) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             while (slot->accept_count) {
@@ -727,27 +726,27 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 slot->accept_head = (slot->accept_head + 1u) % USER_TCP_BACKLOG;
                 slot->accept_count--;
                 if (user_tcp_by_handle(client_handle, owner)) {
-                    regs->eax = client_handle;
+                    sc->result = client_handle;
                     return;
                 }
             }
-            regs->eax = 0;
+            sc->result = 0;
             return;
         }
         case SYS_FLOPPY_INIT:
-            regs->eax = (uint32_t)floppy_init();
+            sc->result = (uint32_t)floppy_init();
             return;
         case SYS_FLOPPY_READ: {
-            uint32_t lba = regs->ebx;
-            uint32_t count = regs->ecx;
-            uint32_t buffer = regs->edx;
+            uint32_t lba = sc->arg[0];
+            uint32_t count = sc->arg[1];
+            uint32_t buffer = sc->arg[2];
             if (!count || count > 18u || lba >= FLOPPY_SECTOR_COUNT ||
                 count > FLOPPY_SECTOR_COUNT - lba ||
                 !user_writable(buffer, count * FLOPPY_SECTOR_SIZE)) {
-                regs->eax = 0;
+                sc->result = 0;
                 return;
             }
-            regs->eax = (uint32_t)floppy_read_sectors(lba, (uint8_t)count,
+            sc->result = (uint32_t)floppy_read_sectors(lba, (uint8_t)count,
                                                      (uint8_t*)buffer);
             return;
         }
@@ -755,20 +754,20 @@ static void syscall_dispatch_impl(registers_t* regs) {
             uint8_t pattern[FLOPPY_SECTOR_SIZE];
             for (uint32_t i = 0; i < FLOPPY_SECTOR_SIZE; i++)
                 pattern[i] = (uint8_t)(i ^ 0xA5u);
-            regs->eax = (uint32_t)floppy_write_sectors(2879u, 1, pattern);
+            sc->result = (uint32_t)floppy_write_sectors(2879u, 1, pattern);
             return;
         }
         case SYS_YIELD:
             /* The desktop task owns service pumping. Park this waiter rather
              * than recursively entering WM callbacks on the app's stack. */
             task_sleep_ms(1);
-            regs->eax = 0;
+            sc->result = 0;
             return;
         case SYS_WINDOW_CREATE: {
             user_window_desc_t description;
-            uint32_t address = regs->ebx;
+            uint32_t address = sc->arg[0];
             if (!user_readable(address, sizeof(description))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             description = *(const user_window_desc_t*)address;
@@ -776,11 +775,11 @@ static void syscall_dispatch_impl(registers_t* regs) {
             while (title_length < USER_WINDOW_TITLE_MAX && description.title[title_length])
                 title_length++;
             if (title_length == USER_WINDOW_TITLE_MAX) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
-            regs->eax = (uint32_t)wm_user_window_create(
-                &description, paging_current_directory());
+            sc->result = (uint32_t)wm_user_window_create(
+                &description, arch_current_address_space());
             return;
         }
         case SYS_WINDOW_DRAW: {
@@ -789,9 +788,9 @@ static void syscall_dispatch_impl(registers_t* regs) {
             char text[64];
             const char* text_pointer = 0;
             const uint8_t* image_pointer = 0;
-            uint32_t address = regs->ecx;
+            uint32_t address = sc->arg[1];
             if (!user_readable(address, sizeof(drawing))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             drawing = *(const user_window_draw_t*)address;
@@ -802,7 +801,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 while (length < sizeof(text)) {
                     uint32_t current = (uint32_t)drawing.text + length;
                     if (current < (uint32_t)drawing.text || !user_readable(current, 1)) {
-                        regs->eax = (uint32_t)-1;
+                        sc->result = (uint32_t)-1;
                         return;
                     }
                     text[length] = drawing.text[length];
@@ -810,7 +809,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     length++;
                 }
                 if (length == sizeof(text)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 text_pointer = text;
@@ -820,7 +819,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                     drawing.height <= 0 || drawing.height > 480 ||
                     drawing.data_length != (uint32_t)drawing.width * drawing.height * 4u ||
                     !user_readable((uint32_t)drawing.data, drawing.data_length)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 image_pointer = drawing.data;
@@ -829,7 +828,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 if (!drawing.data_length || drawing.data_length > sizeof(triangles) ||
                     drawing.data_length % sizeof(triangles[0]) ||
                     !user_readable(source, drawing.data_length)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 /* Snapshot user memory before entering the GPU/WM critical section. */
@@ -841,113 +840,113 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 uint32_t image_address = (uint32_t)drawing.data;
                 if (!drawing.data_length || drawing.data_length > SYS_WINDOW_IMAGE_MAX ||
                     !user_readable(image_address, drawing.data_length)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 image_pointer = (const uint8_t*)image_address;
             }
-            regs->eax = (uint32_t)wm_user_window_draw(
-                regs->ebx, paging_current_directory(), &drawing, text_pointer,
+            sc->result = (uint32_t)wm_user_window_draw(
+                sc->arg[0], arch_current_address_space(), &drawing, text_pointer,
                 image_pointer);
             return;
         }
         case SYS_WINDOW_POLL: {
-            uint32_t output_address = regs->ecx;
+            uint32_t output_address = sc->arg[1];
             if (!user_writable(output_address, sizeof(user_window_event_t))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
-            regs->eax = (uint32_t)wm_user_window_poll(
-                regs->ebx, paging_current_directory(),
+            sc->result = (uint32_t)wm_user_window_poll(
+                sc->arg[0], arch_current_address_space(),
                 (user_window_event_t*)output_address);
             return;
         }
         case SYS_WINDOW_PRESENT:
-            regs->eax = (uint32_t)wm_user_window_present(
-                regs->ebx, paging_current_directory());
+            sc->result = (uint32_t)wm_user_window_present(
+                sc->arg[0], arch_current_address_space());
             return;
         case SYS_WINDOW_CLOSE:
-            regs->eax = (uint32_t)wm_user_window_close(
-                regs->ebx, paging_current_directory());
+            sc->result = (uint32_t)wm_user_window_close(
+                sc->arg[0], arch_current_address_space());
             return;
         case SYS_DETACH:
-            regs->eax = task_detach();
+            sc->result = task_detach();
             return;
         case SYS_GETPID:
-            regs->eax = current_task->id;
+            sc->result = current_task->id;
             return;
         case SYS_GETPPID:
-            regs->eax = task_parent_id();
+            sc->result = task_parent_id();
             return;
         case SYS_EXIT:
             arch_user_exit_requested = 1;
             return;
         case SYS_SHUTDOWN:
             power_shutdown();
-            regs->eax = (uint32_t)-1;
+            sc->result = (uint32_t)-1;
             return;
         case SYS_REBOOT:
             power_reboot();
-            regs->eax = (uint32_t)-1;
+            sc->result = (uint32_t)-1;
             return;
         case SYS_UTC_SECONDS: {
             uint64_t now = rtc_get_epoch();
-            regs->eax = now <= 2147483647u ? (uint32_t)now : (uint32_t)-1;
+            sc->result = now <= 2147483647u ? (uint32_t)now : (uint32_t)-1;
             return;
         }
         case SYS_RTC_TIME: {
-            if (!user_writable(regs->ebx, sizeof(rtc_time_t))) {
-                regs->eax = (uint32_t)-1;
+            if (!user_writable(sc->arg[0], sizeof(rtc_time_t))) {
+                sc->result = (uint32_t)-1;
                 return;
             }
             rtc_time_t t;
             rtc_get_time(&t);
-            *(rtc_time_t*)regs->ebx = t;
-            regs->eax = 0;
+            *(rtc_time_t*)sc->arg[0] = t;
+            sc->result = 0;
             return;
         }
         case SYS_NET_DIAGNOSTICS: {
-            uint32_t address = regs->ebx;
+            uint32_t address = sc->arg[0];
             if (!user_writable(address, sizeof(net_diagnostics_t))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             sys_net_poll();
             sys_net_get_diagnostics((net_diagnostics_t*)address);
-            regs->eax = sys_net_is_ready() ? 1u : 0u;
+            sc->result = sys_net_is_ready() ? 1u : 0u;
             return;
         }
         case SYS_DNS_RESOLVE: {
-            uint32_t hostname_address = regs->ebx;
-            uint32_t output_address = regs->ecx;
+            uint32_t hostname_address = sc->arg[0];
+            uint32_t output_address = sc->arg[1];
             char hostname[128];
             uint32_t length;
             uint32_t resolved_address = 0;
             if (!user_writable(output_address, sizeof(resolved_address))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             for (length = 0; length < sizeof(hostname) - 1u; length++) {
                 uint32_t current = hostname_address + length;
                 if (current < hostname_address || !user_readable(current, 1)) {
-                    regs->eax = (uint32_t)-1;
+                    sc->result = (uint32_t)-1;
                     return;
                 }
                 hostname[length] = *(const char*)current;
                 if (!hostname[length]) break;
             }
             if (length == sizeof(hostname) - 1u || !hostname[0]) {
-                regs->eax = 0;
+                sc->result = 0;
                 return;
             }
             mutex_lock(&kernel_mutex);
             if (user_dns_active || !dns_resolve_async_start(hostname)) {
                 mutex_unlock(&kernel_mutex);
-                regs->eax = 0;
+                sc->result = 0;
                 return;
             }
             user_dns_active = 1;
-            user_dns_owner = paging_current_directory();
+            user_dns_owner = arch_current_address_space();
             mutex_unlock(&kernel_mutex);
             int result;
             for (;;) {
@@ -958,18 +957,18 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 if (result != 0) break;
                 task_sleep_ms(1);
             }
-            regs->eax = result == 1;
-            if (regs->eax) *(uint32_t*)output_address = resolved_address;
+            sc->result = result == 1;
+            if (sc->result) *(uint32_t*)output_address = resolved_address;
             return;
         }
         case SYS_PING_START: {
             static const uint8_t payload[] = "operating-system";
-            uint32_t owner_directory = paging_current_directory();
+            uint32_t owner_directory = arch_current_address_space();
             user_ping_request_t* request = 0;
             uint32_t handle;
             uint16_t identifier = 0;
             if (!sys_net_is_ready()) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             for (uint32_t i = 0; i < USER_PING_REQUEST_MAX; i++) {
@@ -979,7 +978,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 }
             }
             if (!request) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             for (uint32_t attempt = 0; attempt < 0xFFFFu; attempt++) {
@@ -991,7 +990,7 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 }
             }
             if (!identifier) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             handle = next_ping_handle++;
@@ -1001,13 +1000,13 @@ static void syscall_dispatch_impl(registers_t* regs) {
             }
             request->owner_directory = owner_directory;
             request->handle = handle;
-            request->destination = regs->ebx;
+            request->destination = sc->arg[0];
             request->started_tick = frame_timer;
             request->reply_tick = 0;
             request->last_tick = frame_timer;
             request->stalled_polls = 0;
             request->identifier = identifier;
-            request->sequence = (uint16_t)regs->ecx;
+            request->sequence = (uint16_t)sc->arg[1];
             request->active = 1;
             request->completed = 0;
             request->timed_out = 0;
@@ -1016,23 +1015,23 @@ static void syscall_dispatch_impl(registers_t* regs) {
                                    request->sequence, payload,
                                    sizeof(payload) - 1u)) {
                 request->active = 0;
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
-            regs->eax = handle;
+            sc->result = handle;
             return;
         }
         case SYS_PING_POLL: {
-            uint32_t handle = regs->ebx;
-            uint32_t output_address = regs->ecx;
+            uint32_t handle = sc->arg[0];
+            uint32_t output_address = sc->arg[1];
             if (!user_writable(output_address, sizeof(uint32_t))) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             user_ping_request_t* request =
-                ping_request_by_handle(handle, paging_current_directory());
+                ping_request_by_handle(handle, arch_current_address_space());
             if (!request) {
-                regs->eax = (uint32_t)-1;
+                sc->result = (uint32_t)-1;
                 return;
             }
             if (!request->completed &&
@@ -1051,55 +1050,55 @@ static void syscall_dispatch_impl(registers_t* regs) {
                 request->stalled_polls = 0;
             }
             if (!request->completed) {
-                regs->eax = 0;
+                sc->result = 0;
                 return;
             }
             *(uint32_t*)output_address = request->timed_out ? 0
                 : (request->reply_tick - request->started_tick) * 10u;
-            regs->eax = request->timed_out ? 2u : 1u;
+            sc->result = request->timed_out ? 2u : 1u;
             request->active = 0;
             return;
         }
         default:
-            regs->eax = (uint32_t)-1;
+            sc->result = (uint32_t)-1;
             return;
     }
 }
 
 /* I/O waiters hold only their device/filesystem lock, so they cannot prevent
  * the compositor or network worker from progressing while a device is busy. */
-void syscall_dispatch(registers_t* regs) {
-    if (!regs) return;
+void syscall_dispatch(arch_syscall_t* sc) {
+    if (!sc) return;
     /* Authorize before taking locks, touching user pointers or hardware.
      * Credentials belong to this task, inherited at task_create (including
      * sudo launches), and are never supplied by an executable or ABI argument. */
-    if (!current_task || (regs->cs & 3u) != 3u) {
-        regs->eax = (uint32_t)-1;
+    if (!current_task || !sc->from_user) {
+        sc->result = (uint32_t)-1;
         return;
     }
-    if (!syscall_allowed(current_task->uid, regs->eax, regs->ebx)) {
-        regs->eax = (uint32_t)SYS_ERR_PERMISSION;
+    if (!syscall_allowed(current_task->uid, sc->number, sc->arg[0])) {
+        sc->result = (uint32_t)SYS_ERR_PERMISSION;
         return;
     }
-    switch (regs->eax) {
+    switch (sc->number) {
         case SYS_YIELD: case SYS_DNS_RESOLVE:
         case SYS_FS_CHMOD: case SYS_FS_DELETE: case SYS_FS_MKDIR: case SYS_FS_READ: case SYS_FS_READ_AT: case SYS_FS_LIST: case SYS_FS_LIST_DIR: case SYS_FS_WRITE:
         case SYS_FLOPPY_INIT: case SYS_FLOPPY_READ: case SYS_FLOPPY_TEST_WRITE:
-            syscall_dispatch_impl(regs);
+            syscall_dispatch_impl(sc);
             return;
         case SYS_AUDIO_OPL:
         case SYS_AUDIO_CONFIGURE: case SYS_AUDIO_INIT: case SYS_AUDIO_WRITE: case SYS_AUDIO_STATUS: case SYS_AUDIO_SHUTDOWN: case SYS_AUDIO_DRAIN: {
-            uint32_t call = regs->eax;
-            syscall_dispatch_impl(regs);
-            if ((int32_t)regs->eax < 0) {
+            uint32_t call = sc->number;
+            syscall_dispatch_impl(sc);
+            if ((int32_t)sc->result < 0) {
                 debug_audio_print("[AUDIO] syscall failed: number=");debug_audio_hex(call);
-                debug_audio_print(" caller=");debug_audio_hex(paging_current_directory());debug_audio_print("\n");
+                debug_audio_print(" caller=");debug_audio_hex(arch_current_address_space());debug_audio_print("\n");
             }
             return;
         }
         default: {
             MUTEX_GUARD(kernel_mutex);
-            syscall_dispatch_impl(regs);
+            syscall_dispatch_impl(sc);
             return;
         }
     }

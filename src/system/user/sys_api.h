@@ -7,6 +7,7 @@
 #include "window_api.h"
 #include "memory_api.h"
 #include "audio_api.h"
+#include "arch_syscall.h"
 
 /* Sensitive calls return this value without performing the operation when
  * the calling task is not root. Other failures retain their existing -1 ABI. */
@@ -80,66 +81,36 @@ enum {
  * Sizes round up to 4 KiB. Free requires the returned base, not an interior pointer.
  * These mappings can be passed to all syscalls that accept user buffers. */
 static inline void* sys_memory_alloc(uint32_t bytes) {
-    uint32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_MEMORY_ALLOC), "b"(bytes) : "memory", "cc");
-    return (void*)result;
+    return (void*)arch_syscall((uint32_t)(SYS_MEMORY_ALLOC), (uint32_t)(bytes), 0, 0, 0);
 }
 static inline int32_t sys_memory_free(void* allocation) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_MEMORY_FREE), "b"(allocation) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_MEMORY_FREE), (uint32_t)(allocation), 0, 0, 0);
 }
 
 static inline int32_t sys_fs_getcwd(char* out, uint32_t capacity) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FS_GETCWD), "b"(out), "c"(capacity) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FS_GETCWD), (uint32_t)(out), (uint32_t)(capacity), 0, 0);
 }
 static inline int32_t sys_fs_home(char* out, uint32_t capacity) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FS_HOME), "b"(out), "c"(capacity) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FS_HOME), (uint32_t)(out), (uint32_t)(capacity), 0, 0);
 }
 static inline int32_t sys_fs_chmod(const char* path, uint32_t mode) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-                      : "0"((uint32_t)SYS_FS_CHMOD), "b"(path), "c"(mode)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FS_CHMOD), (uint32_t)(path), (uint32_t)(mode), 0, 0);
 }
 
 static inline int32_t sys_fs_delete(const char* path) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FS_DELETE), "b"(path) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FS_DELETE), (uint32_t)(path), 0, 0, 0);
 }
 static inline int32_t sys_fs_mkdir(const char* path) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FS_MKDIR), "b"(path) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FS_MKDIR), (uint32_t)(path), 0, 0, 0);
 }
 
 typedef struct { uint32_t next, lost; } user_serial_cursor_t;
 static inline int32_t sys_serial_log_read(char* output, uint32_t capacity, user_serial_cursor_t* cursor) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_SERIAL_LOG_READ), "b"(output), "c"(capacity), "d"(cursor)
-        : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_SERIAL_LOG_READ), (uint32_t)(output), (uint32_t)(capacity), (uint32_t)(cursor), 0);
 }
 
 static inline int32_t sys_file_pick_result(uint32_t token, const char* path) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FILE_PICK_RESULT), "b"(token), "c"(path)
-        : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FILE_PICK_RESULT), (uint32_t)(token), (uint32_t)(path), 0, 0);
 }
 
 enum {
@@ -152,388 +123,185 @@ enum {
 };
 
 static inline int32_t sys_detach(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_DETACH)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_DETACH), 0, 0, 0, 0);
 }
 static inline int32_t sys_getpid(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_GETPID)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_GETPID), 0, 0, 0, 0);
 }
 static inline int32_t sys_getppid(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result) : "0"(SYS_GETPPID)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_GETPPID), 0, 0, 0, 0);
 }
 static inline int32_t sys_audio_device_name(char* name, uint32_t capacity) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_DEVICE_NAME), "b"(name), "c"(capacity)
-        : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_DEVICE_NAME), (uint32_t)(name), (uint32_t)(capacity), 0, 0);
 }
 static inline int32_t sys_audio_opl(uint32_t reg, uint32_t value) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_OPL), "b"(reg), "c"(value) : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_OPL), (uint32_t)(reg), (uint32_t)(value), 0, 0);
 }
 static inline int32_t sys_audio_configure(const user_audio_format_t* format) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_CONFIGURE), "b"(format) : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_CONFIGURE), (uint32_t)(format), 0, 0, 0);
 }
 static inline int32_t sys_audio_init(uint32_t rate) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_INIT), "b"(rate) : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_INIT), (uint32_t)(rate), 0, 0, 0);
 }
 static inline int32_t sys_audio_write(const void* data, uint32_t length) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_WRITE), "b"(data), "c"(length) : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_WRITE), (uint32_t)(data), (uint32_t)(length), 0, 0);
 }
 static inline int32_t sys_audio_drain(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_DRAIN) : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_DRAIN), 0, 0, 0, 0);
 }
 static inline int32_t sys_audio_status(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_AUDIO_STATUS) : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_AUDIO_STATUS), 0, 0, 0, 0);
 }
 static inline void sys_audio_shutdown(void) {
-    __asm__ volatile ("int $0x80" : : "a"(SYS_AUDIO_SHUTDOWN)
-        : "ebx", "ecx", "edx", "memory", "cc");
+    (void)arch_syscall((uint32_t)(SYS_AUDIO_SHUTDOWN), 0, 0, 0, 0);
 }
 static inline int32_t sys_fs_read_at(const char* path, void* data,
                                    uint32_t capacity, uint32_t offset) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FS_READ_AT), "b"(path), "c"(data), "d"(capacity), "S"(offset)
-        : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FS_READ_AT), (uint32_t)(path), (uint32_t)(data), (uint32_t)(capacity), (uint32_t)(offset));
 }
 
 static inline int32_t sys_write(const char* buffer, uint32_t length) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_WRITE), "b"(buffer), "c"(length)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_WRITE), (uint32_t)(buffer), (uint32_t)(length), 0, 0);
 }
 
 static inline uint32_t sys_get_ticks(void) {
-    uint32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_GET_TICKS)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return arch_syscall((uint32_t)((uint32_t)SYS_GET_TICKS), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_memory_info(user_memory_info_t* out) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_MEMORY_INFO), "b"(out)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_MEMORY_INFO), (uint32_t)(out), 0, 0, 0);
 }
 
 static inline int32_t sys_fs_read(const char* filename, void* buffer,
                                   uint32_t capacity) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_FS_READ), "b"(filename),
-                        "c"(buffer), "d"(capacity)
-                      : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FS_READ), (uint32_t)(filename), (uint32_t)(buffer), (uint32_t)(capacity), 0);
 }
 
 static inline int32_t sys_fs_list_dir(const char* path,
         char names[FS_MAX_FILES][FS_MAX_FILENAME], uint8_t types[FS_MAX_FILES]) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_FS_LIST_DIR), "b"(path), "c"(names), "d"(types) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_FS_LIST_DIR), (uint32_t)(path), (uint32_t)(names), (uint32_t)(types), 0);
 }
 static inline int32_t sys_app_launch(const char* path, const char* arguments) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_APP_LAUNCH), "b"(path), "c"(arguments) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_APP_LAUNCH), (uint32_t)(path), (uint32_t)(arguments), 0, 0);
 }
 
 static inline int32_t sys_fs_list(char files[FS_MAX_FILES][FS_MAX_FILENAME]) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_FS_LIST), "b"(files)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FS_LIST), (uint32_t)(files), 0, 0, 0);
 }
 
 static inline int32_t sys_floppy_init(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_FLOPPY_INIT)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FLOPPY_INIT), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_floppy_read(uint32_t lba, uint32_t count,
                                      void* buffer) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_FLOPPY_READ), "b"(lba),
-                        "c"(count), "d"(buffer)
-                      : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FLOPPY_READ), (uint32_t)(lba), (uint32_t)(count), (uint32_t)(buffer), 0);
 }
 
 static inline int32_t sys_floppy_write_test_pattern(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_FLOPPY_TEST_WRITE)
-                      : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FLOPPY_TEST_WRITE), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_fs_write(const char* filename, const void* buffer,
                                    uint32_t length) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_FS_WRITE), "b"(filename),
-                        "c"(buffer), "d"(length)
-                      : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_FS_WRITE), (uint32_t)(filename), (uint32_t)(buffer), (uint32_t)(length), 0);
 }
 
 static inline int32_t sys_tcp_connect(uint32_t remote_ip, uint16_t remote_port) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_CONNECT), "b"(remote_ip),
-                        "c"((uint32_t)remote_port)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_CONNECT), (uint32_t)(remote_ip), (uint32_t)((uint32_t)remote_port), 0, 0);
 }
 
 static inline int32_t sys_tcp_state(uint32_t handle) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_STATE), "b"(handle)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_STATE), (uint32_t)(handle), 0, 0, 0);
 }
 
 static inline int32_t sys_tcp_send(uint32_t handle, const void* data,
                                    uint32_t length) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_SEND), "b"(handle),
-                        "c"(data), "d"(length)
-                      : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_SEND), (uint32_t)(handle), (uint32_t)(data), (uint32_t)(length), 0);
 }
 
 static inline int32_t sys_tcp_read(uint32_t handle, void* output,
                                    uint32_t capacity) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_READ), "b"(handle),
-                        "c"(output), "d"(capacity)
-                      : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_READ), (uint32_t)(handle), (uint32_t)(output), (uint32_t)(capacity), 0);
 }
 
 static inline int32_t sys_tcp_close(uint32_t handle) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_CLOSE), "b"(handle)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_CLOSE), (uint32_t)(handle), 0, 0, 0);
 }
 
 static inline void sys_exit(uint32_t status) {
-    __asm__ volatile ("int $0x80"
-                      :
-                      : "a"((uint32_t)SYS_EXIT), "b"(status)
-                      : "ecx", "edx", "memory", "cc");
-    for (;;) { }
+    (void)arch_syscall((uint32_t)((uint32_t)SYS_EXIT), (uint32_t)(status), 0, 0, 0);
+        for (;;) { }
 }
 
 static inline int32_t sys_shutdown(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"((uint32_t)SYS_SHUTDOWN)
-        : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_SHUTDOWN), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_reboot(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"((uint32_t)SYS_REBOOT)
-        : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_REBOOT), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_net_diagnostics(net_diagnostics_t* diagnostics) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_NET_DIAGNOSTICS), "b"(diagnostics)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_NET_DIAGNOSTICS), (uint32_t)(diagnostics), 0, 0, 0);
 }
 
 static inline int32_t sys_dns_resolve(const char* hostname, uint32_t* address) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_DNS_RESOLVE), "b"(hostname), "c"(address)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_DNS_RESOLVE), (uint32_t)(hostname), (uint32_t)(address), 0, 0);
 }
 
 static inline int32_t sys_dns_start(const char* hostname) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_DNS_START), "b"(hostname)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_DNS_START), (uint32_t)(hostname), 0, 0, 0);
 }
 
 static inline int32_t sys_dns_poll(uint32_t handle, uint32_t* address) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_DNS_POLL), "b"(handle), "c"(address)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_DNS_POLL), (uint32_t)(handle), (uint32_t)(address), 0, 0);
 }
 
 static inline int32_t sys_ping_start(uint32_t destination, uint16_t sequence) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_PING_START), "b"(destination),
-                        "c"((uint32_t)sequence)
-                      : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_PING_START), (uint32_t)(destination), (uint32_t)((uint32_t)sequence), 0, 0);
 }
 
 static inline int32_t sys_ping_poll(uint32_t handle, uint32_t* milliseconds) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_PING_POLL), "b"(handle), "c"(milliseconds)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_PING_POLL), (uint32_t)(handle), (uint32_t)(milliseconds), 0, 0);
 }
 
 static inline void sys_yield(void) {
-    __asm__ volatile ("int $0x80"
-                      :
-                      : "a"((uint32_t)SYS_YIELD)
-                      : "ebx", "ecx", "edx", "memory", "cc");
+    (void)arch_syscall((uint32_t)((uint32_t)SYS_YIELD), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_window_create(const user_window_desc_t* description) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_WINDOW_CREATE), "b"(description)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_WINDOW_CREATE), (uint32_t)(description), 0, 0, 0);
 }
 
 static inline int32_t sys_window_draw(uint32_t handle,
                                       const user_window_draw_t* drawing) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_WINDOW_DRAW), "b"(handle), "c"(drawing)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_WINDOW_DRAW), (uint32_t)(handle), (uint32_t)(drawing), 0, 0);
 }
 
 static inline int32_t sys_window_poll(uint32_t handle,
                                       user_window_event_t* event) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_WINDOW_POLL), "b"(handle), "c"(event)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_WINDOW_POLL), (uint32_t)(handle), (uint32_t)(event), 0, 0);
 }
 
 static inline int32_t sys_window_present(uint32_t handle) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_WINDOW_PRESENT), "b"(handle)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_WINDOW_PRESENT), (uint32_t)(handle), 0, 0, 0);
 }
 
 static inline int32_t sys_window_close(uint32_t handle) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_WINDOW_CLOSE), "b"(handle)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_WINDOW_CLOSE), (uint32_t)(handle), 0, 0, 0);
 }
 
 static inline int32_t sys_tcp_listen(uint16_t local_port) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_LISTEN), "b"((uint32_t)local_port)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_LISTEN), (uint32_t)((uint32_t)local_port), 0, 0, 0);
 }
 
 static inline int32_t sys_tcp_accept(uint32_t listener_handle) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_ACCEPT), "b"(listener_handle)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_TCP_ACCEPT), (uint32_t)(listener_handle), 0, 0, 0);
 }
 
 static inline uint32_t sys_tcp_remote_ip(uint32_t handle) {
-    uint32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_TCP_REMOTE_IP), "b"(handle)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return arch_syscall((uint32_t)((uint32_t)SYS_TCP_REMOTE_IP), (uint32_t)(handle), 0, 0, 0);
 }
 
 typedef struct {
@@ -546,19 +314,11 @@ typedef struct {
 } user_rtc_time_t;
 
 static inline int32_t sys_utc_seconds(void) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"((uint32_t)SYS_UTC_SECONDS) : "ebx", "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_UTC_SECONDS), 0, 0, 0, 0);
 }
 
 static inline int32_t sys_rtc_time(user_rtc_time_t* out) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_RTC_TIME), "b"(out)
-                      : "ecx", "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_RTC_TIME), (uint32_t)(out), 0, 0, 0);
 }
 
 typedef struct {
@@ -569,12 +329,7 @@ typedef struct {
 } user_pci_device_t;
 
 static inline int32_t sys_pci_device_info(uint32_t index, user_pci_device_t* out) {
-    int32_t result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "0"((uint32_t)SYS_PCI_DEVICE_INFO), "b"(index), "c"(out)
-                      : "edx", "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)((uint32_t)SYS_PCI_DEVICE_INFO), (uint32_t)(index), (uint32_t)(out), 0, 0);
 }
 
 typedef struct {
@@ -585,17 +340,11 @@ typedef struct {
 } user_task_info_t;
 
 static inline int32_t sys_task_list(user_task_info_t* out, uint32_t capacity) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_TASK_LIST), "b"(out), "c"(capacity) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_TASK_LIST), (uint32_t)(out), (uint32_t)(capacity), 0, 0);
 }
 
 static inline int32_t sys_task_kill(uint32_t pid) {
-    int32_t result;
-    __asm__ volatile ("int $0x80" : "=a"(result)
-        : "0"(SYS_TASK_KILL), "b"(pid) : "memory", "cc");
-    return result;
+    return (int32_t)arch_syscall((uint32_t)(SYS_TASK_KILL), (uint32_t)(pid), 0, 0, 0);
 }
 
 #endif

@@ -26,7 +26,7 @@ NASM_FMT = elf32
 .PHONY: all package clean FORCE_VERSION
 all: fastfetch.bin
 
-entry.o: entry.asm
+crt0.o: ../../system/user/crt0.asm
 	$(NASM) -f $(NASM_FMT) $< -o $@
 
 logo.h: ../../../resources/nixelos-trans.ansi.txt generate_logo.py
@@ -38,7 +38,7 @@ logo.h: ../../../resources/nixelos-trans.ansi.txt generate_logo.py
 main.o: ../../../src/include/os_version.h main.c logo.h ../../system/user/sys_api.h ../../system/user/memory_api.h ../../kernel/types.h ../../kernel/fs.h ../../kernel/hal/net_types.h ../../system/user/window_api.h
 	$(CC) $(CFLAGS) -c main.c -o $@
 
-fastfetch.elf: entry.o main.o
+fastfetch.elf: crt0.o main.o
 	$(LD) -m $(LD_EMULATION) -Ttext 0xC00000 -e _start $^ -o $@
 
 fastfetch.bin: fastfetch.elf
@@ -48,4 +48,4 @@ package: fastfetch.bin
 	$(PYTHON) -c "import tarfile; t=tarfile.open('fastfetch-0.1.0-i386.tar.gz','w:gz'); [t.add(p,arcname=p) for p in ('fastfetch.bin','README.md')]; t.close()"
 
 clean:
-	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('entry.o','main.o','fastfetch.elf','fastfetch.bin','fastfetch-0.1.0-i386.tar.gz')]"
+	$(PYTHON) -c "from pathlib import Path; [Path(p).unlink(missing_ok=True) for p in ('crt0.o','main.o','fastfetch.elf','fastfetch.bin','fastfetch-0.1.0-i386.tar.gz')]"

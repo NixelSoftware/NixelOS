@@ -1,6 +1,6 @@
 #include "../mutex.h"
 #include "display.h"
-#include "../paging.h"
+#include "../mm.h"
 #include "serial.h"
 #include "../hal/video.h"
 

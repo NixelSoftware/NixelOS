@@ -1,7 +1,8 @@
-#ifndef KERNEL_PAGING_H
-#define KERNEL_PAGING_H
+#ifndef KERNEL_MM_H
+#define KERNEL_MM_H
 
 #include "types.h"
+#include "arch/arch.h"
 #include "../system/user/memory_api.h"
 
 void paging_memory_info(user_memory_info_t* out);
@@ -14,13 +15,8 @@ void paging_memory_info(user_memory_info_t* out);
 #define APP_HEAP_BASE  0x40000000u
 #define APP_HEAP_LIMIT 0x80000000u
 
-typedef struct {
-    uint32_t* directory;
-    uint32_t* app_page_table;
-} address_space_t;
-
 /* Enable the kernel's supervisor-only identity map. */
-void paging_init(void);
+void paging_init(const arch_boot_info_t* boot);
 uint8_t paging_is_enabled(void);
 /* Map one aligned PCI register page uncached in every address space.
  * Only non-RAM above the private app heap is accepted. Returns 0 on failure. */
@@ -32,21 +28,9 @@ uint32_t paging_frame_alloc(void);
 uint32_t paging_alloc_contiguous(uint32_t pages);
 void paging_frame_free(uint32_t physical_address);
 
-/* Create isolated app mappings at [APP_VIRTUAL_BASE, APP_VIRTUAL_LIMIT). */
-int paging_address_space_create(address_space_t* space);
-int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_address,
-                                   uint8_t writable, uint32_t* physical_out);
-void paging_address_space_destroy(address_space_t* space);
 /* Page-granular, zero-filled allocations owned by the active app.
  * Free accepts only the original allocation base. Zero/-1 indicate failure. */
 uint32_t paging_user_alloc(uint32_t bytes);
 int paging_user_free(uint32_t address);
-
-/* CR3 helpers; callers must restore the kernel directory before returning. */
-void paging_activate(address_space_t* space);
-void paging_activate_directory(uint32_t directory_address);
-void paging_activate_kernel(void);
-uint32_t paging_current_directory(void);
-uint32_t paging_kernel_directory(void);
 
 #endif

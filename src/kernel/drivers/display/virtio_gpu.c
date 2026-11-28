@@ -2,7 +2,7 @@
 #include "../pci.h"
 #include "../delay.h"
 #include "../serial.h"
-#include "../../paging.h"
+#include "../../mm.h"
 
 /* Modern virtio PCI transport, split control queue, 2D scanout + optional VirGL.
  * Wire layouts: virtio 1.2 sections 4.1 and 5.7. All DMA addresses are physical

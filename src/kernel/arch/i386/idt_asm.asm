@@ -4,7 +4,7 @@ section .text
 extern isr_handler
 extern arch_user_exit_requested
 extern arch_user_kernel_esp
-extern syscall_dispatch
+extern arch_syscall_entry
 extern task_preempt_point
 global idt_flush
 global syscall_entry
@@ -85,7 +85,7 @@ syscall_entry:
     mov gs, ax
     cld
     push esp
-    call syscall_dispatch
+    call arch_syscall_entry
     add esp, 4
     call task_preempt_point
     cli

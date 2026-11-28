@@ -19,14 +19,13 @@
 #include "drivers/usb/uhci.h"
 #include "drivers/usb/ehci.h"
 //#include "drivers/sb16_driver.h"
-#include "idt.h"
+#include "arch/arch.h"
 #include "fs.h" 
 #include "os_api.h"
 #include "task.h"
 #include "scheduler.h"
 #include "mutex.h"
-#include "paging.h"
-#include "arch_i386.h"
+#include "mm.h"
 #include "syscall.h"
 #include "hal/audio.h"
 #include "hal/usb.h"
@@ -78,13 +77,6 @@ static uint8_t needs_redraw = 1;
 
 
 
-
-static void pit_init(uint32_t frequency_hz) {
-    uint32_t divisor = 1193182 / frequency_hz;
-    outb(0x43, 0x36);
-    outb(0x40, (uint8_t)(divisor & 0xFF));
-    outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
-}
 
 static os_api_t kernel_api = {
     .graphics = {
@@ -231,7 +223,7 @@ static uint32_t api_get_ticks(void) {
 static uint8_t api_ipv4_send(uint32_t destination_ip, uint8_t protocol,
                              const uint8_t* payload, uint32_t length) {
     uint8_t sent = ipv4_send(destination_ip, protocol, payload, length);
-    if (paging_current_directory() != paging_kernel_directory()) {
+    if (arch_current_address_space() != arch_kernel_address_space()) {
         debug_print("[APP NET] IPv4 send result: ");
         debug_hex(sent);
         debug_print(" destination: ");
@@ -247,7 +239,7 @@ static uint8_t api_ipv4_send(uint32_t destination_ip, uint8_t protocol,
 
 static uint8_t api_dns_resolve(const char* hostname, uint32_t* address) {
     uint8_t resolved = dns_resolve(hostname, address);
-    if (paging_current_directory() != paging_kernel_directory()) {
+    if (arch_current_address_space() != arch_kernel_address_space()) {
         debug_print("[APP NET] DNS result for ");
         debug_print(hostname);
         debug_print(": ");
@@ -273,14 +265,14 @@ static void nixinit_show_status(const char* text, int percent) {
 
 static void kernel_init_interrupts(void) {
     debug_print("[INIT] GDT/TSS init...\n");
-    arch_i386_init();
+    arch_init();
     debug_print("[INIT] IDT init...\n");
-    idt_init();
+    arch_trap_init();
 }
 
 static void kernel_init_timer(void) {
     debug_print("[INIT] PIT init...\n");
-    pit_init(100);
+    arch_timer_init(100);
     /* The bootloader masks every PIC line; PIT programming alone cannot
      * deliver ticks for scheduling, sleeps, and network/audio deadlines. */
     outb(0x21, inb(0x21) & ~1u);
@@ -385,7 +377,7 @@ static void kernel_finish_boot(void) {
     debug_subsystem_print("[INIT] Display drawing returned.\n");
     needs_redraw = 0;
     debug_print("[INIT] Enable interrupt...\n");
-    __asm__ volatile ("sti");
+    arch_irq_enable();
 
 
 }
@@ -453,33 +445,32 @@ void desktop_service(void* arg) {
 #define BOOT_FLAG_DEBUG   0x1u
 #define BOOT_FLAG_VERBOSE 0x2u
 
-void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch,
-                 uint32_t boot_flags, uint32_t geometry) {
-    __asm__ volatile ("cli");
+void kernel_main(const arch_boot_info_t* boot) {
+    arch_irq_disable();
 
-    paging_init();
+    paging_init(boot);
 
     startup_trace_init();
     /* The serial debug port is enabled only when "-debug" is passed at boot. */
-    if (boot_flags & BOOT_FLAG_DEBUG) {
+    if (boot->flags & BOOT_FLAG_DEBUG) {
         serial_init();
     }
     debug_print("\n=== SYSTEM BOOTING ===\n");
-    debug_print("[VBE] LFB Address: "); debug_hex(lfb_address); debug_print("\n");
-    debug_print("[VBE] BPP: ");         debug_hex(bpp);         debug_print("\n");
-    debug_print("[VBE] Pitch: ");       debug_hex(pitch);       debug_print("\n");
+    debug_print("[VBE] LFB Address: "); debug_hex(boot->fb_addr); debug_print("\n");
+    debug_print("[VBE] BPP: ");         debug_hex(boot->fb_bpp);  debug_print("\n");
+    debug_print("[VBE] Pitch: ");       debug_hex(boot->fb_pitch); debug_print("\n");
 
     debug_print("[INIT] Display init...\n");
 
-    uint32_t width = geometry & 0xFFFFu, height = geometry >> 16;
+    uint32_t width = boot->fb_width, height = boot->fb_height;
     if (width >= 640 && width <= SCREEN_MAX_WIDTH &&
         height >= 480 && height <= SCREEN_MAX_HEIGHT) {
         screen_width = width;
         screen_height = height;
     }
-    display_init(lfb_address, bpp, pitch);
+    display_init(boot->fb_addr, boot->fb_bpp, boot->fb_pitch);
 
-    if (boot_flags & BOOT_FLAG_VERBOSE) {
+    if (boot->flags & BOOT_FLAG_VERBOSE) {
         kernel_verbose = 1;
         bootlog_begin();
         debug_set_char_sink(bootlog_putc);
@@ -527,7 +518,7 @@ void kernel_main(uint32_t lfb_address, uint32_t bpp, uint32_t pitch,
     if (serial_start_async() < 0) {
 #endif
         debug_print("[INIT] Cannot allocate service tasks\n");
-        for (;;) __asm__ volatile ("cli; hlt");
+        arch_halt_forever();
     }
     scheduler_start();
     debug_print("[INIT] EEVDF scheduler started: 1000 Hz, independent services\n");

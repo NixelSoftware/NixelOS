@@ -2,7 +2,8 @@
 #include "i915/i915.h"
 #include "i915/gen4_engine.h"
 #include "../delay.h"
-#include "../../paging.h"
+#include "../../arch/arch.h"
+#include "../../mm.h"
 #include "../pci.h"
 #include "../serial.h"
 
@@ -48,7 +49,7 @@ static void native_release(void* context, uint32_t physical, uint32_t pages) {
 }
 static void native_flush(void* context) {
     (void)context;
-    __asm__ volatile ("wbinvd" ::: "memory");
+    arch_cache_flush();
 }
 static void native_flush_line(void* context, const void* address) {
     (void)context;
@@ -85,7 +86,7 @@ static void paint_cell(uint32_t index, uint32_t color) {
         for (uint32_t x = 0; x < 12u; x++) row[x] = color;
     }
     /* Make sure the cell reaches the display before the next risky write. */
-    __asm__ volatile ("wbinvd" ::: "memory");
+    arch_cache_flush();
 }
 /* Tiny 3x5 hex font so failure registers can be read off the screen even if
  * the machine dies right afterwards. Rows (top-left, newest below): see
@@ -118,7 +119,7 @@ static void paint_hex_row(uint32_t row, uint32_t value) {
             }
         }
     }
-    __asm__ volatile ("wbinvd" ::: "memory");
+    arch_cache_flush();
 }
 static void diag_trace(void* context, const char* text, uint32_t value, int has_value) {
     (void)context;

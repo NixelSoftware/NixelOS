@@ -1,16 +1,30 @@
 #include "idt.h"
 #include "irq.h"
-#include "drivers/display/font.h"
-#include "drivers/display.h"
-#include "drivers/serial.h"
-#include "syscall.h"
-#include "hal/audio.h"
+#include "../../drivers/display/font.h"
+#include "../../drivers/display.h"
+#include "../../drivers/serial.h"
+#include "../../syscall.h"
+#include "../../hal/audio.h"
 #include "arch_i386.h"
-#include "../system/graphics/dialog/crash_dialog.h"
+#include "../../../system/graphics/dialog/crash_dialog.h"
 
 static idt_entry_t idt_entries[256];
 static idt_ptr_t   idt_ptr;
 user_crash_info_t last_user_crash = {0};
+
+void arch_syscall_entry(registers_t* regs) {
+    if (!regs) return;
+    arch_syscall_t call;
+    call.number = regs->eax;
+    call.arg[0] = regs->ebx;
+    call.arg[1] = regs->ecx;
+    call.arg[2] = regs->edx;
+    call.arg[3] = regs->esi;
+    call.result = (uint32_t)-1;
+    call.from_user = (regs->cs & 3u) == 3u;
+    syscall_dispatch(&call);
+    regs->eax = call.result;
+}
 
 extern void idt_flush(uint32_t);
 
@@ -273,7 +287,7 @@ static void pic_remap(void) {
     pic_write(0xA1, slave_mask);
 }
 
-void idt_init(void) {
+void arch_trap_init(void) {
     uint32_t saved_flags;
     __asm__ volatile ("pushfl; popl %0; cli" : "=r"(saved_flags) : : "memory");
     pic_remap();

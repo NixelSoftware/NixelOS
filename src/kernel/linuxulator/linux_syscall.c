@@ -2,7 +2,7 @@
 #include "linux_abi.h"
 #include "../task.h"
 #include "../fs.h"
-#include "../paging.h"
+#include "../mm.h"
 #include "../drivers/rtc.h"
 #include "../drivers/serial.h"
 
@@ -26,16 +26,16 @@ typedef struct {
 
 static uint32_t linux_current_brk = 0;
 
-void linux_syscall_dispatch(registers_t* regs) {
-    uint32_t nr = regs->eax;
-    uint32_t a1 = regs->ebx;
-    uint32_t a2 = regs->ecx;
-    uint32_t a3 = regs->edx;
+void linux_syscall_dispatch(arch_syscall_t* sc) {
+    uint32_t nr = sc->number;
+    uint32_t a1 = sc->arg[0];
+    uint32_t a2 = sc->arg[1];
+    uint32_t a3 = sc->arg[2];
 
     debug_print("[LINUX SYSCALL] EAX=");
-    debug_hex(regs->eax);
+    debug_hex(sc->number);
     debug_print(" EBX=");
-    debug_hex(regs->ebx);
+    debug_hex(sc->arg[0]);
     debug_print("\n");
 
     switch (nr) {
@@ -43,7 +43,7 @@ void linux_syscall_dispatch(registers_t* regs) {
         case 1:   /* sys_exit */
         case 252: /* sys_exit_group */
             task_exit();
-            regs->eax = 0;
+            sc->result = 0;
             return;
 
         /* Write */
@@ -53,10 +53,10 @@ void linux_syscall_dispatch(registers_t* regs) {
             uint32_t len = a3;
             if (fd == 1 || fd == 2) {
                 kernel_user_write(buf, len);
-                regs->eax = len;
+                sc->result = len;
                 return;
             }
-            regs->eax = -LINUX_EBADF;
+            sc->result = -LINUX_EBADF;
             return;
         }
 
@@ -74,10 +74,10 @@ void linux_syscall_dispatch(registers_t* regs) {
                         written += iov[i].iov_len;
                     }
                 }
-                regs->eax = written;
+                sc->result = written;
                 return;
             }
-            regs->eax = -LINUX_EBADF;
+            sc->result = -LINUX_EBADF;
             return;
         }
 
@@ -85,7 +85,7 @@ void linux_syscall_dispatch(registers_t* regs) {
         case 45: { /* sys_brk(new_brk) */
             uint32_t new_brk = a1;
             if (new_brk == 0) {
-                regs->eax = linux_current_brk ? linux_current_brk : 0x08100000;
+                sc->result = linux_current_brk ? linux_current_brk : 0x08100000;
                 return;
             }
             if (new_brk > linux_current_brk) {
@@ -97,25 +97,25 @@ void linux_syscall_dispatch(registers_t* regs) {
                 }
                 linux_current_brk = new_brk;
             }
-            regs->eax = linux_current_brk;
+            sc->result = linux_current_brk;
             return;
         }
 
         /* Memory Protection (Libc initializers call this on BSS/data) */
         case 125: /* sys_mprotect(addr, len, prot) */
-            regs->eax = 0; /* Return success */
+            sc->result = 0; /* Return success */
             return;
 
         /* Thread Local Storage (set_thread_area) — Used by glibc/musl to init %gs */
         case 243: { /* sys_set_thread_area(user_desc_t*) */
             user_desc_t* desc = (user_desc_t*)a1;
             if (!desc) {
-                regs->eax = -LINUX_EFAULT;
+                sc->result = -LINUX_EFAULT;
                 return;
             }
             desc->entry_number = LINUX_TLS_ENTRY;
             /* Point TLS segment to user thread descriptor */
-            regs->eax = 0;
+            sc->result = 0;
             return;
         }
 
@@ -125,33 +125,33 @@ void linux_syscall_dispatch(registers_t* regs) {
             static uint32_t mmap_alloc_base = 0x40000000u;
             uint32_t addr = mmap_alloc_base;
             mmap_alloc_base += (len + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
-            regs->eax = addr;
+            sc->result = addr;
             return;
         }
 
         /* Uname */
         case 122: { /* sys_uname */
             struct linux_old_utsname* u = (struct linux_old_utsname*)a1;
-            if (!u) { regs->eax = -LINUX_EFAULT; return; }
+            if (!u) { sc->result = -LINUX_EFAULT; return; }
             const char* s = "Linux";
             int i = 0; while (s[i]) { u->sysname[i] = s[i]; i++; } u->sysname[i] = 0;
             s = "nixel"; i = 0; while (s[i]) { u->nodename[i] = s[i]; i++; } u->nodename[i] = 0;
             s = "6.1.0"; i = 0; while (s[i]) { u->release[i] = s[i]; i++; } u->release[i] = 0;
             s = "#1 SMP NixelOS"; i = 0; while (s[i]) { u->version[i] = s[i]; i++; } u->version[i] = 0;
             s = "i686"; i = 0; while (s[i]) { u->machine[i] = s[i]; i++; } u->machine[i] = 0;
-            regs->eax = 0;
+            sc->result = 0;
             return;
         }
 
         /* Terminal Query (isatty / tcgetattr) */
         case 54: /* sys_ioctl */
-            regs->eax = 0; /* Pretend success */
+            sc->result = 0; /* Pretend success */
             return;
 
         /* Signals (musl and glibc register abort/sigsegv handlers on startup) */
         case 174: /* sys_rt_sigaction */
         case 175: /* sys_rt_sigprocmask */
-            regs->eax = 0;
+            sc->result = 0;
             return;
 
         /* Query UID / GID */
@@ -159,14 +159,14 @@ void linux_syscall_dispatch(registers_t* regs) {
         case 47: /* sys_getgid */
         case 49: /* sys_geteuid */
         case 50: /* sys_getegid */
-            regs->eax = 1000;
+            sc->result = 1000;
             return;
 
         default:
             debug_print("[NIXEL2LINUX] Unimplemented syscall: ");
             debug_hex(nr);
             debug_print("\n");
-            regs->eax = (uint32_t)-LINUX_ENOSYS;
+            sc->result = (uint32_t)-LINUX_ENOSYS;
             return;
     }
 }

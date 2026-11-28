@@ -1,11 +1,11 @@
 #include "../../kernel/mutex.h"
+#include "../../kernel/mm.h"
 #include "app_loader.h"
 #include "../../kernel/fs.h"
 #include "../../kernel/task.h"
-#include "../../kernel/paging.h"
 #include "../../kernel/net/ipv4.h"
 #include "../../kernel/drivers/serial.h"
-#include "../../kernel/arch_i386.h"
+#include "../../kernel/arch/arch.h"
 #include "../../kernel/syscall.h"
 #include "../graphics/dialog/crash_dialog.h"
 #include "../graphics/wm/wm.h"
@@ -17,7 +17,7 @@
 #define APP_MAPPED_PAGES ((APP_BSS_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE)
 
 typedef struct {
-    address_space_t address_space;
+    arch_address_space_t* address_space;
     uint8_t active;
     uint8_t pending_release;
     uint8_t running;
@@ -32,7 +32,7 @@ extern user_crash_info_t last_user_crash;
 static int app_instance_find(uint32_t directory_address) {
     for (int i = 0; i < APP_INSTANCE_MAX; i++) {
         if (app_instances[i].active &&
-            (uint32_t)app_instances[i].address_space.directory == directory_address)
+            arch_address_space_root(app_instances[i].address_space) == directory_address)
             return i;
     }
     return -1;
@@ -40,18 +40,18 @@ static int app_instance_find(uint32_t directory_address) {
 
 uint32_t app_loader_context_enter(uint32_t directory) {
     MUTEX_GUARD(kernel_mutex);
-    uint32_t previous = paging_current_directory();
+    uint32_t previous = arch_current_address_space();
     int index = app_instance_find(previous);
     /* The previous mapping lives on the caller's stack until leave, including
      * across nested callbacks and sleeps in a different address space. */
     if (index >= 0) app_instances[index].context_references++;
-    paging_activate_directory(directory ? directory : paging_kernel_directory());
+    arch_switch_address_space(directory ? directory : arch_kernel_address_space());
     return previous;
 }
 
 void app_loader_context_leave(uint32_t previous) {
     MUTEX_GUARD(kernel_mutex);
-    paging_activate_directory(previous);
+    arch_switch_address_space(previous);
     int index = app_instance_find(previous);
     if (index >= 0 && app_instances[index].context_references)
         app_instances[index].context_references--;
@@ -81,11 +81,11 @@ void app_loader_collect(void) {
             continue;
         /* kernel_mutex serializes app lifecycle/callback dispatch. Also retain
          * mappings referenced by a suspended task, not just the active CR3. */
-        if (task_address_space_in_use((uint32_t)instance->address_space.directory))
+        if (task_address_space_in_use(arch_address_space_root(instance->address_space)))
             continue;
-        syscall_forget_address_space((uint32_t)instance->address_space.directory);
-        ipv4_clear_handlers_for_directory((uint32_t)instance->address_space.directory);
-        paging_address_space_destroy(&instance->address_space);
+        syscall_forget_address_space(arch_address_space_root(instance->address_space));
+        ipv4_clear_handlers_for_directory(arch_address_space_root(instance->address_space));
+        arch_address_space_destroy(instance->address_space);
         instance->active = 0;
         instance->pending_release = 0;
     }
@@ -99,6 +99,7 @@ static int app_instance_reserve(void) {
             app_instances[i].running = 0;
             app_instances[i].window_references = 0;
             app_instances[i].context_references = 0;
+            app_instances[i].address_space = 0;
             return i;
         }
     }
@@ -131,12 +132,12 @@ static int read_app(os_api_t* api, const char* name, uint8_t* destination) {
  * launched it. A running task pins its mappings even if its last window closes. */
 static void app_run(void* argument) {
     app_instance_t* instance = argument;
-    paging_activate(&instance->address_space);
+    arch_switch_address_space(arch_address_space_root(instance->address_space));
     /* Root changes service authorization. */
-    arch_i386_enter_user(instance->entry, instance->user_stack);
-    wm_user_close_address_space((uint32_t)instance->address_space.directory);
+    arch_enter_user(instance->entry, instance->user_stack);
+    wm_user_close_address_space(arch_address_space_root(instance->address_space));
     debug_print("[APP] executable returned\n");
-    paging_activate_kernel();
+    arch_switch_address_space(arch_kernel_address_space());
 
     if (last_user_crash.active) {
         last_user_crash.active = 0;
@@ -165,16 +166,17 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
     if (slot < 0) return -3;
 
     app_instance_t* instance = &app_instances[slot];
-    if (paging_address_space_create(&instance->address_space) != 0) {
+    instance->address_space = arch_address_space_create();
+    if (!instance->address_space) {
         instance->active = 0;
         return -4;
     }
 
     for (uint32_t page = 0; page < APP_MAPPED_PAGES; page++) {
         uint32_t virtual_address = APP_VIRTUAL_BASE + page * PAGE_SIZE;
-        if (paging_address_space_alloc_page(&instance->address_space, virtual_address,
+        if (arch_address_space_map(instance->address_space, virtual_address,
                                             1, 0) != 0) {
-            paging_address_space_destroy(&instance->address_space);
+            arch_address_space_destroy(instance->address_space);
             instance->active = 0;
             return -4;
         }
@@ -182,7 +184,7 @@ static int app_loader_prepare(os_api_t* api, const char* name, const char* argum
 
     char filename[FS_MAX_PATH];
     debug_print("[APP] activating address space\n");
-    uint32_t previous_directory = app_loader_context_enter((uint32_t)instance->address_space.directory);
+    uint32_t previous_directory = app_loader_context_enter(arch_address_space_root(instance->address_space));
     debug_print("[APP] reading executable\n");
     /* Hold no core/WM lock across disk access. This private mapping belongs
      * to the loader task; reaping is excluded until preparation completes. */

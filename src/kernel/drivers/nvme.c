@@ -2,7 +2,7 @@
 #include "pci.h"
 #include "serial.h"
 #include "delay.h"
-#include "../paging.h"
+#include "../mm.h"
 
 #define PCI_CLASS_STORAGE 0x01
 #define PCI_SUBCLASS_NVME 0x08

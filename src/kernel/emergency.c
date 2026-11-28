@@ -2,11 +2,12 @@
 #include "drivers/display.h"
 #include "drivers/display/font.h"
 #include "drivers/serial.h"
+#include "arch/arch.h"
 
 static int emg_line = 1;
 
 void emergency_console_clear(void) {
-    __asm__ volatile ("cli");
+    arch_irq_disable();
 
     serial_enter_sync();
 
@@ -43,7 +44,5 @@ __attribute__((noreturn)) void emergency_panic(const char* title, const char* me
     emergency_console_print("", 0);
     emergency_console_print("System halted. Please reboot the system.", 0x00888888);
 
-    for (;;) {
-        __asm__ volatile ("hlt");
-    }
+    arch_halt_forever();
 }

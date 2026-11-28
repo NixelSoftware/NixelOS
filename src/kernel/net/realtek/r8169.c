@@ -15,7 +15,7 @@
 #include "../../drivers/delay.h"
 #include "../../drivers/pci.h"
 #include "../../drivers/serial.h"
-#include "../../irq.h"
+#include "../../arch/arch.h"
 #include "../../task.h"
 
 #define RTL_VENDOR_ID 0x10EC
@@ -432,7 +432,8 @@ static void irq_mask_and_ack(void) {
 }
 
 /* Masks the chip until r8169_poll() has drained the ring. */
-static int r8169_interrupt(void) {
+static int r8169_interrupt(void* ctx) {
+    (void)ctx;
     if (!irq_armed) return 0;
     uint16_t status = read16(IntrStatus);
     if (status == 0xFFFF || !(status & IntrWakeBits)) return 0;
@@ -741,7 +742,7 @@ uint8_t r8169_init(void) {
     diag.initialized = 1;
     update_link();
     irq_line = pci_device->irq_pin ? pci_device->irq_line : 0xFF;
-    irq_on = (uint8_t)irq_register(irq_line, r8169_interrupt);
+    irq_on = (uint8_t)arch_irq_register(irq_line, r8169_interrupt, 0);
     if (irq_on) {
         pci_enable_intx(pci_device);
         irq_arm();
@@ -765,7 +766,7 @@ void r8169_shutdown(void) {
     irq_armed = 0;
     write8(ChipCmd, 0);
     irq_mask_and_ack();
-    if (irq_on) irq_unregister(irq_line);
+    if (irq_on) arch_irq_unregister(irq_line);
     irq_on = 0;
     write32(RxConfig, read32(RxConfig) & ~RX_ACCEPT_MASK);
     if (pci_device) pci_set_master(pci_device, 0);

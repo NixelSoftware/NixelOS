@@ -87,8 +87,7 @@ static uint8_t rtc_encode(uint8_t value, uint8_t mode) {
 }
 static void rtc_write_hardware(const rtc_time_t* utc, uint64_t seconds) {
     /* Keep CMOS address/data transactions and the frozen update atomic. */
-    uint32_t flags;
-    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
+    uint32_t flags = arch_irq_save();
     uint8_t address = inb(CMOS_ADDRESS);
     uint8_t mode = cmos_read(0x0b);
     cmos_write(0x0b, mode | 0x80); /* SET inhibits calendar updates. */
@@ -110,7 +109,7 @@ static void rtc_write_hardware(const rtc_time_t* utc, uint64_t seconds) {
     if (century) cmos_write(century, rtc_encode(utc->year / 100, mode));
     cmos_write(0x0b, mode);
     outb(CMOS_ADDRESS, address);
-    __asm__ volatile ("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+    arch_irq_restore(flags);
 }
 static uint64_t base_epoch, base_tick;
 static int clock_initialized;

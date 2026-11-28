@@ -1,6 +1,5 @@
 #include "task.h"
-#include "paging.h"
-#include "arch_i386.h"
+#include "arch/arch.h"
 
 extern uint32_t arch_user_kernel_esp;
 static task_t task_list[MAX_TASKS];
@@ -32,7 +31,7 @@ int task_cwd_in_use(const char* path) {
 int task_address_space_in_use(uint32_t directory) {
     if (!directory) return 0;
     uint32_t flags = task_irq_save();
-    int used = paging_current_directory() == directory;
+    int used = arch_current_address_space() == directory;
     for (int i = 0; !used && i < MAX_TASKS; i++) {
         const task_t* t = &task_list[i];
         /* Current's saved directory can be stale after an explicit CR3 change;
@@ -52,19 +51,19 @@ void task_schedule_next(void) {
     task_t* next = scheduler_pick_next(scheduler_clock());
     if (previous == next) return;
     startup_trace_switch(previous->id, next->id);
-    arch_fpu_save(&previous->fpu_state);
-    previous->directory = paging_current_directory();
-    previous->user_kernel_esp = arch_user_kernel_esp;
-    previous->user_exit_requested = arch_user_exit_requested;
+    arch_fpu_save(&previous->arch.fpu_state);
+    previous->directory = arch_current_address_space();
+    previous->arch.user_kernel_esp = arch_user_kernel_esp;
+    previous->arch.user_exit_requested = arch_user_exit_requested;
     current_task = next;
-    arch_fpu_restore(&next->fpu_state);
-    arch_user_kernel_esp = next->user_kernel_esp;
-    arch_user_exit_requested = next->user_exit_requested |
-        (next->terminate_requested && next->user_kernel_esp);
-    arch_i386_set_kernel_stack(arch_user_kernel_esp ? arch_user_kernel_esp :
+    arch_fpu_restore(&next->arch.fpu_state);
+    arch_user_kernel_esp = next->arch.user_kernel_esp;
+    arch_user_exit_requested = next->arch.user_exit_requested |
+        (next->terminate_requested && next->arch.user_kernel_esp);
+    arch_set_kernel_stack(arch_user_kernel_esp ? arch_user_kernel_esp :
         (uint32_t)(next->stack + TASK_STACK_SIZE));
-    if (paging_current_directory() != next->directory)
-        paging_activate_directory(next->directory);
+    if (arch_current_address_space() != next->directory)
+        arch_switch_address_space(next->directory);
 }
 void task_timer_tick(void) {
     scheduler_irq_tick();
@@ -131,19 +130,19 @@ void task_sleep(uint32_t ticks) {
     task_sleep_ms(ticks > 0x0fffffffu ? 0x7fffffffu : ticks * 10u);
 }
 void task_exit(void) {
-    __asm__ volatile ("cli" : : : "memory");
+    arch_irq_disable();
     /* Dropping locks here could publish partially updated shared state.
      * Report a kernel contract violation rather than strand lock waiters. */
     if (current_task->owned_mutexes || current_task->waiting_mutex ||
         current_task->wait_next || current_task->preempt_count)
-        __asm__ volatile ("ud2");
+        __builtin_trap();
     if (!current_task->id) __builtin_trap();
     task_terminate_children(current_task->id);
     for (int i = 1; i < MAX_TASKS - 1; i++)
         if (i != (int)current_task->id) task_wait(i);
     scheduler_exit(current_task, scheduler_clock());
     task_yield();
-    for (;;) __asm__ volatile ("sti; hlt");
+    for (;;) arch_halt();
 }
 uint32_t task_parent_id(void) {
     return current_task ? current_task->parent_id : 0;
@@ -212,13 +211,13 @@ static void task_return_stub(void) { task_exit(); }
 static void idle_main(void* arg) {
     (void)arg;
     for (;;) {
-        __asm__ volatile ("cli" : : : "memory");
+        arch_irq_disable();
         if (scheduler_need_reschedule()) {
             task_yield();
-            __asm__ volatile ("sti" : : : "memory");
+            arch_irq_enable();
         } else {
             /* STI's interrupt shadow keeps the check-to-halt boundary safe. */
-            __asm__ volatile ("sti; hlt" : : : "memory");
+            arch_halt();
         }
     }
 }
@@ -236,12 +235,13 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
         t->command_args[i] = current_task ? current_task->command_args[i] : 0;
     for (unsigned i = 0; i < sizeof(t->cwd); i++)
         t->cwd[i] = current_task ? current_task->cwd[i] : 0;
-    t->directory = paging_kernel_directory();
-    t->user_kernel_esp = t->user_exit_requested = t->preempt_count = 0;
+    t->directory = arch_kernel_address_space();
+    t->arch.user_kernel_esp = t->arch.user_exit_requested = 0;
+    t->preempt_count = 0;
     t->wait_next = 0;
     t->owned_mutexes = t->waiting_mutex = 0;
     t->base_nice = 0;
-    t->fpu_state = initial_fpu_state;
+    t->arch.fpu_state = initial_fpu_state;
     int n = 0;
     while (name && name[n] && n < 15) { t->name[n] = name[n]; n++; }
     t->name[n] = 0;
@@ -253,7 +253,7 @@ static void setup(task_t* t, void (*entry)(void*), void* arg, const char* name) 
         .gs = 0x10, .fs = 0x10, .es = 0x10, .ds = 0x10,
         .eip = (uint32_t)entry, .cs = 0x08, .eflags = 0x202
     };
-    t->esp = (uint32_t)frame;
+    t->arch.esp = (uint32_t)frame;
 }
 static int slot_reusable(const task_t* t) {
     /* setup overwrites the stack and linkage. Never do that while any of

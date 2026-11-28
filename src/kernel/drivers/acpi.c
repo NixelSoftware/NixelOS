@@ -1,5 +1,6 @@
 #include "acpi.h"
 #include "serial.h"
+#include "../arch/arch.h"
 
 #pragma pack(push, 1)
 typedef struct {
@@ -285,7 +286,7 @@ void acpi_reboot(void) {
     if (!reset_supported) return;
 
     debug_print("[ACPI] Triggering hardware reset via ACPI Reset Register...\n");
-    __asm__ volatile ("cli");
+    arch_irq_disable();
 
     if (reset_space == 1) {
         
@@ -309,7 +310,7 @@ void acpi_power_off(void) {
         return;
     }
     debug_print("[ACPI] Sending S5 soft power-off command...\n");
-    __asm__ volatile ("cli");
+    arch_irq_disable();
     const uint16_t sleep_mask = (7u << 10) | (1u << 13);
     uint16_t a = (inw((uint16_t)pm1a_cnt) & ~sleep_mask) | (slp_typa << 10);
     uint16_t b = pm1b_cnt ?
@@ -318,7 +319,7 @@ void acpi_power_off(void) {
      * Preserve SCI_EN and the remaining PM1 control fields. */
     outw((uint16_t)pm1a_cnt, a);
     if (pm1b_cnt) outw((uint16_t)pm1b_cnt, b);
-    __asm__ volatile ("wbinvd" ::: "memory");
+    arch_cache_flush();
     outw((uint16_t)pm1a_cnt, a | (1u << 13));
     if (pm1b_cnt) outw((uint16_t)pm1b_cnt, b | (1u << 13));
     for (unsigned i = 0; i < 1000; ++i) acpi_delay_ms();

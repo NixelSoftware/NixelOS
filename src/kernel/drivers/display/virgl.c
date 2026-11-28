@@ -1,6 +1,6 @@
 #include "video_drivers.h"
 #include "../serial.h"
-#include "../../paging.h"
+#include "../../mm.h"
 
 /* VirGL v1 command stream, as specified by virglrenderer/src/virgl_protocol.h
  * and virgl_hw.h (https://gitlab.freedesktop.org/virgl/virglrenderer).

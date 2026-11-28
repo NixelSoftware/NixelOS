@@ -5,7 +5,7 @@
 #include "hda.h"
 #include "pci.h"
 #include "serial.h"
-#include "../paging.h"
+#include "../mm.h"
 #define SLOTS 32u
 #define BLOCK PAGE_SIZE
 #define MAX_RESTARTS 2u

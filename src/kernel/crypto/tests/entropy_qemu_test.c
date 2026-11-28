@@ -12,17 +12,19 @@ static uint32_t task_irq_save(void) {
 static void task_irq_restore(uint32_t flags) {
     __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
 }
-#include "../../paging.c"
+#include "../../arch/i386/paging.c"
 #include "../entropy.c"
 static void finish(unsigned value) {
     __asm__ volatile("outl %0, %1" :: "a"(value), "Nd"((uint16_t)0xf4));
     for (;;) __asm__ volatile("hlt");
 }
 void test_main(void) {
-    bios_memory_entry_t* e = (bios_memory_entry_t*)0x5004;
-    e[0] = (bios_memory_entry_t){0x100000,63u*1024*1024,1,1};
-    *(volatile uint32_t*)0x5000 = 1;
-    paging_init();
+    arch_boot_info_t boot = {0};
+    boot.region_count = 1;
+    boot.regions[0].base = 0x100000;
+    boot.regions[0].length = 63u*1024*1024;
+    boot.regions[0].usable = 1;
+    paging_init(&boot);
     if (entropy_cpu_features() != 1) finish(0x11);
     uint8_t first[32], second[32];
     if (kernel_entropy(0,first,32) || kernel_entropy(0,second,32)) finish(0x12);

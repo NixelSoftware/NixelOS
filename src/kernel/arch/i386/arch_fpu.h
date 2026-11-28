@@ -1,6 +1,6 @@
 #ifndef KERNEL_ARCH_FPU_H
 #define KERNEL_ARCH_FPU_H
-#include "types.h"
+#include "../../types.h"
 #define ARCH_FPU_X87 1u
 #define ARCH_FPU_FXSR 2u
 #define ARCH_FPU_SSE 4u

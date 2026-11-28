@@ -10,7 +10,7 @@
 #include "b44_regs.h"
 #include "../../drivers/serial.h"
 #include "../../drivers/pci.h"
-#include "../../irq.h"
+#include "../../arch/arch.h"
 #include "../../task.h"
 
 #define COUNT 16U
@@ -144,7 +144,8 @@ static uint8_t disable_core(void) {
     return 1;
 }
 /* Masks the core until b44_poll() has drained the ring. */
-static int b44_interrupt(void) {
+static int b44_interrupt(void* ctx) {
+    (void)ctx;
     if (!irq_armed) return 0;
     uint32_t status = read_reg(B44_ISTAT);
     if (status == 0xFFFFFFFFU || !(status & IRQ_WAKE)) return 0;
@@ -164,7 +165,7 @@ void b44_shutdown(void) {
     irq_armed = 0;
     if (irq_on) {
         write_reg(B44_IMASK, IMASK_DISABLE);
-        irq_unregister(irq_line);
+        arch_irq_unregister(irq_line);
         irq_on = 0;
     }
     if (!mmio || !core_accessible) return;
@@ -302,7 +303,7 @@ uint8_t b44_init(void) {
     ready = 1;
     progress("BCM4401: checking PHY link");
     update_link();
-    irq_on = (uint8_t)irq_register(irq_line, b44_interrupt);
+    irq_on = (uint8_t)arch_irq_register(irq_line, b44_interrupt, 0);
     if (irq_on) irq_arm();
     progress("BCM4401: adapter initialized");
     return 1;

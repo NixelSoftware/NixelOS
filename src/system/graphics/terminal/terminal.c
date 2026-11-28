@@ -3,7 +3,7 @@
 #include "../../shell/commands.h"
 #include "../wm/wm.h"
 #include "../wm/theme.h"
-#include "../../../kernel/paging.h"
+#include "../../../kernel/mm.h"
 
 #define TERM_MAX_LINES 128
 #define TERM_MAX_COLS 256

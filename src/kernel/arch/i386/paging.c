@@ -1,5 +1,6 @@
-#include "mutex.h"
+#include "../../mutex.h"
 #include "paging.h"
+#include "../arch.h"
 
 /* The first 16 MiB contains fixed kernel buffers and the boot stack.
  * Allocate only complete pages advertised as usable by BIOS E820.
@@ -33,29 +34,24 @@ static uint8_t usable_bitmap[FRAME_BITMAP_BYTES];
 static uint32_t detected_total, pool_pages;
 static uint32_t next_frame;
 
-typedef struct __attribute__((packed)) {
-    uint64_t base, length;
-    uint32_t type, attributes;
-} bios_memory_entry_t;
-
 static uint8_t frame_is_usable(uint32_t index) {
     return (usable_bitmap[index >> 3] & (1u << (index & 7u))) != 0;
 }
 
-static void paging_detect_memory(const bios_memory_entry_t* entries, uint32_t count) {
+static void paging_detect_memory(const arch_boot_info_t* boot) {
+    uint32_t count = boot ? boot->region_count : 0;
     detected_total = pool_pages = 0;
     for (uint32_t i = 0; i < FRAME_BITMAP_BYTES; ++i) {
         usable_bitmap[i] = 0;
         frame_bitmap[i] = 0;
     }
-    if (count > 128) return;
     /* Reserved entries win over usable entries, including overlapping ranges. */
     for (uint32_t pass = 0; pass < 2; ++pass) {
         for (uint32_t i = 0; i < count; ++i) {
-            const bios_memory_entry_t* e = &entries[i];
-            if (!(e->attributes & 1) || !e->length || e->base >= FRAME_POOL_LIMIT)
+            const arch_mem_region_t* e = &boot->regions[i];
+            if (!e->length || e->base >= FRAME_POOL_LIMIT)
                 continue;
-            uint8_t usable = e->type == 1;
+            uint8_t usable = e->usable != 0;
             if (usable != (pass == 0)) continue;
             uint64_t end = e->base + e->length;
             if (end < e->base || end > FRAME_POOL_LIMIT) end = FRAME_POOL_LIMIT;
@@ -81,13 +77,13 @@ static void paging_detect_memory(const bios_memory_entry_t* entries, uint32_t co
     for (uint32_t address = 0; address < FRAME_POOL_BASE; address += PAGE_SIZE) {
         uint8_t usable = 0, reserved = 0;
         for (uint32_t i = 0; i < count; ++i) {
-            const bios_memory_entry_t* e = &entries[i];
-            if (!(e->attributes & 1) || !e->length) continue;
+            const arch_mem_region_t* e = &boot->regions[i];
+            if (!e->length) continue;
             uint64_t end = e->base + e->length;
             if (end < e->base) end = (uint64_t)-1;
-            if (e->type == 1 && e->base <= address && end >= address + PAGE_SIZE)
+            if (e->usable && e->base <= address && end >= address + PAGE_SIZE)
                 usable = 1;
-            if (e->type != 1 && e->base < address + PAGE_SIZE && end > address)
+            if (!e->usable && e->base < address + PAGE_SIZE && end > address)
                 reserved = 1;
         }
         if (usable && !reserved) detected_total += PAGE_SIZE;
@@ -136,7 +132,7 @@ static uint32_t* address_space_low_table(address_space_t* space) {
     return space->app_page_table;
 }
 
-void paging_init(void) {
+void paging_init(const arch_boot_info_t* boot) {
     for (uint32_t i = 0; i < PAGE_TABLE_ENTRIES; i++)
         low_page_table[i] = (i * PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITABLE;
 
@@ -144,8 +140,7 @@ void paging_init(void) {
     for (uint32_t i = 1; i < PAGE_DIRECTORY_ENTRIES; i++)
         page_directory[i] = (i << 22) | PAGE_PRESENT | PAGE_WRITABLE | PAGE_SIZE_4M;
 
-    paging_detect_memory((const bios_memory_entry_t*)0x5004,
-                         *(volatile uint32_t*)0x5000);
+    paging_detect_memory(boot);
     active_directory = (uint32_t)page_directory;
 
     uint32_t cr4;
@@ -302,7 +297,8 @@ int paging_address_space_alloc_page(address_space_t* space, uint32_t virtual_add
 void paging_address_space_destroy(address_space_t* space) {
     MUTEX_GUARD(kernel_mutex);
     if (!space || !space->directory || !space->app_page_table) return;
-    if (active_directory == (uint32_t)space->directory) paging_activate_kernel();
+    if (active_directory == (uint32_t)space->directory)
+        arch_switch_address_space((uint32_t)page_directory);
 
     uint32_t app_page_count = (APP_VIRTUAL_LIMIT - APP_VIRTUAL_BASE) / PAGE_SIZE;
     for (uint32_t i = 0; i < app_page_count; i++) {
@@ -355,7 +351,7 @@ static void heap_release(uint32_t* directory, uint32_t address, uint32_t pages) 
             paging_frame_free((uint32_t)table);
         }
     }
-    paging_activate_directory((uint32_t)directory);
+    arch_switch_address_space((uint32_t)directory);
 }
 
 uint32_t paging_user_alloc(uint32_t bytes) {
@@ -378,7 +374,7 @@ uint32_t paging_user_alloc(uint32_t bytes) {
                 (i == 0 ? PAGE_ALLOC_FIRST : 0) |
                 (i + 1 == pages ? PAGE_ALLOC_LAST : 0);
         }
-        paging_activate_directory((uint32_t)directory);
+        arch_switch_address_space((uint32_t)directory);
         return start;
     }
     return 0;
@@ -405,12 +401,19 @@ int paging_user_free(uint32_t address) {
     return -1;
 }
 
-void paging_activate(address_space_t* space) {
-    if (!space || !space->directory) return;
-    paging_activate_directory((uint32_t)space->directory);
+uint32_t arch_current_address_space(void) {
+    return active_directory;
 }
 
-void paging_activate_directory(uint32_t directory_address) {
+uint32_t arch_kernel_address_space(void) {
+    return (uint32_t)page_directory;
+}
+
+void arch_flush_tlb(void) {
+    __asm__ volatile ("mov %%cr3, %%eax; mov %%eax, %%cr3" : : : "eax", "memory");
+}
+
+void arch_switch_address_space(uint32_t directory_address) {
     if (!directory_address || (directory_address & (PAGE_SIZE - 1u))) return;
     uint32_t flags = task_irq_save();
     /* Apps created before a late PCI probe also inherit its MMIO tables. */
@@ -424,14 +427,49 @@ void paging_activate_directory(uint32_t directory_address) {
     task_irq_restore(flags);
 }
 
-void paging_activate_kernel(void) {
-    paging_activate_directory((uint32_t)page_directory);
+#define ARCH_ADDRESS_SPACE_SLOTS 16u
+
+struct arch_address_space {
+    address_space_t space;
+    uint32_t in_use;
+};
+static struct arch_address_space address_spaces[ARCH_ADDRESS_SPACE_SLOTS];
+
+arch_address_space_t* arch_address_space_create(void) {
+    struct arch_address_space* slot = 0;
+    uint32_t flags = task_irq_save();
+    for (uint32_t i = 0; i < ARCH_ADDRESS_SPACE_SLOTS; i++)
+        if (!address_spaces[i].in_use) {
+            slot = &address_spaces[i];
+            slot->in_use = 1;
+            break;
+        }
+    task_irq_restore(flags);
+    if (!slot) return 0;
+    if (paging_address_space_create(&slot->space) != 0) {
+        slot->in_use = 0;
+        return 0;
+    }
+    return (arch_address_space_t*)slot;
 }
 
-uint32_t paging_current_directory(void) {
-    return active_directory;
+void arch_address_space_destroy(arch_address_space_t* space) {
+    if (!space) return;
+    struct arch_address_space* slot = (struct arch_address_space*)space;
+    paging_address_space_destroy(&slot->space);
+    uint32_t flags = task_irq_save();
+    slot->in_use = 0;
+    task_irq_restore(flags);
 }
 
-uint32_t paging_kernel_directory(void) {
-    return (uint32_t)page_directory;
+int arch_address_space_map(arch_address_space_t* space, uint32_t virt,
+                           uint8_t writable, uint32_t* phys_out) {
+    if (!space) return -1;
+    return paging_address_space_alloc_page(&((struct arch_address_space*)space)->space,
+                                           virt, writable, phys_out);
+}
+
+uint32_t arch_address_space_root(const arch_address_space_t* space) {
+    if (!space) return 0;
+    return (uint32_t)((const struct arch_address_space*)space)->space.directory;
 }

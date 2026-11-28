@@ -1,7 +1,7 @@
 #include "startup_trace.h"
 #if STARTUP_TRACE
 #include "task.h"
-#include "paging.h"
+#include "mm.h"
 #define TRACE_PAGES 2048u
 #define RECORDS_PER_PAGE 128u
 #define TRACE_CAPACITY (TRACE_PAGES * RECORDS_PER_PAGE)
@@ -25,14 +25,8 @@ trace_state_t startup_trace_state;
 static uint64_t irq_started[MAX_TASKS], last_timer, last_poll;
 static uint32_t irq_caller[MAX_TASKS], timer_task;
 static int initialized, clock_ready;
-static uint32_t raw_save(void) {
-    uint32_t flags;
-    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-static void raw_restore(uint32_t flags) {
-    __asm__ volatile ("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
-}
+static uint32_t raw_save(void) { return arch_irq_save(); }
+static void raw_restore(uint32_t flags) { arch_irq_restore(flags); }
 static uint32_t task_id(void) { return current_task ? current_task->id : 0xffffu; }
 static uint64_t now_locked(void) { return clock_ready ? scheduler_clock() : 0; }
 static void put(uint64_t now, uint32_t event, uint32_t task, uint32_t a, uint32_t b, uint32_t c) {

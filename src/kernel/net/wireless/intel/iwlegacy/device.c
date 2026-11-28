@@ -8,7 +8,7 @@
 #include "station.h"
 #include "fh.h"
 #include "../../../../fs.h"
-#include "../../../../paging.h"
+#include "../../../../mm.h"
 #include "../../../../mutex.h"
 #include "../../../../drivers/delay.h"
 #define FW_MAX (24u + 2u * IL3945_INST_MAX + 2u * IL3945_DATA_MAX + IL3945_BOOT_MAX)

@@ -1,6 +1,6 @@
 #include "linux_elf.h"
 #include "../fs.h"
-#include "../paging.h"
+#include "../arch/arch.h"
 #include "../drivers/serial.h"
 
 int linux_is_elf(const uint8_t* header_bytes) {
@@ -12,7 +12,7 @@ int linux_is_elf(const uint8_t* header_bytes) {
            (ehdr->e_machine == 3);    /* x86 (EM_386) */
 }
 
-int linux_load_elf(const char* path, address_space_t* space,
+int linux_load_elf(const char* path, arch_address_space_t* space,
                    uint32_t* out_entry, uint32_t* out_esp, uint32_t* out_brk) {
     Elf32_Ehdr ehdr;
     if (fs_read_file_at(path, (uint8_t*)&ehdr, sizeof(ehdr), 0) != sizeof(ehdr)) {
@@ -40,7 +40,7 @@ int linux_load_elf(const char* path, address_space_t* space,
 
         /* Map with writable=1, physical_out=0 */
         for (uint32_t page = vaddr_start; page < vaddr_end; page += PAGE_SIZE) {
-            paging_address_space_alloc_page(space, page, 1, 0);
+            arch_address_space_map(space, page, 1, 0);
         }
 
         /* Read segment bytes directly into virtual memory */
@@ -66,7 +66,7 @@ int linux_load_elf(const char* path, address_space_t* space,
     uint32_t stack_base = 0xBFF00000u;
     uint32_t stack_top  = 0xBFFFF000u;
     for (uint32_t p = stack_base; p < stack_top; p += PAGE_SIZE) {
-        paging_address_space_alloc_page(space, p, 1, 0);
+        arch_address_space_map(space, p, 1, 0);
     }
 
     /* Program brk directly above data/bss */

@@ -131,55 +131,98 @@ CFLAGS := -DSTARTUP_TRACE=$(STARTUP_TRACE) -DSTARTUP_PROFILE=$(STARTUP_PROFILE) 
           -DDEBUG_SUBSYSTEMS=$(DEBUG_SUBSYSTEMS) -DNO_AUDIO_DEBUG=$(NO_AUDIO_DEBUG) $(OOBE_VAL) -Isrc/include
 NASMFLAGS := -f $(NASM_FORMAT) -DSTARTUP_TRACE=$(STARTUP_TRACE)
 
-KERNEL_C := \
-  src/kernel/memory.c src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c src/system/shell/commands.c \
-  src/system/shell/network_commands.c src/system/shell/wifi_commands.c src/system/init/main.c \
+ARCH ?= i386
+BOARD ?= pc
+ARCH_DIR := src/kernel/arch/$(ARCH)
+
+ifeq ($(ARCH),i386)
+  ARCH_C := $(ARCH_DIR)/idt.c $(ARCH_DIR)/irq.c $(ARCH_DIR)/paging.c \
+            $(ARCH_DIR)/arch_i386.c $(ARCH_DIR)/arch_fpu.c $(ARCH_DIR)/timer.c
+  ARCH_ASM := $(ARCH_DIR)/kernel_entry.asm $(ARCH_DIR)/idt_asm.asm \
+              $(ARCH_DIR)/task_switch.asm $(ARCH_DIR)/gdt_asm.asm
+else
+  $(error ARCH=$(ARCH) is not implemented; only i386 builds today)
+endif
+
+KERNEL_CORE_C := \
+  src/kernel/memory.c src/kernel/users.c src/kernel/startup_trace.c src/kernel/main.c \
+  src/system/shell/commands.c src/system/shell/network_commands.c src/system/shell/wifi_commands.c \
+  src/system/init/main.c \
   src/system/graphics/wm/wm.c src/system/graphics/wm/presentation.c \
-  src/system/graphics/widgets.c src/system/graphics/text_layout.c src/system/graphics/settings/settings.c src/system/graphics/session.c \
-  src/system/services/input/input.c src/system/services/audio/system_sound.c src/system/services/audio/mixer.c src/system/loader/app_loader.c \
-  src/kernel/idt.c src/kernel/irq.c src/kernel/paging.c src/kernel/arch_i386.c src/kernel/arch_fpu.c src/kernel/syscall.c src/system/init/splash/startscreen.c \
+  src/system/graphics/widgets.c src/system/graphics/text_layout.c \
+  src/system/graphics/settings/settings.c src/system/graphics/session.c \
+  src/system/services/input/input.c src/system/services/audio/system_sound.c \
+  src/system/services/audio/mixer.c src/system/loader/app_loader.c \
+  src/kernel/syscall.c src/system/init/splash/startscreen.c \
   src/system/init/splash/logo_data.c src/system/graphics/screenshot/screenshot.c \
   src/system/graphics/image/png.c src/kernel/drivers/display.c src/kernel/hal/video.c \
-  src/kernel/drivers/display/vga.c src/kernel/drivers/display/intel_gma.c src/kernel/drivers/display/i915/i915.c src/kernel/drivers/display/i915/gen4_engine.c src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c src/kernel/drivers/display/virgl.c \
-  src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
-  src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
-  src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
-  src/kernel/net/realtek/r8169.c src/kernel/net/wireless/broadcom/b43/b43.c \
-  src/kernel/net/wireless/broadcom/b43/b43_firmware.c src/kernel/net/wireless/broadcom/b43/b43_boot.c src/kernel/hal/wifi.c \
-  src/kernel/net/wireless/intel/iwlegacy/iwlegacy.c src/kernel/net/wireless/intel/iwlegacy/3945.c \
-  src/kernel/net/wireless/intel/iwlegacy/firmware.c src/kernel/net/wireless/intel/iwlegacy/eeprom.c \
-  src/kernel/net/wireless/intel/iwlegacy/bsm.c src/kernel/net/wireless/intel/iwlegacy/rx.c \
-  src/kernel/net/wireless/intel/iwlegacy/session.c src/kernel/net/wireless/intel/iwlegacy/device.c \
-  src/kernel/net/wireless/intel/iwlegacy/command.c src/kernel/net/wireless/intel/iwlegacy/scan.c \
-  src/kernel/net/wireless/ieee80211.c src/kernel/net/wireless/intel/iwlegacy/power.c src/kernel/net/wireless/intel/iwlegacy/tx.c src/kernel/net/wireless/intel/iwlegacy/station.c src/kernel/net/wireless/intel/iwlegacy/bss.c src/kernel/net/wireless/intel/iwlegacy/rsn.c src/kernel/net/wireless/intel/iwlegacy/pci_power.c \
-  $(wildcard src/kernel/net/wireless/intel/iwlegacy/station/*.c) \
-  src/kernel/drivers/serial.c src/kernel/drivers/floppy.c src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
-  src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
-  src/kernel/drivers/ps2.c src/kernel/hal/net.c \
-  src/kernel/net/ipv4.c src/kernel/net/etherframe.c src/kernel/net/arp.c \
+  src/kernel/hal/wifi.c src/kernel/net/wireless/ieee80211.c \
+  src/kernel/hal/net.c src/kernel/net/ipv4.c src/kernel/net/etherframe.c src/kernel/net/arp.c \
   src/kernel/net/tcp.c src/kernel/net/udp.c src/kernel/net/icmp.c \
   src/kernel/net/ntp.c src/kernel/net/dhcp.c src/kernel/net/dns.c src/kernel/fs.c \
   src/system/graphics/wm/cursor.c src/kernel/drivers/display/font.c \
   src/kernel/keyboard.c src/system/graphics/fonts/univers85ebo_16.c \
   src/system/graphics/wm/desktop.c src/kernel/task.c src/kernel/scheduler.c \
   src/kernel/sched_policy.c src/kernel/sched_wide.c src/kernel/mutex.c \
-  src/system/graphics/dialog/dialog.c src/system/graphics/dialog/shutdown.c src/apps/notepad/notepad.c \
-  src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c \
-  src/kernel/drivers/rtc.c src/system/graphics/wm/desktop_wallpaper.c \
-  src/system/icons/network.h src/kernel/hal/audio.c \
-  src/system/icons/sound.h src/system/graphics/wm/start.c \
-  src/kernel/hal/usb.c src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/ehci_handoff.c src/kernel/drivers/usb/ehci.c src/kernel/drivers/usb/mass_storage.c \
+  src/system/graphics/dialog/dialog.c src/system/graphics/dialog/shutdown.c \
+  src/apps/notepad/notepad.c src/apps/viewer/viewer.c src/system/graphics/terminal/terminal.c \
+  src/system/graphics/wm/desktop_wallpaper.c src/system/icons/network.h \
+  src/kernel/hal/audio.c src/system/icons/sound.h src/system/graphics/wm/start.c \
+  src/kernel/hal/usb.c src/kernel/drivers/usb/mass_storage.c \
   src/kernel/login.c src/kernel/emergency.c src/kernel/bootlog.c \
-  src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c \
   src/system/graphics/dialog/crash_dialog.c
 
-KERNEL_ASM := src/kernel/kernel_entry.asm src/kernel/idt_asm.asm \
-              src/kernel/task_switch.asm src/kernel/gdt_asm.asm
+BOARD_C_PC := \
+  src/kernel/drivers/display/vga.c src/kernel/drivers/display/intel_gma.c \
+  src/kernel/drivers/display/i915/i915.c src/kernel/drivers/display/i915/gen4_engine.c \
+  src/kernel/drivers/display/qemu.c src/kernel/drivers/display/virtio_gpu.c \
+  src/kernel/drivers/display/virgl.c \
+  src/kernel/drivers/pci.c src/kernel/drivers/delay.c src/kernel/net/phys/broadcom.c \
+  src/kernel/drivers/ata.c src/kernel/net/amd/pcnet.c \
+  src/kernel/net/intel/e1000.c src/kernel/net/broadcom/tg3.c src/kernel/net/broadcom/b44.c \
+  src/kernel/net/realtek/r8169.c src/kernel/net/wireless/broadcom/b43/b43.c \
+  src/kernel/net/wireless/broadcom/b43/b43_firmware.c \
+  src/kernel/net/wireless/broadcom/b43/b43_boot.c \
+  src/kernel/net/wireless/intel/iwlegacy/iwlegacy.c \
+  src/kernel/net/wireless/intel/iwlegacy/3945.c \
+  src/kernel/net/wireless/intel/iwlegacy/firmware.c \
+  src/kernel/net/wireless/intel/iwlegacy/eeprom.c \
+  src/kernel/net/wireless/intel/iwlegacy/bsm.c \
+  src/kernel/net/wireless/intel/iwlegacy/rx.c \
+  src/kernel/net/wireless/intel/iwlegacy/session.c \
+  src/kernel/net/wireless/intel/iwlegacy/device.c \
+  src/kernel/net/wireless/intel/iwlegacy/command.c \
+  src/kernel/net/wireless/intel/iwlegacy/scan.c \
+  src/kernel/net/wireless/intel/iwlegacy/power.c \
+  src/kernel/net/wireless/intel/iwlegacy/tx.c \
+  src/kernel/net/wireless/intel/iwlegacy/station.c \
+  src/kernel/net/wireless/intel/iwlegacy/bss.c \
+  src/kernel/net/wireless/intel/iwlegacy/rsn.c \
+  src/kernel/net/wireless/intel/iwlegacy/pci_power.c \
+  $(wildcard src/kernel/net/wireless/intel/iwlegacy/station/*.c) \
+  src/kernel/drivers/serial.c src/kernel/drivers/floppy.c \
+  src/kernel/drivers/sb16_driver.c src/kernel/drivers/hda.c src/kernel/drivers/pc_speaker.c \
+  src/kernel/drivers/power.c src/kernel/drivers/acpi.c \
+  src/kernel/drivers/ps2.c src/kernel/drivers/rtc.c \
+  src/kernel/drivers/usb/uhci.c src/kernel/drivers/usb/ehci_handoff.c \
+  src/kernel/drivers/usb/ehci.c \
+  src/kernel/drivers/nvme.c src/kernel/drivers/ahci.c
+
+ifeq ($(BOARD),pc)
+  BOARD_C := $(BOARD_C_PC)
+  LDSCRIPT := $(ARCH_DIR)/kernel-pc.ld
+else
+  $(error BOARD=$(BOARD) is not implemented; only pc builds today)
+endif
+
+KERNEL_C := $(KERNEL_CORE_C) $(BOARD_C) $(ARCH_C)
+KERNEL_ASM := $(ARCH_ASM)
 KERNEL_OBJ := $(KERNEL_ASM:.asm=.o) $(KERNEL_C:.c=.o)
 KERNEL_HEADERS := src/kernel/startup_trace.h src/kernel/task.h src/kernel/scheduler.h \
                   src/kernel/mutex.h src/kernel/sched_policy.h src/kernel/sched_wide.h \
-                  src/kernel/arch_fpu.h
-$(KERNEL_C:.c=.o): CFLAGS += -DNIXEL_KERNEL=1
+                  src/kernel/mm.h src/kernel/arch/arch.h $(ARCH_DIR)/arch_fpu.h \
+                  $(ARCH_DIR)/paging.h $(ARCH_DIR)/idt.h $(ARCH_DIR)/irq.h
+$(KERNEL_C:.c=.o): CFLAGS += -DNIXEL_KERNEL=1 -Isrc/kernel
 $(KERNEL_OBJ): $(KERNEL_HEADERS)
 
 .PHONY: FORCE_AUDIO_DEBUG_CONFIG
@@ -195,6 +238,7 @@ APPS := $(STANDARD_APPS) doom syndig qksrv qkftp glcube glscene
 APP_BINS := $(addsuffix .bin,$(APPS)) browser.bin fastfetch.bin mail.bin sdkhost.bin
 # Compiler support routines (memcpy/memset/memmove/memcmp) for freestanding apps.
 APP_RUNTIME := src/system/user/runtime.o
+APP_CRT0 := src/system/user/crt0.o
 
 .PHONY: all run clean clean-build FORCE_VERSION test-virgl
 
@@ -213,7 +257,7 @@ all: os.img
 %.o: %.asm Makefile
 	$(NASM) $(NASMFLAGS) $< -o $@
 
-$(STANDARD_APPS:%=%.bin): %.bin: Makefile src/apps/%/entry.o src/apps/%/main.o $(APP_RUNTIME)
+$(STANDARD_APPS:%=%.bin): %.bin: Makefile $(APP_CRT0) src/apps/%/main.o $(APP_RUNTIME)
 	$(LD) $(LDFLAGS) -Ttext 0xC00000 -e _start $(filter %.o,$^) -o src/apps/$*/$*.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/apps/$*/$*.tmp $@
 	$(PYTHON) -c "from pathlib import Path; Path('src/apps/$*/$*.tmp').unlink(missing_ok=True)"
@@ -252,7 +296,7 @@ SYNDIG_C := \
     $(SYNDIG_DIR)/upstream/midi.c \
     $(SYNDIG_DIR)/upstream/oscillator.c \
     $(SYNDIG_DIR)/upstream/polyphony.c
-SYNDIG_OBJ := $(SYNDIG_DIR)/entry.o $(SYNDIG_C:.c=.o) $(APP_RUNTIME)
+SYNDIG_OBJ := $(APP_CRT0) $(SYNDIG_C:.c=.o) $(APP_RUNTIME)
 SYNDIG_HEADERS := $(wildcard $(SYNDIG_DIR)/*.h $(SYNDIG_DIR)/compat/*.h $(SYNDIG_DIR)/upstream/*.h)
 $(SYNDIG_C:.c=.o): $(SYNDIG_HEADERS)
 $(SYNDIG_DIR)/main.o: src/system/graphics/wm/theme.h
@@ -280,7 +324,7 @@ BROWSER_C := $(NIXPLORER_DIR)/browser/main.c \
              $(NIXPLORER_DIR)/engine/layout/grid.c \
              $(NIXPLORER_DIR)/engine/parser/css_grid.c \
              $(NIXPLORER_DIR)/engine/parser/css_color.c
-BROWSER_OBJ := $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/browser/entry.o $(BROWSER_C:.c=.o) $(APP_RUNTIME)
+BROWSER_OBJ := $(APP_CRT0) $(NIXPLORER_DIR)/engine/platform/trust.o $(BROWSER_C:.c=.o) $(APP_RUNTIME)
 BROWSER_HEADERS := $(wildcard $(NIXPLORER_DIR)/engine/*/*.h)
 $(BROWSER_C:.c=.o): $(BROWSER_HEADERS)
 $(NIXPLORER_DIR)/engine/parser/html.o: $(NIXPLORER_DIR)/engine/parser/entities.inc
@@ -305,7 +349,7 @@ QUARK_C := \
     $(QUARK_DIR)/404.c \
     $(QUARK_DIR)/logger.c \
     $(QUARK_DIR)/dirlisting.c
-QUARK_OBJ := $(QUARK_DIR)/entry.o $(QUARK_C:.c=.o) $(APP_RUNTIME)
+QUARK_OBJ := $(APP_CRT0) $(QUARK_C:.c=.o) $(APP_RUNTIME)
 $(QUARK_C:.c=.o): $(QUARK_DIR)/quark.h $(QUARK_DIR)/logger.h $(QUARK_DIR)/dirlisting.h
 qksrv.bin: Makefile $(QUARK_OBJ)
 	$(LD) $(LDFLAGS) --omagic -Ttext 0xC00000 -e _start $(filter %.o,$^) -o $(QUARK_DIR)/qksrv.tmp
@@ -317,7 +361,7 @@ FTP_DIR := src/apps/qkftp
 FTP_C := \
     $(FTP_DIR)/main.c \
     $(FTP_DIR)/commands.c
-FTP_OBJ := $(FTP_DIR)/entry.o $(FTP_C:.c=.o) $(APP_RUNTIME)
+FTP_OBJ := $(APP_CRT0) $(FTP_C:.c=.o) $(APP_RUNTIME)
 $(FTP_C:.c=.o): $(FTP_DIR)/ftp.h
 
 qkftp.bin: Makefile $(FTP_OBJ)
@@ -330,7 +374,7 @@ qkftp.bin: Makefile $(FTP_OBJ)
 # headers are in src/include/GL (already on the global include path).
 GLCUBE_DIR := src/apps/glcube
 GLCUBE_LIBS := src/system/libraries/gl/libnixelgl.a src/system/libraries/m/libnixelm.a
-GLCUBE_OBJ := $(GLCUBE_DIR)/entry.o $(GLCUBE_DIR)/main.o $(APP_RUNTIME)
+GLCUBE_OBJ := $(APP_CRT0) $(GLCUBE_DIR)/main.o $(APP_RUNTIME)
 $(GLCUBE_DIR)/main.o: CFLAGS += -fno-builtin -fno-stack-protector
 $(GLCUBE_DIR)/main.o: src/include/GL/gl.h src/include/GL/glut.h $(GLCUBE_DIR)/texture_data.h
 glcube.bin: Makefile $(GLCUBE_DIR)/app.ld $(GLCUBE_OBJ) $(GLCUBE_LIBS)
@@ -341,7 +385,7 @@ glcube.bin: Makefile $(GLCUBE_DIR)/app.ld $(GLCUBE_OBJ) $(GLCUBE_LIBS)
 # OpenGL scene: a lit, fogged brick-floor scene with a textured gluSphere.
 # Same system libraries as glcube; main.c also uses the math library directly.
 GLSCENE_DIR := src/apps/glscene
-GLSCENE_OBJ := $(GLSCENE_DIR)/entry.o $(GLSCENE_DIR)/main.o $(APP_RUNTIME)
+GLSCENE_OBJ := $(APP_CRT0) $(GLSCENE_DIR)/main.o $(APP_RUNTIME)
 $(GLSCENE_DIR)/main.o: CFLAGS += -Isrc/system/libraries/m -fno-builtin -fno-stack-protector
 $(GLSCENE_DIR)/main.o: src/include/GL/gl.h src/include/GL/glut.h $(GLSCENE_DIR)/boing_data.h $(GLSCENE_DIR)/brick_data.h
 glscene.bin: Makefile $(GLSCENE_DIR)/app.ld $(GLSCENE_OBJ) $(GLCUBE_LIBS)
@@ -357,8 +401,8 @@ fastfetch.bin: src/include/os_version.h
 src/boot.bin: Makefile src/boot/boot.asm
 	$(NASM) -f bin src/boot/boot.asm -o $@
 
-src/kernel/kernel.bin: Makefile kernel.ld $(KERNEL_OBJ)
-	$(LD) $(LDFLAGS) -T kernel.ld $(filter %.o,$^) -o src/kernel/kernel.tmp
+src/kernel/kernel.bin: Makefile $(LDSCRIPT) $(KERNEL_OBJ)
+	$(LD) $(LDFLAGS) -T $(LDSCRIPT) $(filter %.o,$^) -o src/kernel/kernel.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss --remove-section=.reloc src/kernel/kernel.tmp $@
 ifeq ($(STARTUP_TRACE),1)
 	$(PYTHON) -c "from pathlib import Path; Path('src/kernel/kernel.trace.elf').write_bytes(Path('src/kernel/kernel.tmp').read_bytes())"
@@ -419,8 +463,8 @@ src/kernel/net/broadcom/tg3.o src/kernel/net/phys/broadcom.o: src/kernel/net/phy
 $(KERNEL_C:.c=.o): src/kernel/hal/net.h src/kernel/hal/net_types.h
 src/kernel/net/amd/pcnet.o: src/kernel/net/amd/pcnet.h
 src/kernel/net/intel/e1000.o: src/kernel/net/intel/e1000.h
-src/kernel/irq.o src/kernel/idt.o src/kernel/hal/net.o src/kernel/net/intel/e1000.o src/kernel/net/amd/pcnet.o: src/kernel/irq.h
-src/kernel/net/realtek/r8169.o src/kernel/net/broadcom/b44.o src/kernel/net/broadcom/tg3.o: src/kernel/irq.h
+$(ARCH_DIR)/irq.o $(ARCH_DIR)/idt.o src/kernel/hal/net.o src/kernel/net/intel/e1000.o src/kernel/net/amd/pcnet.o: $(ARCH_DIR)/irq.h
+src/kernel/net/realtek/r8169.o src/kernel/net/broadcom/b44.o src/kernel/net/broadcom/tg3.o: $(ARCH_DIR)/irq.h
 src/kernel/net/realtek/r8169.o: src/kernel/net/realtek/r8169.h
 src/kernel/net/broadcom/tg3.o: src/kernel/net/broadcom/tg3.h
 src/kernel/hal/net.o: src/kernel/net/amd/pcnet.h src/kernel/net/intel/e1000.h src/kernel/net/broadcom/tg3.h src/kernel/net/realtek/r8169.h
@@ -456,7 +500,7 @@ DOOM_ENGINE := \
     r_draw r_main r_plane r_segs r_sky r_things sha1 sounds \
     statdump st_lib st_stuff s_sound tables v_video wi_stuff w_checksum \
     w_file w_main w_wad z_zone w_file_stdc i_input i_video doomgeneric
-DOOM_OBJ := $(DOOM_DIR)/entry.o $(DOOM_DIR)/platform.o $(DOOM_DIR)/audio.o \
+DOOM_OBJ := $(APP_CRT0) $(DOOM_DIR)/platform.o $(DOOM_DIR)/audio.o \
             $(DOOM_DIR)/compat/libc.o $(addprefix $(DOOM_DIR)/doomgeneric/,$(addsuffix .o,$(DOOM_ENGINE)))
 $(DOOM_OBJ): CFLAGS += -Isrc/apps/doom/compat -DNIXEL_DOOM -DFEATURE_SOUND -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -fno-builtin -fno-stack-protector
 $(DOOM_OBJ): $(wildcard src/apps/doom/compat/*.h src/apps/doom/compat/sys/*.h src/apps/doom/doomgeneric/*.h)
@@ -579,7 +623,7 @@ test-paging:
 	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_paging.py
 
 # The generic C rule does not track included headers.
-src/kernel/paging.o src/kernel/syscall.o: src/kernel/paging.h src/system/user/sys_api.h
+$(ARCH_DIR)/paging.o src/kernel/syscall.o: $(ARCH_DIR)/paging.h src/kernel/mm.h src/system/user/sys_api.h
 src/apps/doom/compat/libc.o: src/system/user/sys_api.h
 
 # Reuse wolfCrypt SHA-1/HMAC/PBKDF2 with a kernel-only, allocation-free config.
@@ -621,7 +665,7 @@ test-wifi-status:
 test-mmio-paging:
 	CC="$(CC)" LD="$(LD)" NASM="$(NASM)" QEMU="$(QEMU)" $(PYTHON) tools/tests/test_mmio_paging.py
 
-$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o: src/kernel/paging.h
+$(IWLEGACY_DIR)/iwlegacy.o $(IWLEGACY_DIR)/device.o: src/kernel/mm.h
 
 # Upstream timing-noise collection MUST be built without optimization.
 JITTER_DIR := src/kernel/crypto/vendor/jitterentropy
@@ -649,7 +693,7 @@ test-wifi-network:
 	$(CC) -std=c99 -O2 -Wall -Wextra -Werror src/kernel/net/tests/dhcp_options_test.c -o /tmp/nixel-dhcp-options
 	/tmp/nixel-dhcp-options
 
-MAIL_OBJ := src/apps/mail/discovery.o $(NIXPLORER_DIR)/engine/net/response.o src/apps/mail/entry.o src/apps/mail/main.o src/apps/mail/mail.o src/apps/mail/render.o \
+MAIL_OBJ := $(APP_CRT0) src/apps/mail/discovery.o $(NIXPLORER_DIR)/engine/net/response.o src/apps/mail/main.o src/apps/mail/mail.o src/apps/mail/render.o \
  $(NIXPLORER_DIR)/engine/platform/tls.o $(NIXPLORER_DIR)/engine/platform/tls_heap.o \
  $(NIXPLORER_DIR)/engine/platform/trust.o $(NIXPLORER_DIR)/engine/parser/html.o \
  $(NIXPLORER_DIR)/engine/dom/document.o $(NIXPLORER_DIR)/engine/font/font.o $(APP_RUNTIME)
@@ -681,7 +725,7 @@ src/apps/ncc/main.o src/apps/designer/main.o src/apps/sdkhost/main.o src/sdk/ui.
 src/sdk/ui.o src/sdk/objects.o src/apps/sdkhost/main.o: src/system/user/sys_api.h src/system/user/window_api.h src/system/graphics/wm/theme.h
 ncc.bin: src/sdk/compiler.o src/sdk/design.o src/sdk/project.o
 designer.bin: src/sdk/ui.o src/sdk/compiler.o src/sdk/design.o src/sdk/editor.o src/sdk/project.o
-sdkhost.bin: Makefile src/sdk/app.ld src/apps/sdkhost/entry.o src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/objects.o $(APP_RUNTIME)
+sdkhost.bin: Makefile src/sdk/app.ld $(APP_CRT0) src/apps/sdkhost/main.o src/sdk/ui.o src/sdk/objects.o $(APP_RUNTIME)
 	$(LD) $(LDFLAGS) -T src/sdk/app.ld $(filter %.o,$^) -o src/apps/sdkhost/sdkhost.tmp
 	$(OBJCOPY) -O binary --remove-section=.bss src/apps/sdkhost/sdkhost.tmp $@
 .PHONY: sdk test-sdk

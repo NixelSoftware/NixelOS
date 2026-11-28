@@ -1,6 +1,6 @@
 #include "screenshot.h"
 #include "../../../kernel/mutex.h"
-#include "../../../kernel/paging.h"
+#include "../../../kernel/mm.h"
 #include "../../../kernel/fs.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../../kernel/drivers/serial.h"

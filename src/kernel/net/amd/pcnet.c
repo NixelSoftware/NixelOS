@@ -1,6 +1,6 @@
 #include "pcnet.h"
 #include "../../drivers/pci.h"
-#include "../../irq.h"
+#include "../../arch/arch.h"
 #include "../../task.h"
 
 #define PCNET_SW_RDP 0x10
@@ -115,7 +115,8 @@ static void pcnet_start(void) {
 
 /* Drops IENA until net_poll() has drained the ring. RAP is restored because
  * the interrupted code may be between its address and data accesses. */
-static int pcnet_interrupt(void) {
+static int pcnet_interrupt(void* ctx) {
+    (void)ctx;
     if (!irq_armed) return 0;
     uint32_t address = inl(net_io_base + PCNET_DW_RAP);
     uint32_t status = pcnet_read(0);
@@ -253,7 +254,7 @@ uint8_t net_init(uint16_t io_base) {
             pcnet_start();
             net_ready = 1;
             diagnostics.initialized = 1;
-            irq_on = irq_register(irq_line, pcnet_interrupt);
+            irq_on = arch_irq_register(irq_line, pcnet_interrupt, 0);
             if (irq_on) pcnet_arm();
             return 1;
         }
@@ -269,7 +270,7 @@ void net_shutdown(void) {
     if (!net_ready) return;
     irq_armed = 0;
     pcnet_write(0, CSR0_STOP);
-    if (irq_on) irq_unregister(irq_line);
+    if (irq_on) arch_irq_unregister(irq_line);
     irq_on = 0;
     inw(net_io_base + PCNET_SW_RESET);
     net_ready = 0;

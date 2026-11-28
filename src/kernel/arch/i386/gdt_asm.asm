@@ -3,10 +3,10 @@ section .text
 
 global gdt_load
 global tss_load
-global arch_i386_enter_user
+global arch_enter_user
 global arch_user_kernel_esp
 global arch_user_exit_requested
-extern arch_i386_set_kernel_stack
+extern arch_set_kernel_stack
 
 section .data
 align 4
@@ -33,7 +33,7 @@ tss_load:
     ret
 
 ; SYS_EXIT restores this task's kernel frame; the scheduler saves its pointer.
-arch_i386_enter_user:
+arch_enter_user:
     mov eax, [esp + 4]
     mov ecx, [esp + 8]
     pushfd
@@ -48,7 +48,7 @@ arch_i386_enter_user:
     mov edi, eax
     mov esi, ecx
     push esp
-    call arch_i386_set_kernel_stack
+    call arch_set_kernel_stack
     add esp, 4
     push dword 0x23
     push esi

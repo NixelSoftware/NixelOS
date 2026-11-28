@@ -10,21 +10,25 @@ static uint32_t task_irq_save(void) {
 static void task_irq_restore(uint32_t flags) {
     __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
 }
-#include "../paging.c"
+#include "../arch/i386/paging.c"
 static void check(int ok) {
     if (ok) return;
     __asm__ volatile("outl %0, %1" :: "a"(0x11), "Nd"((uint16_t)0xf4));
     for (;;) __asm__ volatile("hlt");
 }
 void test_main(void) {
-    bios_memory_entry_t* e = (bios_memory_entry_t*)0x5004;
-    e[0] = (bios_memory_entry_t){0x100000,63u*1024*1024,1,1};
-    e[1] = (bios_memory_entry_t){0x90000000u,PAGE_SIZE,1,1};
-    *(volatile uint32_t*)0x5000 = 2;
-    paging_init();
+    arch_boot_info_t boot = {0};
+    boot.region_count = 2;
+    boot.regions[0].base = 0x100000;
+    boot.regions[0].length = 63u*1024*1024;
+    boot.regions[0].usable = 1;
+    boot.regions[1].base = 0x90000000u;
+    boot.regions[1].length = PAGE_SIZE;
+    boot.regions[1].usable = 1;
+    paging_init(&boot);
     address_space_t old_app, new_app;
     check(!paging_address_space_create(&old_app));
-    paging_activate(&old_app);
+    arch_switch_address_space((uint32_t)old_app.directory);
     uint32_t mmio = 0xf0001000u, d = mmio >> 22;
     uint32_t old_entry = old_app.directory[d];
     check(old_entry & PAGE_SIZE_4M);
@@ -46,11 +50,11 @@ void test_main(void) {
     check(new_app.directory[d] == page_directory[d]);
     /* A directory with the original large mapping is synchronized on entry. */
     old_app.directory[d] = old_entry;
-    paging_activate_kernel();
-    paging_activate(&old_app);
+    arch_switch_address_space(arch_kernel_address_space());
+    arch_switch_address_space((uint32_t)old_app.directory);
     check(old_app.directory[d] == page_directory[d]);
-    check(paging_current_directory() == (uint32_t)old_app.directory);
-    paging_activate_kernel();
+    check(arch_current_address_space() == (uint32_t)old_app.directory);
+    arch_switch_address_space(arch_kernel_address_space());
     paging_address_space_destroy(&old_app);
     paging_address_space_destroy(&new_app);
     check(table[1] & PAGE_UNCACHED); /* App destruction preserves kernel table. */

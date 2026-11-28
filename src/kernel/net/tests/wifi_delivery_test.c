@@ -18,8 +18,8 @@ void task_sleep_ms(uint32_t ms) { frame_timer += ms; }
 void net_rx_signal(void) { }
 void debug_print(const char* s) { (void)s; }
 void debug_hex(uint32_t n) { (void)n; }
-uint32_t paging_current_directory(void) { return 0x1000; }
-uint32_t paging_kernel_directory(void) { return 0x1000; }
+uint32_t arch_current_address_space(void) { return 0x1000; }
+uint32_t arch_kernel_address_space(void) { return 0x1000; }
 uint32_t app_loader_context_enter(uint32_t n) { return n; }
 void app_loader_context_leave(uint32_t n) { (void)n; }
 void sys_net_set_ip_address(uint32_t n) { (void)n; }

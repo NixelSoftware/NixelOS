@@ -1,8 +1,8 @@
 #ifndef NIXEL2LINUX_SYSCALL_H
 #define NIXEL2LINUX_SYSCALL_H
 
-#include "../idt.h"
+#include "../arch/arch.h"
 
-void linux_syscall_dispatch(registers_t* regs);
+void linux_syscall_dispatch(arch_syscall_t* call);
 
 #endif

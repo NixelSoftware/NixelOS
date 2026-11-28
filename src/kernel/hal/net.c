@@ -1,5 +1,5 @@
 #include "../mutex.h"
-#include "../irq.h"
+#include "../arch/arch.h"
 #include "net.h"
 #include "wifi.h"
 #include "../net/wireless/intel/iwlegacy/station.h"
@@ -252,7 +252,7 @@ void sys_net_wait(void) {
      * the timeout still drives TCP, ARP and NTP timers. Polled adapters and
      * Wi-Fi keep the short period. */
     int interrupt_driven = net_interrupted && ethernet_device &&
-        irq_active(ethernet_device->irq_line) && !sys_wifi_is_connected();
+        arch_irq_active(ethernet_device->irq_line) && !sys_wifi_is_connected();
     task_event_wait_ms(&net_event, interrupt_driven ? 10 : 2);
 }
 

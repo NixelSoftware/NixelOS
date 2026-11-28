@@ -9,7 +9,8 @@
 #include "desktop_wallpaper.h"
 #include "cursor.h"
 #include "theme.h"
-#include "../../../kernel/paging.h"
+#include "../../../kernel/arch/arch.h"
+#include "../../../kernel/mm.h"
 #include "../../../kernel/drivers/display.h"
 #include "../../loader/app_loader.h"
 #include "../widgets.h"
@@ -743,8 +744,8 @@ Window* wm_get_window(int index) {
 void wm_bring_to_front(Window* target) {
     MUTEX_GUARD(kernel_mutex);
     if (!target) return;
-    uint32_t directory = paging_current_directory();
-    if (directory == paging_kernel_directory()) directory = 0;
+    uint32_t directory = arch_current_address_space();
+    if (directory == arch_kernel_address_space()) directory = 0;
     int target_index = -1;
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (windows[i] == target && window_directories[i] == directory) {
@@ -758,8 +759,8 @@ void wm_bring_to_front(Window* target) {
 int wm_register_window(Window* window) {
     MUTEX_GUARD(kernel_mutex);
     if (!window) return -1;
-    uint32_t owner_directory = paging_current_directory();
-    if (owner_directory == paging_kernel_directory()) owner_directory = 0;
+    uint32_t owner_directory = arch_current_address_space();
+    if (owner_directory == arch_kernel_address_space()) owner_directory = 0;
 
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (windows[i] == window && window_directories[i] == owner_directory) {
@@ -1240,7 +1241,7 @@ void wm_user_close_address_space(uint32_t owner_directory) {
             user_window_remove_slot(&user_window_slots[i]);
     }
     /* Legacy callback windows also belong to the executable's process. */
-    if (paging_current_directory() == owner_directory) {
+    if (arch_current_address_space() == owner_directory) {
         for (int i = 0; i < WM_MAX_WINDOWS;) {
             if (windows[i] && window_directories[i] == owner_directory)
                 wm_unregister_window(windows[i]);
@@ -1252,8 +1253,8 @@ void wm_user_close_address_space(uint32_t owner_directory) {
 void wm_unregister_window(Window* window) {
     MUTEX_GUARD(kernel_mutex);
     if (!window) return;
-    uint32_t owner_directory = paging_current_directory();
-    if (owner_directory == paging_kernel_directory()) owner_directory = 0;
+    uint32_t owner_directory = arch_current_address_space();
+    if (owner_directory == arch_kernel_address_space()) owner_directory = 0;
     for (int i = 0; i < WM_MAX_WINDOWS; i++) {
         if (windows[i] != window || window_directories[i] != owner_directory) continue;
         for (int j = i; j < WM_MAX_WINDOWS - 1; j++) {

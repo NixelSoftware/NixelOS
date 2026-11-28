@@ -1,7 +1,7 @@
 #ifndef IDT_H
 #define IDT_H
 
-#include "types.h"
+#include "../../types.h"
 
 typedef struct {
     uint32_t gs, fs, es, ds;
@@ -32,7 +32,7 @@ struct idt_ptr_struct {
 } __attribute__((packed));
 typedef struct idt_ptr_struct idt_ptr_t;
 
-void idt_init(void);
+void arch_trap_init(void);
 void isr_handler(registers_t* regs);
 
 #endif

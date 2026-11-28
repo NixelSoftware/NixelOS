@@ -1,7 +1,7 @@
 [bits 32]
 section .text
 
-extern kernel_main
+extern arch_boot_entry
 extern __bss_start
 extern __bss_end
 global _start
@@ -22,18 +22,7 @@ start:
     mov esp, kernel_boot_stack_top
     xor ebp, ebp
 
-    mov eax, [0x9000]
-    mov edx, [0x9004]
-    mov ecx, [0x9008]
-    mov ebx, [0x900C]           ; boot flags from the loader (bit 0 = -debug)
-
-    sub esp, 12                 ; keep the stack aligned before calling C
-    push dword [0x9010]         ; VBE width in low word, height in high word
-    push ebx
-    push ecx
-    push edx
-    push eax
-    call kernel_main
+    call arch_boot_entry
 
 .hang:
     cli

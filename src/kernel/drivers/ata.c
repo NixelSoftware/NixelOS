@@ -1,4 +1,5 @@
 #include "pci.h"
+#include "../arch/arch.h"
 #include "../mutex.h"
 #include "ata.h"
 #include "serial.h"
@@ -14,14 +15,8 @@ static uint8_t drive_state[ATA_DRIVE_COUNT];
 static uint32_t drive_sectors[ATA_DRIVE_COUNT];
 static unsigned ata_drive;
 
-static uint32_t irq_save(void) {
-    uint32_t flags;
-    __asm__ volatile ("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-static void irq_restore(uint32_t flags) {
-    __asm__ volatile ("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
-}
+static uint32_t irq_save(void) { return arch_irq_save(); }
+static void irq_restore(uint32_t flags) { arch_irq_restore(flags); }
 static uint32_t pci_read(uint32_t address) {
     return pci_config_read32(address >> 16, (address >> 11) & 31,
                              (address >> 8) & 7, address & 0xFC);

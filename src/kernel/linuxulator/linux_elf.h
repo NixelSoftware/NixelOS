@@ -2,7 +2,7 @@
 #define NIXEL2LINUX_ELF_H
 
 #include "../types.h"
-#include "../paging.h"
+#include "../arch/arch.h"
 
 #define ELF_MAGIC 0x464C457Fu  /* 0x7F, 'E', 'L', 'F' */
 
@@ -44,7 +44,7 @@ typedef struct {
 int linux_is_elf(const uint8_t* header_bytes);
 
 /* Prepares address space mappings, loads PT_LOAD segments, and builds Linux stack */
-int linux_load_elf(const char* path, address_space_t* space,
+int linux_load_elf(const char* path, arch_address_space_t* space,
                    uint32_t* out_entry, uint32_t* out_esp, uint32_t* out_brk);
 
 #endif

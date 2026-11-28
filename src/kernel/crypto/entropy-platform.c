@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 #include "jitterentropy-platform.h"
-#include "../paging.h"
+#include "../mm.h"
 unsigned entropy_cpu_features(void) {
     uint32_t a = 0, b, c, d;
     __asm__ volatile("cpuid" : "+a"(a), "=b"(b), "=c"(c), "=d"(d));
